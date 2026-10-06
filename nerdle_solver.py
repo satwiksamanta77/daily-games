@@ -53,6 +53,13 @@ try:
 except Exception:
     MOVIEPY_AVAILABLE = False
 
+try:  # moviepy 1.0.3 uses Image.ANTIALIAS, removed in Pillow 10+
+    from PIL import Image as _PILImage
+    if not hasattr(_PILImage, "ANTIALIAS"):
+        _PILImage.ANTIALIAS = _PILImage.LANCZOS
+except Exception:
+    pass
+
 HEADLESS = os.environ.get("HEADLESS", "true").lower() == "true"
 
 # All 9 nerdle modes — every equation solved in the SAME run

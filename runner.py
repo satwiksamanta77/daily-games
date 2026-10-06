@@ -25,6 +25,13 @@ from playwright.sync_api import sync_playwright
 
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
+
+try:  # moviepy 1.0.3 uses Image.ANTIALIAS, removed in Pillow 10+
+    from PIL import Image as _PILImage
+    if not hasattr(_PILImage, "ANTIALIAS"):
+        _PILImage.ANTIALIAS = _PILImage.LANCZOS
+except Exception:
+    pass
 import answers as A
 import solve_lib as S
 import daily_parity as DP
