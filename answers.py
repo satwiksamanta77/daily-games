@@ -24,7 +24,7 @@ def _find_frontend():
     directory `src/lib` so an empty/stale folder can never win.
     """
     root = HERE.parents[1]          # .../wordsolverx
-    cands = []
+    cands = [HERE / "frontend_data"]  # vendored wordlists (standalone repo first)
     for env in ("WORDJI_PATH", "ZAI_PATH", "FRONTEND_PATH"):
         v = os.environ.get(env)
         if v:

@@ -11,6 +11,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 HERE = Path(__file__).parent
+sys.path.insert(0, str(HERE))  # vendored quordle_parity lives beside this file
 sys.path.insert(0, str(HERE / ".." / "quordle-video" / "quor-dle-video"))
 try:
     import quordle_parity as QP

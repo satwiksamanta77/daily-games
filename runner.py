@@ -29,8 +29,10 @@ import answers as A
 import solve_lib as S
 import daily_parity as DP
 
-QDIR = Path(r"C:\Users\akasa\Projects\wordsolverx\youtube\quordle-video\quor-dle-video")
-sys.path.insert(0, str(QDIR))
+QDIR = HERE  # vendored: quordle_parity/youtube_upload live beside runner.py
+for _p in (HERE,
+           Path(r"C:\Users\akasa\Projects\wordsolverx\youtube\quordle-video\quor-dle-video")):
+    sys.path.insert(0, str(_p))
 try:
     import quordle_parity as QP
     from youtube_upload import upload_to_youtube
