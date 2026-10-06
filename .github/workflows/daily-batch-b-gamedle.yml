@@ -1,0 +1,63 @@
+name: Batch B gamedle - globle
+
+on:
+  schedule:
+    - cron: '30 10 * * *'
+  workflow_dispatch:
+    inputs:
+      game:
+        description: 'Game (default globle)'
+        required: false
+        default: 'globle'
+      date:
+        description: 'Puzzle date YYYY-MM-DD (empty = auto)'
+        required: false
+        default: ''
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        game: [globle]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+      - name: Install deps
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg
+          python -m pip install --upgrade pip
+          pip install --prefer-binary -r requirements.txt
+          python -m playwright install --with-deps chromium
+      - name: Run game (never fails job without secrets - local mode, saves artifact)
+        env:
+          HEADLESS: 'true'
+          TZ_OFFSET_MINUTES: '0'
+          BROWSER_TZ: 'Etc/UTC'
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+        run: |
+          if [ -n "${{ inputs.date }}" ]; then export FAKE_DATE_ISO="${{ inputs.date }}T00:05:00"; echo "PINNED DATE $FAKE_DATE_ISO"; fi
+          G="${{ inputs.game }}"; if [ -z "$G" ]; then G="${{ matrix.game }}"; fi; python runner.py --game "$G" || true
+      - name: Upload video artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-${{ matrix.game }}
+          path: videos/${{ matrix.game }}/*.mp4
+          retention-days: 7
+          if-no-files-found: warn
+      - name: Commit database record
+        if: always()
+        run: |
+          git config user.name "video-bot"
+          git config user.email "video-bot@users.noreply.github.com"
+          git add database/ || true
+          git diff --cached --quiet || git commit -m "db: ${{ matrix.game }} $(date -u +%F)"
+          git push || true
