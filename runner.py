@@ -2522,6 +2522,37 @@ def _s_countryle(page, ans, gid):
     return False, f"pick ended at {picked!r}; answer not confirmed"
 
 
+def _waffle_board(page):
+    """Board tiles only: the page has 100+ stray .tile nodes (ads/hidden
+    clones); the real grid is the container holding the most visible ones."""
+    try:
+        return page.evaluate("""() => {
+          const all = Array.from(document.querySelectorAll('.tile'))
+            .filter(t => t && t.offsetParent !== null);
+          const byParent = new Map();
+          for (const t of all) {
+            const p = t.parentElement;
+            if (!byParent.has(p)) byParent.set(p, []);
+            byParent.get(p).push(t);
+          }
+          let best = [];
+          for (const grp of byParent.values()) {
+            if (grp.length > best.length && grp.length <= 30) best = grp;
+          }
+          if (!best.length) best = all.slice(0, 30);
+          return best.map(t => {
+            const r = t.getBoundingClientRect();
+            return {x: r.x + r.width / 2, y: r.y + r.height / 2,
+                    ch: (t.innerText || '').trim(),
+                    green: /green/.test(t.className || ''),
+                    cls: (t.className || '').slice(0, 60),
+                    n: best.length};
+          });
+        }""") or []
+    except Exception:
+        return []
+
+
 def _s_waffle(page, ans, gid):
     """Waffle: click-swap misplaced tiles toward the worker's solved grid."""
     _close_modals(page)
@@ -2534,23 +2565,19 @@ def _s_waffle(page, ans, gid):
     if not solution:
         return False, "empty waffle solution"
     try:
-        b0 = page.evaluate("""() => {
-          const t = Array.from(document.querySelectorAll('.tile'));
-          let g = 0;
-          for (const x of t) if (/green/.test(x.className||'')) g++;
-          return g + '/' + t.length; }""")
+        board = _waffle_board(page)
+        _dbg("waffle", f"board tiles={len(board)}")
+        b0 = (f"{sum(1 for t in board if t['green'])}/{len(board)}"
+              if board else "?")
     except Exception:
         b0 = "?"
     swaps = 0
     bad_pairs = set()
     for _round in range(10):
-        state = page.evaluate("""() => Array.from(
-          document.querySelectorAll('.tile'))
-          .filter(t => t.offsetParent !== null)
-          .map(t => ({ch: (t.innerText||'').trim(),
-                      green: /green/.test(t.className||'')}))""")
-        if not state:
+        board = _waffle_board(page)
+        if not board:
             return False, "no waffle tiles found"
+        state = [{"ch": t["ch"], "green": t["green"]} for t in board]
         sol = list(solution.replace(" ", ""))
         cur = [s["ch"] for s in state]
         idx = next((i for i, s in enumerate(state)
@@ -2571,69 +2598,28 @@ def _s_waffle(page, ans, gid):
                 bad_pairs.clear()
                 continue
             break
-        # Real mouse clicks at tile centres (like a finger), with selection
-        # verified between the two clicks. The old in-page .click() calls
-        # never selected anything - the board sat at 15 swaps remaining.
-        def _tile_xy(k):
-            try:
-                bb = page.evaluate("""(k) => {
-                  const t = Array.from(document.querySelectorAll('.tile'))
-                    .filter(x => x && x.offsetParent !== null)[k];
-                  if (!t) return null;
-                  const r = t.getBoundingClientRect();
-                  return [r.x + r.width / 2, r.y + r.height / 2,
-                          t.className || '']; }""", k)
-            except Exception:
-                bb = None
-            return bb
-        detail = "mouse-swap"
+        # Tiles are draggable: drag idx onto j like a finger. Click-click
+        # selects but never swaps on this board.
+        detail = "drag-swap"
         try:
-            a_xy = _tile_xy(idx)
-            if not a_xy:
-                detail = f"bad-index-{idx}"
-            else:
-                page.mouse.click(a_xy[0], a_xy[1])
-                page.wait_for_timeout(700)
-                sel = page.evaluate("""() => Array.from(
-                  document.querySelectorAll('.tile')).filter(t =>
-                  /select|active|highlight|chosen/i.test(t.className || ''))
-                  .length""")
-                _dbg("waffle", f"first click idx {idx} ({cur[idx]}): "
-                                f"selectedTiles={sel}")
-                b_xy = _tile_xy(j)
-                if not b_xy:
-                    detail = f"bad-index-{j}"
-                else:
-                    # What is actually under the second click point? An ad
-                    # overlay eats real mouse clicks (evaluate-clicks bypass
-                    # hit-testing, which is why the old code behaved
-                    # differently).
-                    try:
-                        under = page.evaluate("""([x, y]) => {
-                          const e = document.elementFromPoint(x, y);
-                          if (!e) return 'none';
-                          return (e.tagName || '?') + '.' +
-                            ((e.className.baseVal !== undefined
-                              ? e.className.baseVal : e.className) || '')
-                            .slice(0, 80); }""", [b_xy[0], b_xy[1]])
-                    except Exception:
-                        under = "?"
-                    _dbg("waffle", f"second click idx {j} ({cur[j]}) "
-                                    f"under-cursor={under}")
-                    page.mouse.click(b_xy[0], b_xy[1])
-                    page.wait_for_timeout(700)
+            ax, ay = board[idx]["x"], board[idx]["y"]
+            bx, by = board[j]["x"], board[j]["y"]
+            page.mouse.move(ax, ay)
+            page.wait_for_timeout(300)
+            page.mouse.down()
+            page.mouse.move(bx, by, steps=12)
+            page.wait_for_timeout(300)
+            page.mouse.up()
+            page.wait_for_timeout(700)
         except Exception as e:
-            detail = f"ERR mouse {str(e)[:80]}"
+            detail = f"ERR drag {str(e)[:80]}"
         swaps += 1
         page.wait_for_timeout(1600)
         try:
-            after = [s["ch"] for s in page.evaluate("""() => Array.from(
-              document.querySelectorAll('.tile'))
-              .filter(t => t.offsetParent !== null)
-              .map(t => ({ch: (t.innerText||'').trim()}))""")]
+            after = [t["ch"] for t in _waffle_board(page)]
             _moved = (after != cur)
-            _dbg("waffle", f"swap {swaps}: idx {idx}<->{j} {detail} "
-                 f"moved={_moved}")
+            _dbg("waffle", f"swap {swaps}: idx {idx}({cur[idx]})"
+                            f"<->{j}({cur[j]}) {detail} moved={_moved}")
             if not _moved:
                 bad_pairs.add((idx, j))
                 if len(bad_pairs) >= 3:
@@ -2647,12 +2633,10 @@ def _s_waffle(page, ans, gid):
                 break
     page.wait_for_timeout(3000)
     try:
-        g1 = page.evaluate("""() => {
-          const t = Array.from(document.querySelectorAll('.tile'))
-            .filter(x => x && x.offsetParent !== null);
-          let g = 0;
-          for (const x of t) if (/green/.test(x.className||'')) g++;
-          return [g, t.length]; }""")
+        _end = _waffle_board(page)
+        greens = sum(1 for t in _end if t["green"])
+        total = len(_end)
+        g1 = [greens, total]
         body = (page.evaluate("() => document.body.innerText") or "")
     except Exception:
         g1, body = [0, 0], ""
