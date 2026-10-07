@@ -2526,7 +2526,7 @@ def _waffle_board(page):
     """Board tiles only: the page has 100+ stray .tile nodes (ads/hidden
     clones); the real grid is the container holding the most visible ones."""
     try:
-        return page.evaluate("""() => {
+        res = page.evaluate("""() => {
           const all = Array.from(document.querySelectorAll('.tile'))
             .filter(t => t && t.offsetParent !== null);
           const byParent = new Map();
@@ -2557,14 +2557,14 @@ def _waffle_board(page):
                     cls: (t.className || '').slice(0, 60),
                     n: best.length};
           }), diag: diag, sample: sample};
-        }""")
+        }""") or {}
     except Exception:
-        return {"tiles": []}
-    if isinstance(board, dict):
-        _diag = board.get("diag", "?") + " sample=" + board.get("sample", "?")
-        _tiles = board.get("tiles") or []
+        res = {}
+    if isinstance(res, dict):
+        _diag = str(res.get("diag", "?")) + " sample=" + str(res.get("sample", "?"))
+        _tiles = res.get("tiles") or []
     else:
-        _diag, _tiles = "legacy-list", board
+        _diag, _tiles = "legacy-list", (res or [])
     try:
         _dbg("waffle", f"container {_diag}")
     except Exception:
