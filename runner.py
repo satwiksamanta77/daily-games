@@ -2536,8 +2536,18 @@ def _waffle_board(page):
             byParent.get(p).push(t);
           }
           let best = [];
+          let bestScore = -1;
           for (const grp of byParent.values()) {
-            if (grp.length > best.length && grp.length <= 30) best = grp;
+            if (grp.length > 30) continue;
+            // The playable grid's tiles are draggable and carry letters;
+            // pale/menu grids are empty shells. Score accordingly.
+            let drag = 0, txt = 0;
+            for (const t of grp) {
+              if (/draggable/.test(t.className || '')) drag++;
+              if ((t.textContent || '').trim()) txt++;
+            }
+            const score = drag * 100 + txt * 10 + grp.length;
+            if (score > bestScore) { bestScore = score; best = grp; }
           }
           if (!best.length) best = all.slice(0, 30);
           const par = best.length && best[0].parentElement;
