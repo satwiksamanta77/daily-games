@@ -10,6 +10,8 @@ on:
 
 jobs:
   batch-a:
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -41,7 +43,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: video-${{ matrix.game }}
-          path: videos/${{ matrix.game }}/*.mp4
+          path: |
+            videos/${{ matrix.game }}/*.mp4
+            videos/${{ matrix.game }}/*.log
           retention-days: 7
           if-no-files-found: warn
       - name: Commit database record
@@ -53,11 +57,13 @@ jobs:
           git diff --cached --quiet || git commit -m "db: ${{ matrix.game }} $(date -u +%F)"
           git push || true
   batch-b:
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        game: [waffle, canuckle, globle]
+        game: [waffle, canuckle, globle, batterup, marveldle]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -84,7 +90,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: video-${{ matrix.game }}
-          path: videos/${{ matrix.game }}/*.mp4
+          path: |
+            videos/${{ matrix.game }}/*.mp4
+            videos/${{ matrix.game }}/*.log
           retention-days: 7
           if-no-files-found: warn
       - name: Commit database record

@@ -63,6 +63,29 @@ except Exception:
 
 HEADLESS = os.environ.get("HEADLESS", "true").lower() == "true"
 
+_DBG_FH = {}
+
+
+def _dbg(gid, msg):
+    """Timestamped debug line -> stdout AND videos/{gid}/debug_{date}.log.
+
+    Every guess, rejection, retry, navigation and signal goes through here so
+    a failure can be diagnosed from the log alone without rewatching video.
+    """
+    import datetime as _dt
+    line = f"[{_dt.datetime.now().isoformat(timespec='seconds')}] [{gid}] {msg}"
+    print(line)
+    try:
+        if gid not in _DBG_FH:
+            vdir = HERE / "videos" / gid
+            vdir.mkdir(parents=True, exist_ok=True)
+            _DBG_FH[gid] = open(vdir / f"debug_{A.target_date().isoformat()}.log",
+                                "a", encoding="utf-8")
+        _DBG_FH[gid].write(line + "\n")
+        _DBG_FH[gid].flush()
+    except Exception:
+        pass
+
 GAMES = {
     "betweenle": {"name": "Betweenle", "url": "https://betweenle.com", "slug": "betweenle-answer-today"},
     "colordle": {"name": "Colordle", "url": "https://colordle.ryantanen.com", "slug": "colordle-answer-today"},
@@ -86,6 +109,8 @@ GAMES = {
     "waffle": {"name": "Waffle", "url": "https://wafflegame.net/daily", "slug": "waffle-answer-today"},
     "worgle": {"name": "Worgle", "url": "https://bronze-age.com/worgle/", "slug": "worgle-answer-today"},
     "countryle": {"name": "Countryle", "url": "https://countryle.com/", "slug": "countryle-answer-today"},
+    "batterup": {"name": "Batterup", "url": "https://batter-up.app", "slug": "batterup-answer-today"},
+    "marveldle": {"name": "Marveldle", "url": "https://marveldle.com", "slug": "marveldle-answer-today"},
     # Nerdle: 9 modes solved back-to-back in ONE video (same treatment as
     # framed all_modes). Lives in nerdle_solver.py (async, kept as-is) and is
     # dispatched via subprocess so the sync runner stays untouched.
@@ -313,7 +338,7 @@ def _settle(page, base=260):
     page.wait_for_timeout(int(random.uniform(base * 0.6, base * 1.9)))
 
 
-def _idle_drift(page, lo=350, hi=1400, chance=0.45):
+def _idle_drift(page, lo=300, hi=900, chance=0.25):
     """Occasionally let the cursor settle and the page sit still.
 
     Real screen recordings are not frame-perfect: the pointer drifts, the page
@@ -742,6 +767,38 @@ def _close_betweenle_help(page):
     return page
 
 
+def _betweenle_invalid_showing(page):
+    try:
+        txt = (page.evaluate("() => document.body.innerText") or "").lower()
+    except Exception:
+        return False
+    return any(s in txt for s in ("not a word", "not valid", "invalid word",
+                                  "not in the word list", "unknown word"))
+
+
+def _type_betweenle_word(page, gid, word, used):
+    """Type one betweenle guess; on 'not a word' drop it and try the next
+    bank word exactly like a human would (never hammer Enter on a dead word)."""
+    _type_like_a_person(page, word, base_delay=170)
+    page.wait_for_timeout(300)
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(3000)
+    if _betweenle_invalid_showing(page):
+        _dbg(gid, f"{word!r} rejected by site; replacing from bank")
+        try:
+            guesses, _ans = S.words_betweenle()
+        except Exception:
+            guesses = []
+        for alt in guesses:
+            a = str(alt).upper()
+            if a not in used and a != word.upper():
+                _dbg(gid, f"retry with {a!r}")
+                return _type_betweenle_word(page, gid, a, used | {a})
+        return False, word
+    used.add(word.upper())
+    return True, word
+
+
 def solve_betweenle(page, ans):
     _close_modals(page)
     try:
@@ -756,14 +813,18 @@ def solve_betweenle(page, ans):
     # canvas game: no DOM input, so drive the physical keyboard
     page.mouse.click(960, 600)
     page.wait_for_timeout(500)
-    _type_like_a_person(page, "about", base_delay=170)
-    page.wait_for_timeout(300)
-    page.keyboard.press("Enter")
-    page.wait_for_timeout(3000)
-    _type_like_a_person(page, ans["answer"], base_delay=170)
-    page.wait_for_timeout(300)
-    page.keyboard.press("Enter")
-    page.wait_for_timeout(4000)
+    used = set()
+    ok1, first = _type_betweenle_word(page, gid="betweenle", word="about",
+                                      used=used)
+    if not ok1:
+        return False, "opener rejected and bank exhausted"
+    _dbg("betweenle", f"opener {first!r} accepted")
+    ok2, final = _type_betweenle_word(page, gid="betweenle",
+                                      word=ans["answer"], used=used)
+    if not ok2:
+        return False, "answer rejected and bank exhausted"
+    _dbg("betweenle", f"final {final!r} accepted")
+    page.wait_for_timeout(1500)
     try:
         stat = page.evaluate(
             "() => { const w = document.getElementById('statisticspanel-word'); "
@@ -2329,22 +2390,32 @@ def _s_waffle(page, ans, gid):
                       if k != idx and not s["green"]), None)
         if j is None:
             break
-        detail = page.evaluate("""([la, lb]) => {
+        # Click by TILE INDEX, never by letter: duplicate letters made the old
+        # letter-matching click the wrong tile and swaps silently did nothing.
+        detail = page.evaluate("""([ia, ib]) => {
           const tiles = Array.from(document.querySelectorAll('.tile'))
             .filter(t => t.offsetParent !== null);
-          const fa = tiles.find(t => (t.innerText||'').trim() === la &&
-            !/green/.test(t.className||''));
-          if (!fa) return 'no-movable-' + la;
+          if (ia >= tiles.length || ib >= tiles.length) return 'bad-index';
+          const fa = tiles[ia], fb = tiles[ib];
+          if (/green/.test(fa.className||'')) return 'already-green-' + ia;
           fa.click();
           const t2 = Array.from(document.querySelectorAll('.tile'))
             .filter(t => t.offsetParent !== null);
-          const fb = t2.find(t => (t.innerText||'').trim() === lb && t !== fa);
-          if (!fb) return 'no-target-' + lb;
-          fb.click();
-          return 'swapped'; }""", [cur[idx], cur[j]])
+          if (ib >= t2.length) return 'bad-index-after';
+          t2[ib].click();
+          return 'swapped-' + ia + '-' + ib; }""", [idx, j])
         swaps += 1
         page.wait_for_timeout(1600)
-        if "ERR" in str(detail) or "no-" in str(detail):
+        try:
+            after = [s["ch"] for s in page.evaluate("""() => Array.from(
+              document.querySelectorAll('.tile'))
+              .filter(t => t.offsetParent !== null)
+              .map(t => ({ch: (t.innerText||'').trim()}))""")]
+            _dbg("waffle", f"swap {swaps}: idx {idx}<->{j} {detail} "
+                 f"moved={after != cur}")
+        except Exception:
+            pass
+        if "ERR" in str(detail) or str(detail).startswith(("no-", "bad-", "already-")):
             print(f"[waffle] swap {swaps}: {detail}")
             if swaps >= 3:
                 break
@@ -2787,6 +2858,99 @@ def _s_phoodle(page, ans, gid):
     return ok, ev
 
 
+def _attr_pool(gid):
+    """Probe-name pool for attribute games (never contains the answer)."""
+    try:
+        if gid == "batterup":
+            j = json.loads((HERE / "frontend_data" / "src" / "lib" / "data" /
+                            "batterup-players.json").read_text(encoding="utf-8"))
+            return [p.get("player_name") for p in j
+                    if isinstance(p, dict) and p.get("player_name")]
+        if gid == "marveldle":
+            j = json.loads((HERE / "frontend_data" / "src" / "lib" / "data" /
+                            "marveldle-comics.json").read_text(encoding="utf-8"))
+            return [c.get("name") for c in j
+                    if isinstance(c, dict) and c.get("name")]
+    except Exception as e:
+        print(f"[{gid}] pool load failed: {e}")
+    return []
+
+
+def solve_attr_game(page, answer_name, gid, api_probes=()):
+    """Attribute search-box games (batterup, marveldle): 2 real probes with
+    on-screen column feedback, then the answer. Suggestion rows are picked by
+    exact-name match like a human; every step is debug-logged."""
+    _close_modals(page)
+    answer_name = str(answer_name or "").strip()
+    if not answer_name:
+        return False, "empty answer"
+    pool = [n for n in _attr_pool(gid) if n and n.lower() != answer_name.lower()]
+    probes = [str(p) for p in (list(api_probes or [])[:2]) if p]
+    for cand in (pool[0] if pool else None, pool[len(pool) // 2] if pool else None):
+        if len(probes) >= 2:
+            break
+        if cand and cand not in probes:
+            probes.append(cand)
+    seq = probes[:2] + [answer_name]
+    _dbg(gid, f"plan: probes={probes} answer={answer_name!r}")
+    for n, name in enumerate(seq):
+        last = (n == len(seq) - 1)
+        _idle_drift(page)
+        ok, detail = _type_country_guess(page, page, name)
+        _dbg(gid, f"guess {n + 1}/{len(seq)} {name!r}: pick ok={ok} ({detail})")
+        if not ok:
+            # suggestion missed: drop this probe and continue like a human
+            if not last:
+                continue
+            return False, f"answer pick failed ({detail})"
+        try:
+            btn = page.query_selector(
+                "button:has-text('Guess'), button:has-text('Submit'), "
+                "button:has-text('Go')")
+            if btn and btn.is_visible():
+                btn.click(timeout=3000)
+            else:
+                page.keyboard.press("Enter")
+        except Exception:
+            try:
+                page.keyboard.press("Enter")
+            except Exception:
+                pass
+        _settle(page, base=3000)
+        try:
+            txt = (page.evaluate("() => document.body.innerText") or "")
+        except Exception:
+            txt = ""
+        _dbg(gid, f"guess {n + 1} feedback chars={len(txt)}")
+        if last:
+            okw, ev = _strict_win(page, answer_name)
+            if okw:
+                return True, f"{ev} after {len(seq)} guesses"
+            low = txt.lower()
+            if answer_name.lower() in low:
+                return True, (f"answer echo on page after {len(seq)} "
+                               f"guesses ({ev})")
+            return False, f"no win signal; {ev}"
+    return False, "no guesses played"
+
+
+def _s_batterup(page, ans, gid):
+    _close_modals(page)
+    return solve_attr_game(page, ans, gid)
+
+
+def _s_marveldle(page, ans, gid):
+    _close_modals(page)
+    probes = []
+    try:
+        info = A.marveldle(A.target_date())
+        probes = [p.get("name") for p in (info.get("probes") or [])
+                  if isinstance(p, dict) and p.get("name")]
+    except Exception as e:
+        print(f"[marveldle] probe info failed: {str(e)[:110]}")
+    return solve_attr_game(page, ans, gid, api_probes=probes)
+
+
 SOLVERS = {
     "betweenle": ("betweenle", _s_betweenle),
     "colordle": ("colordle", lambda p, a: solve_colordle(p, a)),
@@ -2803,6 +2967,8 @@ SOLVERS = {
     "countryle": ("countryle", _s_countryle),
     "waffle": ("waffle", _s_waffle),
     "worgle": ("worgle", _s_worgle),
+    "batterup": ("batterup", _s_batterup),
+    "marveldle": ("marveldle", _s_marveldle),
     "nerdle": ("nerdle", None),  # external async solver, dispatched via subprocess
 }
 
@@ -3291,8 +3457,18 @@ def run_one(gid):
             facts_p = vdir / "facts.png"
             teaser_p = vdir / "teaser.png"
             DP.generate_recap(str(recap_p), g["name"], today)
+            if gid == "waffle":
+                try:
+                    _winfo = A.waffle(A.target_date())
+                    _ww = [str(w) for w in (_winfo.get("words") or []) if w]
+                    _hints = ([f"{len(_ww)} words hidden in the grid"]
+                              + [f"Find {_w[:12]}" for _w in _ww[:2]])
+                except Exception:
+                    _hints = ["Swap tiles to solve", "Greens stay put"]
+            else:
+                _hints = S.compute_hints(str(aval))
             DP.generate_hints(str(hints_p), g["name"], today,
-                              S.compute_hints(str(aval)), str(aval))
+                              _hints, str(aval))
             DP.generate_reveal(str(reveal_p), g["name"], today, str(aval), steps)
             DP.generate_facts(str(facts_p), g["name"], today, str(aval), steps)
             DP.generate_teaser(str(teaser_p), g["name"], today, g["slug"])
@@ -3320,6 +3496,20 @@ def run_one(gid):
                 parts.append(gameplay if p is None else _still(p, secs))
                 cur += gd if p is None else secs
             total = cur
+
+            # Brand intro first (kept short on camera, full clip prepended).
+            _intro = HERE / "intro" / "wordsolverx-intro-20s.mp4"
+            if _intro.exists():
+                try:
+                    _ic = VideoFileClip(str(_intro)).resize(width=1920, height=1080)
+                    parts.insert(0, _ic)
+                    chapters = [(0, "Intro")] + [(s + _ic.duration, t)
+                                                for s, t in chapters]
+                    cur += float(_ic.duration or 0)
+                    total = cur
+                    _dbg(gid, f"intro prepended ({_ic.duration:.1f}s)")
+                except Exception as e:
+                    _dbg(gid, f"intro skipped: {str(e)[:120]}")
 
             clip = concatenate_videoclips(parts, method="compose")
             for _mp3 in ("song1.mp3", "song2.mp3"):

@@ -10,8 +10,9 @@ at root, `requirements.txt`, `.github/workflows/`, `videos/{game}/`, `database/{
 |---|---|---|---|---|
 | A 9pm | `daily-batch-a-9pm.yml` | 15:30 | 21:00 prev-day puzzle, baked into 22:05 site build | betweenle, colordle, colorfle, framed (4 modes ONE video), searchle, phrazle, phoodle, contexto, semantle, worldle, worgle, countryle, nerdle (9 modes ONE video) |
 | B waffle | `daily-batch-b-waffle.yml` | 02:30 | ~08:00 run → 09:00 waffle build | waffle |
-| B morning | `daily-batch-b-morning.yml` | 05:15 | ~10:45 canuckle rebake window | canuckle (+ batterup/marveldle TODO — engine has no answer source yet) |
+| B morning | `daily-batch-b-morning.yml` | 05:15 | ~10:45 canuckle rebake window | canuckle, batterup (CDN 01:00 UTC flip) |
 | B gamedle | `daily-batch-b-gamedle.yml` | 10:30 | ~16:00 run → 17:01 gamedle build | globle |
+| B marveldle | `daily-batch-b-marveldle.yml` | 06:20 | ~11:40 marveldle rebake window | marveldle (api live-solve) |
 
 Group B rule: video starts at the same time the game scraping + website rebuild
 happen — 1hr-before is not possible for these date-gated games.

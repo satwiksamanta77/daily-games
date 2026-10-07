@@ -1,0 +1,61 @@
+{
+ "game": "phoodle",
+ "date": "2026-10-06",
+ "solved": true,
+ "evidence": "winning row all-green after the answer guess (Phoodle shows no win banner; read from the board's own `correct` cells)",
+ "video": "C:\\Users\\akasa\\Projects\\wordsolverx\\youtube\\daily-games\\videos\\phoodle\\phoodle_final_2026-10-06.mp4",
+ "guesses": [
+  "SAUCE",
+  "MANGO",
+  "MALTY"
+ ],
+ "steps": [
+  {
+   "turn": 1,
+   "guess": "SAUCE",
+   "pattern": "XGXXX",
+   "pool_before": 47,
+   "pool_after": 2
+  },
+  {
+   "turn": 2,
+   "guess": "MANGO",
+   "pattern": "GGXXX",
+   "pool_before": 2,
+   "pool_after": 1
+  },
+  {
+   "turn": 3,
+   "guess": "MALTY",
+   "pattern": "GGGGG",
+   "pool_before": 1,
+   "pool_after": 1
+  }
+ ],
+ "chapters": [
+  [
+   0.0,
+   "Today's Phoodle puzzle"
+  ],
+  [
+   5.0,
+   "Hints before the solve"
+  ],
+  [
+   15.0,
+   "Full solve (3 guesses)"
+  ],
+  [
+   53.3,
+   "Answer & deduction path"
+  ],
+  [
+   61.3,
+   "Solve breakdown"
+  ],
+  [
+   69.3,
+   "Tomorrow's puzzle"
+  ]
+ ]
+}

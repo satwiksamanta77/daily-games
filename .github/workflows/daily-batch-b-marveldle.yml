@@ -1,16 +1,16 @@
-name: Batch A 9pm IST - seq-gated games
+name: Batch B marveldle - own rebuild window
 
 on:
   schedule:
-    - cron: '30 15 * * *'
+    - cron: '20 6 * * *'
   workflow_dispatch:
     inputs:
       game:
-        description: 'Single game (empty = all Batch A)'
+        description: 'Game (default marveldle)'
         required: false
-        default: ''
+        default: 'marveldle'
       date:
-        description: 'Puzzle date YYYY-MM-DD (empty = auto next-day board)'
+        description: 'Puzzle date YYYY-MM-DD (empty = auto)'
         required: false
         default: ''
 
@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        game: [betweenle, colordle, colorfle, framed, searchle, phrazle, phoodle, contexto, semantle, worldle, worgle, countryle, nerdle]
+        game: [marveldle]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -39,14 +39,14 @@ jobs:
       - name: Run game (never fails job without secrets - local mode, saves artifact)
         env:
           HEADLESS: 'true'
-          TZ_OFFSET_MINUTES: '540'
-          BROWSER_TZ: 'Asia/Tokyo'
+          TZ_OFFSET_MINUTES: '0'
+          BROWSER_TZ: 'Etc/UTC'
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           if [ -n "${{ inputs.date }}" ]; then export FAKE_DATE_ISO="${{ inputs.date }}T00:05:00"; echo "PINNED DATE $FAKE_DATE_ISO"; fi
-          if [ -n "${{ inputs.game }}" ]; then python runner.py --game "${{ inputs.game }}" || true; else python runner.py --game ${{ matrix.game }} || true; fi
+          G="${{ inputs.game }}"; if [ -z "$G" ]; then G="${{ matrix.game }}"; fi; python runner.py --game "$G" || true
       - name: Upload video artifact
         if: always()
         uses: actions/upload-artifact@v4

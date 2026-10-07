@@ -389,6 +389,18 @@ def plan_colordle(target_hex, max_guesses=5):
     # guess and records that, so the breakdown slide shows measured data
     # rather than an invented "pool shrank by one" counter.
     seq = [by_rgb[p] for p in probes if by_rgb.get(p) and by_rgb[p] != answer_name]
+    # Never solve in under 3: pad with extra far-apart anchors so the video
+    # always shows a real 3-5 guess search, answer last.
+    if len(seq) < 2:
+        extra = [by_rgb[p] for _, p in
+                 sorted(((min(_rgb_dist(p, q) for q in probes), p)
+                        for _, p in pool if p not in probes),
+                 reverse=True)]
+        for nm in extra:
+            if nm and nm != answer_name and nm not in seq:
+                seq.append(nm)
+            if len(seq) >= 2:
+                break
     seq.append(answer_name)
     steps = [{"turn": i + 1, "guess": g, "pattern": "", "pool_before": None,
               "pool_after": None} for i, g in enumerate(seq)]

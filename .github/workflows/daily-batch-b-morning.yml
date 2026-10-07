@@ -16,11 +16,13 @@ on:
 
 jobs:
   generate:
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        game: [canuckle]
+        game: [canuckle, batterup]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -50,7 +52,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: video-${{ matrix.game }}
-          path: videos/${{ matrix.game }}/*.mp4
+          path: |
+            videos/${{ matrix.game }}/*.mp4
+            videos/${{ matrix.game }}/*.log
           retention-days: 7
           if-no-files-found: warn
       - name: Commit database record

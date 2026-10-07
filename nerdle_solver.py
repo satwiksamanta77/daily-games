@@ -597,7 +597,7 @@ CLICK_POWER_JS = """
 """
 
 
-async def type_equation(page, eq, delay=90):
+async def type_equation(page, eq, delay=200):
     """Type `eq`, entering ²/³ via the board's own power keys.
 
     `keyboard.type` silently DROPS superscripts (Maxi's row then holds one
@@ -651,8 +651,27 @@ async def type_guess(page, eq, cols, prev):
     print(f"[type] {eq} attempt2 ok={ok} counts={counts}")
     if ok:
         return state, counts, True
-    # retry 2: clear popups, refocus, clear row, retype
+    # retry 2: clear popups, refocus, clear row, retype — BUT never retype an
+    # equation that is already sitting in the grid (that printed the same
+    # attempt twice on camera in quad mode). If it is there, Enter only.
     await accept_cookies(page)
+    try:
+        _st = await read_state(page, cols, tries=2)
+        _flat = "".join(
+            str(t) for g in (_st or []) for t in (g.get("texts") or []))
+        _norm = "".join(ch for ch in _flat if ch.isalnum() or ch in "+-*/=")
+        _want = "".join(ch for ch in str(eq) if ch.isalnum() or ch in "+-*/=")
+        if _want and _want in _norm:
+            print(f"[type] {eq} already in grid, Enter only (no retype)")
+            try:
+                await page.keyboard.press("Enter")
+            except Exception:
+                pass
+            state, counts, ok = await done(await wait_change(page, cols, prev, timeout=8))
+            print(f"[type] {eq} enter-only ok={ok} counts={counts}")
+            return state, counts, ok
+    except Exception:
+        pass
     try:
         await page.keyboard.press("Escape")
     except Exception:
@@ -725,6 +744,13 @@ async def play_mode(page, mode, script_dir, official=None):
     typed = 0
     signal = ""
     site_eqs = []
+    # Look human: 2-4 solver probes before the official answer is allowed,
+    # seeded by date so it is stable per day but varies across days.
+    import random as _rnd
+    _seed = int(os.environ.get("NERDLE_SEED", "0") or 0) or classic_puzzle_number(
+        _target_date())
+    min_probes = 2 + (_seed % 2) + (1 if boards_n > 1 else 0)
+    print(f"[{mode['id']}] min_probes={min_probes}")
     try:
         async def on_resp(r):
             try:
@@ -745,6 +771,16 @@ async def play_mode(page, mode, script_dir, official=None):
             except Exception as e:
                 print(f"[{mode['id']}] goto {att + 1}/3 failed: {e}")
                 await page.wait_for_timeout(2500)
+        # Fill the 1280x720 frame: the board column is narrow on wide
+        # viewports, so zoom per mode (multi-board modes stay at 1.0).
+        _zoom = {"classic": 1.5, "micro": 1.7, "mini": 1.6, "midi": 1.5,
+                 "maxi": 1.15, "minibi": 1.2, "quad": 1.0, "speed": 1.1,
+                 "instant": 1.5}.get(mode["id"], 1.3)
+        try:
+            await page.evaluate(f"() => {{ document.body.style.zoom = '{_zoom}'; }}")
+            print(f"[{mode['id']}] zoom {_zoom}")
+        except Exception:
+            pass
         for _ in range(4):
             await page.wait_for_timeout(1000)
             await sweep_popups(page, tag=f":{mode['id']}")
@@ -798,7 +834,7 @@ async def play_mode(page, mode, script_dir, official=None):
                     prev = [eval_count(g) for g in state]
                     await type_guess(page, eqs[0], cols, prev)
                 else:
-                    await page.keyboard.type(eqs[0], delay=90)
+                    await page.keyboard.type(eqs[0], delay=200)
                     await page.keyboard.press("Enter")
                     await page.wait_for_timeout(3000)
                 typed = 1
@@ -806,7 +842,7 @@ async def play_mode(page, mode, script_dir, official=None):
             print(f"[{mode['id']}] no pb-grid found, legacy direct typing")
             await focus_grid(page)
             for eq in eqs:
-                await page.keyboard.type(eq, delay=90)
+                await page.keyboard.type(eq, delay=200)
                 await page.keyboard.press("Enter")
                 await page.wait_for_timeout(2500)
                 typed += 1
@@ -881,8 +917,9 @@ async def play_mode(page, mode, script_dir, official=None):
                     break
                 need = len([e for e in eqs if e not in typed_guesses])
                 nxt = None
-                if rows_left <= 2 and need:
-                    # user rule: official answer only in the last 2 attempts
+                if rows_left <= 2 and need and len(typed_guesses) >= min_probes:
+                    # user rule: official answer only in the last 2 attempts,
+                    # and never before min_probes real solver probes
                     while official_i < len(eqs) and eqs[official_i] in typed_guesses:
                         official_i += 1
                     if official_i < len(eqs):
@@ -965,7 +1002,7 @@ async def play_mode(page, mode, script_dir, official=None):
             url_now, splash_now = "?", "?"
         print(f"[{mode['id']}] shot@ {url_now} splash={splash_now} won={bool(signal)}")
         try:
-            await page.screenshot(path=str(script_dir / f"shot_{mode['id']}.png"))
+            await page.screenshot(path=str(video_dir / f"shot_{mode['id']}.png"))
         except Exception:
             pass
         if not signal:
@@ -1049,11 +1086,9 @@ async def main():
             classic = []
             if isinstance(official, dict):
                 classic = [e for e in (official.get("classic") or [])][:4]
-            # hints slide reuses quordle hints card (4 words); pad/truncate
-            hp = script_dir / f"hints_{date_key}.png"
-            if QP.generate_quordle_hints_image(str(hp), today, (classic[:4] if classic else ["12+34=46"]*1)):
-                chapters.append((cursor, "Hints before the solve"))
-                parts.append(_img(str(hp), 10)); cursor += 10
+            # No answer-bearing slides: the old hints card printed the classic
+            # equations and the definition/facts cards said QUORDLE. Start
+            # each mode with its own NOW PLAYING card instead.
             # Gameplay split into 9 mode chapters, each prefixed with a NOW PLAYING
             # card so a viewer landing mid-video can tell which mode is up.
             # The recording is continuous, so the boundaries come from the
@@ -1075,7 +1110,7 @@ async def main():
                 if b - a < 0.5:
                     continue
                 chapters.append((cursor + card_sec, f"{m['name']} Solve"))
-                cp = script_dir / f"mode_{i}.png"
+                cp = video_dir / f"mode_{i}.png"
                 try:
                     QP.generate_mode_card(str(cp), "Nerdle",
                                           m.get("name", f"Mode {i + 1}"),
@@ -1092,15 +1127,21 @@ async def main():
                 parts.append(gameplay)
                 cursor += gd
             # analysis slides (reuse quordle def/freq/facts with nerdle equations as words)
-            ap = script_dir / f"analysis_{date_key}.png"
-            if QP.generate_quordle_definition_slide(str(ap), today, classic[:4] if classic else ["EQUATION"], {}):
-                chapters.append((cursor, "Answer analysis"))
-                parts.append(_img(str(ap), 8)); cursor += 8
-            fp = script_dir / f"facts_{date_key}.png"
-            if QP.generate_quordle_facts_slide(str(fp), today, classic[:4] if classic else ["EQUATION"]):
-                chapters.append((cursor, "Facts & solve path"))
-                parts.append(_img(str(fp), 8)); cursor += 8
+            # Skipped: they print answers up front and say QUORDLE. The video
+            # is mode cards + real solves only.
             final_clip = concatenate_videoclips(parts, method="compose")
+            _intro = script_dir / "intro" / "wordsolverx-intro-20s.mp4"
+            if _intro.exists():
+                try:
+                    from moviepy.editor import VideoFileClip as _VFC
+                    _ic = _VFC(str(_intro)).resize(width=1920, height=1080)
+                    final_clip = concatenate_videoclips([_ic, final_clip],
+                                                        method="compose")
+                    chapters = [(0, "Intro")] + [
+                        (s + float(_ic.duration or 0), t) for s, t in chapters]
+                    print(f"[nerdle] intro prepended ({_ic.duration:.1f}s)")
+                except Exception as e:
+                    print(f"[nerdle] intro skipped: {str(e)[:120]}")
             for _mp3 in ("song1.mp3", "song2.mp3"):
                 _sp = script_dir / _mp3
                 if _sp.exists():

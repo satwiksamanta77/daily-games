@@ -214,23 +214,18 @@ def generate_reveal(out_path, game, date_str, answer, steps, pattern=None):
     _tile_row(d, f, a, pat, 240, size=112, gap=18)
     d.text((70, 412), "HOW EACH GUESS SCORED", fill=GREEN, font=f["m"])
 
-    rows = list(steps or [])[-4:]
+    rows = list(steps or [])
     # Geometry derived from the measured glyph heights, not magic numbers.
+    # EVERY guess is shown (never just the last 4): the card shrinks to fit.
     word_f, clue_f = f["m"], f["s"]
     word_h = _text_h(d, "X", word_f)
     clue_h = _text_h(d, "X", clue_f)
     pad = 22
-    card_h = max(96, word_h + clue_h + pad * 2)
-    gap = 16
     top = 486
-    # Keep the stack clear of the footer.
     bottom_limit = H - 120
-    while rows and top + len(rows) * card_h + (len(rows) - 1) * gap > bottom_limit:
-        rows = rows[-3:] if len(rows) > 3 else rows
-        if len(rows) == 3 and top + 3 * card_h + 2 * gap > bottom_limit:
-            rows = rows[-2:]
-        if len(rows) <= 2:
-            break
+    n = max(1, len(rows))
+    card_h = min(120, max(64, (bottom_limit - top - (n - 1) * 12) // n))
+    gap = 12
     for s in rows:
         d.rounded_rectangle([70, top, W - 70, top + card_h], radius=14,
                             fill=CARD)
@@ -353,9 +348,11 @@ def generate_teaser(out_path, game, date_str, slug):
     d.text((70, 460), "A brand new puzzle.", fill=MUTED, font=f["m"])
     d.text((70, 560), "Subscribe so you never miss a solve.", fill=MUTED,
            font=f["b"])
-    d.rounded_rectangle([70, 680, 1000, 790], radius=14, fill=CARD,
-                        outline=GREEN, width=3)
-    d.text((110, 715), f"wordsolverx.com/{slug}", fill=GREEN, font=f["b"])
+    d.rounded_rectangle([70, 680, W - 70, 800], radius=14, fill=CARD,
+                          outline=GREEN, width=3)
+    link = f"wordsolverx.com/{slug}"
+    lf = _fit_font(d, link, f["b"], (W - 70) - 110 - 40)
+    d.text((110, 722), link, fill=GREEN, font=lf)
     img.save(out_path, "PNG", optimize=True)
     return out_path
 

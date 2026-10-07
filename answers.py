@@ -695,9 +695,171 @@ def worgle(d=None):
             "index": (day_offset - 207) % len(sols)}
 
 
+# ---------- batterup ----------
+_BATTER_CDN = "https://d2p6wz32uy8hq3.cloudfront.net"
+
+
+def batterup(d=None):
+    """Batter Up: CloudFront CDN games_batterup{date}.json, 5-day lookback.
+
+    Ported from wordsJi scripts/batterup-daily.mjs. Falls back to the
+    vendored batterup-answers.json snapshot for past dates.
+    """
+    import requests
+    d = d or target_date()
+    hdr = {"User-Agent": "WordSolverX-batterup-daily/1.0"}
+
+    def _shift(key, days):
+        dd = date(*(int(x) for x in key.split("-"))) + timedelta(days=days)
+        return dd.isoformat()
+
+    for back in range(5):
+        key = _shift(d.isoformat(), -back)
+        try:
+            r = requests.get(f"{_BATTER_CDN}/games_batterup{key}.json",
+                             headers=hdr, timeout=30)
+            if not r.ok:
+                continue
+            j = r.json()
+            entry = j.get(key) or j.get("current") or j
+            pl = (entry or {}).get("player") if isinstance(entry, dict) else None
+            if isinstance(pl, dict) and pl.get("player_name"):
+                return {"answer": pl["player_name"], "player": pl,
+                        "date": key, "via": "cdn"}
+        except Exception as e:
+            print(f"[batterup] cdn {key} failed: {str(e)[:100]}")
+            continue
+    try:
+        snap = json.loads(
+            (ZAI / "src/lib/data/batterup-answers.json").read_text("utf-8"))
+        e = snap.get(d.isoformat())
+        pl = (e or {}).get("player") if isinstance(e, dict) else None
+        if isinstance(pl, dict) and pl.get("player_name"):
+            return {"answer": pl["player_name"], "player": pl,
+                    "date": d.isoformat(), "via": "snapshot"}
+    except Exception:
+        pass
+    raise SystemExit(f"batterup: no answer for {d.isoformat()}")
+
+
+# ---------- marveldle ----------
+_MARVEL_API = "https://api.marveldle.com/api"
+_MARVEL_HDR = {"Origin": "https://marveldle.com",
+               "Referer": "https://marveldle.com/", "userLanguage": "en"}
+
+
+def _marvel_call(path, sid, timeout=30):
+    import requests, uuid
+    r = requests.get(f"{_MARVEL_API}{path}",
+                     headers={**_MARVEL_HDR, "sessionId": sid},
+                     timeout=timeout)
+    r.raise_for_status()
+    return r.json()
+
+
+def _marvel_sid():
+    import requests, uuid
+    sid = str(uuid.uuid4())
+    try:
+        j = _marvel_call("/session", sid)
+        return j.get("id") or sid
+    except Exception:
+        return sid
+
+
+def marveldle(d=None, mode="comics"):
+    """Marveldle: live-solve via api.marveldle.com for the target date.
+
+    dateId is the US-midnight pick id (M/D/YYYY 12:00:00 AM). Plays 2 diverse
+    probes through the real guess endpoint, eliminates on Exact feedback, then
+    takes the first survivor (verified isExact). Falls back to the vendored
+    marveldle-answers.json snapshot.
+    """
+    import requests
+    d = d or target_date()
+    date_id = f"{d.month}/{d.day}/{d.year} 12:00:00 AM"
+    up = {"comics": "comics", "mcu": "audiovisual"}.get(mode, "comics")
+    try:
+        sid = _marvel_sid()
+        chars = _marvel_call(f"/characters/{up}", sid, timeout=60)
+        if not isinstance(chars, list) or not chars:
+            raise ValueError("empty character list")
+        probes, tried = [], []
+
+        def _guess(cid):
+            fb = _marvel_call(
+                f"/characters/{up}/guess/{cid}"
+                f"?dateId={date_id.replace('/', '%2F').replace(' ', '%20').replace(',', '%2C').replace(':', '%3A')}",
+                sid)
+            tried.append(cid)
+            return fb
+
+        def _elim(cands, guessed, fb):
+            out = []
+            for c in cands:
+                keep = True
+                for k in ("gender", "type", "species", "origin",
+                          "powerTypes", "affiliations"):
+                    col = (fb or {}).get(k)
+                    if col == "Exact" and c.get(k) != guessed.get(k):
+                        keep = False
+                        break
+                    if col == "None" and c.get(k) == guessed.get(k):
+                        keep = False
+                        break
+                if keep:
+                    out.append(c)
+            return out
+
+        cands = [c for c in chars if c.get("id")]
+        for seed in (cands[0], cands[len(cands) // 2]):
+            if len(probes) >= 2:
+                break
+            if seed["id"] in tried:
+                continue
+            try:
+                fb = _guess(seed["id"])
+            except Exception as e:
+                print(f"[marveldle] probe failed: {str(e)[:100]}")
+                continue
+            probes.append({"name": seed.get("name"), "id": seed["id"]})
+            if fb.get("isExact"):
+                return {"answer": seed.get("name"), "id": seed.get("id"),
+                        "probes": probes, "date": d.isoformat(),
+                        "via": "live-first-try"}
+            cands = _elim(cands, seed, fb)
+            cands = [c for c in cands if c.get("id") not in tried]
+        for c in cands[:20]:
+            try:
+                fb = _guess(c["id"])
+            except Exception:
+                continue
+            if fb.get("isExact"):
+                return {"answer": c.get("name"), "id": c.get("id"),
+                        "probes": probes, "date": d.isoformat(), "via": "live"}
+        raise ValueError("no exact match in first 20 survivors")
+    except SystemExit:
+        raise
+    except Exception as e:
+        print(f"[marveldle] live failed: {str(e)[:140]}")
+    try:
+        snap = json.loads(
+            (ZAI / "src/lib/data/marveldle-answers.json").read_text("utf-8"))
+        e = snap.get(d.isoformat()) if isinstance(snap, dict) else None
+        cm = (e or {}).get("comics") if isinstance(e, dict) else None
+        if isinstance(cm, dict) and cm.get("name"):
+            return {"answer": cm["name"], "id": cm.get("id"), "probes": [],
+                    "date": d.isoformat(), "via": "snapshot"}
+    except Exception:
+        pass
+    raise SystemExit(f"marveldle: no answer for {d.isoformat()}")
+
+
 # Registry so tooling (verify_solver.py, audits) can drive every game by id
 # without duplicating the id -> function mapping that runner.py also maintains.
 ANSWER_FNS = {
+    "batterup": batterup,
+    "marveldle": marveldle,
     "betweenle": betweenle,
     "canuckle": canuckle,
     "colordle": colordle,

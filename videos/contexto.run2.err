@@ -1,0 +1,43 @@
+C:\Users\akasa\AppData\Local\Programs\Python\Python311\Lib\site-packages\google\api_core\_python_package_support.py:206: FutureWarning: Package google.api_core depends on grpcio, currently installed at version 1.71.0. grpcio < 1.83.0 does not support Post-Quantum Cryptography (PQC). Support for non-PQC environments is deprecated. In April 2027, Google Cloud Python packages will raise their minimum requirements (including google-api-core, grpcio, and grpcio-status) to enforce grpcio >= 1.83.0. For more details on Google Cloud's post-quantum security migration, visit: https://cloud.google.com/security/resources/post-quantum-cryptography
+  warnings.warn(
+Traceback (most recent call last):
+  File "C:\Users\akasa\Projects\wordsolverx\youtube\daily-games\runner.py", line 3213, in <module>
+    main()
+  File "C:\Users\akasa\Projects\wordsolverx\youtube\daily-games\runner.py", line 3203, in main
+    results.append(run_one(gid))
+                   ^^^^^^^^^^^^
+  File "C:\Users\akasa\Projects\wordsolverx\youtube\daily-games\runner.py", line 3081, in run_one
+    ctx.close()
+  File "C:\Users\akasa\AppData\Local\Programs\Python\Python311\Lib\site-packages\playwright\sync_api\_generated.py", line 15386, in close
+    return mapping.from_maybe_impl(self._sync(self._impl_obj.close(reason=reason)))
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\akasa\AppData\Local\Programs\Python\Python311\Lib\site-packages\playwright\_impl\_sync_base.py", line 115, in _sync
+    return task.result()
+           ^^^^^^^^^^^^^
+  File "C:\Users\akasa\AppData\Local\Programs\Python\Python311\Lib\site-packages\playwright\_impl\_browser_context.py", line 587, in close
+    await self._channel.send("close", None, {"reason": reason})
+  File "C:\Users\akasa\AppData\Local\Programs\Python\Python311\Lib\site-packages\playwright\_impl\_connection.py", line 76, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\akasa\AppData\Local\Programs\Python\Python311\Lib\site-packages\playwright\_impl\_connection.py", line 632, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.TargetClosedError: : Target page, context or browser has been closed
+Browser logs:
+
+<launching> C:\Users\akasa\AppData\Local\ms-playwright\chromium_headless_shell-1234\chrome-headless-shell-win64\chrome-headless-shell.exe --disable-field-trial-config --disable-background-networking --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-back-forward-cache --disable-breakpad --disable-client-side-phishing-detection --disable-component-extensions-with-background-pages --disable-component-update --no-default-browser-check --disable-default-apps --disable-dev-shm-usage --disable-edgeupdater --disable-extensions --disable-features=AvoidUnnecessaryBeforeUnloadCheckSync,BoundaryEventDispatchTracksNodeRemoval,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,PaintHolding,ThirdPartyStoragePartitioning,BlockOriginHeaderModificationOnRedirect,Translate,AutoDeElevate,OptimizationHints,msForceBrowserSignIn,msEdgeUpdateLaunchServicesPreferredVersion --enable-features=CDPScreenshotNewSurface --allow-pre-commit-input --disable-hang-monitor --disable-ipc-flooding-protection --disable-popup-blocking --disable-prompt-on-repost --disable-renderer-backgrounding --disable-updater-scheduler --force-color-profile=srgb --metrics-recording-only --no-first-run --password-store=basic --use-mock-keychain --no-service-autorun --export-tagged-pdf --disable-search-engine-choice-screen --unsafely-disable-devtools-self-xss-warnings --edge-skip-compat-layer-relaunch --disable-infobars --disable-search-engine-choice-screen --disable-sync --enable-unsafe-swiftshader --headless --hide-scrollbars --mute-audio --blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4 --no-sandbox --user-data-dir=C:\Users\akasa\AppData\Local\Temp\playwright_chromiumdev_profile-UkziMH --remote-debugging-pipe --no-startup-window
+<launched> pid=27856
+[pid=27856][err] [1006/171415.799:INFO:CONSOLE:3] "[PageOS]:[Confiant] initConfiant called [object Object]", source: https://cdn.intergient.com/1024751/73740/ramp.js (3)
+[pid=27856][err] [1006/171415.807:INFO:CONSOLE:3] "[PageOS]:[Confiant] clientSettings seeded for property "TQKqBEtrLKQeEixRZzZ_NmOAgjo" [object Object]", source: https://cdn.intergient.com/1024751/73740/ramp.js (3)
+[pid=27856][err] [1006/171415.807:INFO:CONSOLE:3] "[PageOS]:[Confiant] Confiant is not enabled for this pageview; RON clientSettings seeded but no script loaded", source: https://cdn.intergient.com/1024751/73740/ramp.js (3)
+[pid=27856][err] [1006/171420.312:INFO:CONSOLE:1] "38,1,0,", source: https://cdn.intergi.com/pf?country=IN&browser=Chrome&device=desktop&website_id=73740&config_id=1024751_73740_primary_config (1)
+[pid=27856][err] [1006/171420.312:INFO:CONSOLE:1] "38,1,0,", source: https://cdn.intergi.com/pf?country=IN&browser=Chrome&device=desktop&website_id=73740&config_id=1024751_73740_primary_config (1)
+[pid=27856][err] [1006/171443.577:INFO:CONSOLE:37] "requestStorageAccess: Permission denied.", source: https://www.google.com/recaptcha/enterprise/anchor?ar=1&k=6LdLI0ErAAAAAItt0COJtP9UMnRjZkjq90VjUPRz&co=aHR0cHM6Ly9jb250ZXh0by5tZTo0NDM.&hl=en&v=guXhH0v-XMxlzmbTwqkaT4i5&size=invisible&anchor-ms=20000&execute-ms=30000&cb=3774vw60eu9n (37)
+[pid=27856][err] [1006/171443.726:INFO:CONSOLE:648] "Uncaught (in promise) Error: Timed out.", source: https://www.gstatic.com/recaptcha/releases/guXhH0v-XMxlzmbTwqkaT4i5/recaptcha__en.js (648)
+[pid=27856][err] [1006/171502.417:INFO:CONSOLE:9] "[2026-10-05T15:05:49.597Z]  @firebase/app-check: AppCheck: Requests throttled due to 403 error. Attempts allowed again after 01d:00m:00s (appCheck/throttled).", source: https://contexto.me/assets/index-BIKca6DH.js (9)
+[pid=27856][err] [1006/171526.670:ERROR:net\socket\ssl_client_socket_impl.cc:964] handshake failed; returned -1, SSL error code 1, net_error -100
+[pid=27856][err] [1006/171526.746:ERROR:net\socket\ssl_client_socket_impl.cc:964] handshake failed; returned -1, SSL error code 1, net_error -100
+[pid=27856][err] [1006/171526.863:INFO:CONSOLE:59] "[object Object]", source: https://d2qlq4kdetaeuz.cloudfront.net/eyewise-id-module/eyewise-id-module-cookies-consent.js?token=dGVzdHRva2VuOg== (59)
+[pid=27856][err] [1006/171533.673:INFO:CONSOLE:9] "[2026-10-05T15:06:19.606Z]  @firebase/app-check: AppCheck: Requests throttled due to 403 error. Attempts allowed again after 23h:59m:30s (appCheck/throttled).", source: https://contexto.me/assets/index-BIKca6DH.js (9)
+[pid=27856][err] [1006/171634.491:INFO:CONSOLE:9] "[2026-10-05T15:07:19.689Z]  @firebase/app-check: AppCheck: Requests throttled due to 403 error. Attempts allowed again after 23h:58m:30s (appCheck/throttled).", source: https://contexto.me/assets/index-BIKca6DH.js (9)
+[pid=27856][err] [1006/171832.508:INFO:CONSOLE:9] "[2026-10-05T15:09:19.706Z]  @firebase/app-check: AppCheck: Requests throttled due to 403 error. Attempts allowed again after 23h:56m:30s (appCheck/throttled).", source: https://contexto.me/assets/index-BIKca6DH.js (9)
+[pid=27856][err] [1006/172232.708:INFO:CONSOLE:9] "[2026-10-05T15:13:19.792Z]  @firebase/app-check: AppCheck: Requests throttled due to 403 error. Attempts allowed again after 23h:52m:30s (appCheck/throttled).", source: https://contexto.me/assets/index-BIKca6DH.js (9)
