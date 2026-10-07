@@ -1055,6 +1055,15 @@ async def main():
         except Exception as e:
             print(f"[fakedate] skipped: {e}")
         page = await context.new_page()
+
+        async def _dismiss(d):
+            try:
+                print(f"[nerdle] dialog auto-dismiss {d.type}")
+                await d.dismiss()
+            except Exception:
+                pass
+
+        page.on("dialog", _dismiss)
         t0 = time.time()
         starts = []
         results = []

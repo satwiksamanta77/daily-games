@@ -72,10 +72,19 @@ def _count_reload(gid, why):
     _dbg(gid, f"PAGE RELOAD #{_RELOADS[gid]} ({why})")
 
 
+def _auto_dismiss_dialog(gid):
+    def _h(d):
+        try:
+            print(f"[{gid}] dialog auto-dismiss {d.type}")
+            d.dismiss()
+        except Exception:
+            pass
+    return _h
+
+
 def _log_nav(gid):
     """Top-level browser log: every navigation with its URL, so page-hops
-    (framed daily->one-frame->daily etc.) are visible in the log alone."""
-    def _h(frame):
+    (framed daily->one-frame->daily etc.) are visible in the log alone."""    def _h(frame):
         try:
             _dbg(gid, f"NAV -> {frame.url}")
         except Exception:
@@ -3538,6 +3547,10 @@ def run_framed_all(gid, g, tgt, date_key, today, short):
             return route.continue_()
         ctx.route("**/*", _route)
         pg = ctx.new_page()
+        # A stray JS alert/confirm (ads, "already played") blocks EVERY
+        # later evaluate call forever - auto-dismiss so a popup can never
+        # hang a 6-hour job. Same handler is attached in run_one below.
+        pg.on("dialog", _auto_dismiss_dialog("framed"))
         try:
             pg.on("framenavigated", _log_nav("framed"))
         except Exception:
@@ -3837,6 +3850,7 @@ def run_one(gid):
             return route.continue_()
         ctx.route("**/*", _route)
         pg = ctx.new_page()
+        pg.on("dialog", _auto_dismiss_dialog(gid))
         try:
             pg.on("framenavigated", _log_nav(gid))
         except Exception:
