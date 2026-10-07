@@ -83,8 +83,8 @@ def _auto_dismiss_dialog(gid):
 
 
 def _log_nav(gid):
-    """Top-level browser log: every navigation with its URL, so page-hops
-    (framed daily->one-frame->daily etc.) are visible in the log alone."""    def _h(frame):
+    """Top-level browser log: every navigation with its URL."""
+    def _h(frame):
         try:
             _dbg(gid, f"NAV -> {frame.url}")
         except Exception:
