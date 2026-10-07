@@ -2951,16 +2951,51 @@ def _s_batterup(page, ans, gid):
 
 def _s_marveldle(page, ans, gid):
     _close_modals(page)
-    # Marveldle lands on a mode menu: enter Classic/Comics + Play if offered.
+    # Marveldle lands on /menu (SPA): enter Classic/Comics + Play if offered.
+    # Menu items are often links/cards, not <button>s, so click by visible
+    # text across roles; fall back to direct game URLs. Log everything.
+    try:
+        texts = page.evaluate(
+            """() => Array.from(document.querySelectorAll(
+              'button, a, [role=button], [role=link]'))
+              .filter(e => e && e.offsetParent !== null)
+              .map(e => (e.innerText || '').trim().slice(0, 40))
+              .filter(t => t).slice(0, 30)""") or []
+    except Exception:
+        texts = []
+    _dbg(gid, f"menu clickables: {texts}")
     for label in ("Comics", "Classic", "Play", "Start", "Daily"):
-        try:
-            el = page.query_selector(f"button:has-text('{label}')")
-            if el and el.is_visible():
-                el.click(timeout=3000)
-                page.wait_for_timeout(1500)
-                _dbg(gid, f"clicked {label!r}")
-        except Exception:
-            pass
+        for sel in (f"button:has-text('{label}')", f"a:has-text('{label}')"):
+            try:
+                el = page.query_selector(sel)
+                if el and el.is_visible():
+                    el.click(timeout=3000)
+                    page.wait_for_timeout(1500)
+                    _dbg(gid, f"clicked {label!r} via {sel}")
+                    break
+            except Exception:
+                pass
+    try:
+        n = page.evaluate(
+            "() => document.querySelectorAll("
+            "'input,textarea,[contenteditable=true]').length")
+    except Exception:
+        n = "?"
+    _dbg(gid, f"after menu: url={page.url} inputs={n}")
+    if not n:
+        for u in ("https://marveldle.com/game", "https://marveldle.com/play",
+                  "https://marveldle.com/classic", "https://marveldle.com/comics"):
+            try:
+                page.goto(u, wait_until="domcontentloaded", timeout=25000)
+                page.wait_for_timeout(4000)
+                n2 = page.evaluate(
+                    "() => document.querySelectorAll("
+                    "'input,textarea,[contenteditable=true]').length")
+                _dbg(gid, f"tried {u} inputs={n2}")
+                if n2:
+                    break
+            except Exception as e:
+                _dbg(gid, f"{u} failed: {str(e)[:100]}")
     probes = []
     try:
         info = A.marveldle(A.target_date())
