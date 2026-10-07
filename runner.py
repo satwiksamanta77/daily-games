@@ -2961,9 +2961,35 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
         _settle(page, base=3000)
         try:
             txt = (page.evaluate("() => document.body.innerText") or "")
+            cols = page.evaluate(
+                """() => { const all = Array.from(document.querySelectorAll(
+                  '[class]')); const hit = all.filter(e =>
+                  /exact|correct|green|match/i.test(e.className.baseVal !== undefined
+                    ? e.className.baseVal : (e.className || '')));
+                  return {n: hit.length,
+                    sample: hit.slice(0, 8).map(e =>
+                      (e.className.baseVal !== undefined ? e.className.baseVal
+                        : e.className)).join('|').slice(0, 200)}; }""")
         except Exception:
-            txt = ""
-        _dbg(gid, f"guess {n + 1} feedback chars={len(txt)}")
+            txt, cols = "", {}
+        _dbg(gid, f"guess {n + 1} feedback chars={len(txt)} "
+                  f"hit-tiles={cols}")
+        if last:
+            okw, ev = _strict_win(page, answer_name)
+            try:
+                exact_n = int((cols or {}).get("n") or 0)
+            except Exception:
+                exact_n = 0
+            if not okw and exact_n >= 5:
+                # All attribute columns lit: the board agrees even when the
+                # banner text differs. Log the tile sample as the evidence.
+                okw, ev = True, (f"all-attribute win ({exact_n} exact/green "
+                                 f"tiles; {(cols or {}).get('sample', '')})")
+            if not okw:
+                # Banner/confetti can lag the final submit by seconds.
+                page.wait_for_timeout(5000)
+                okw, ev = _strict_win(page, answer_name)
+                _dbg(gid, f"recheck after 5s: ok={okw} ({ev})")
         if last:
             okw, ev = _strict_win(page, answer_name)
             if okw:
