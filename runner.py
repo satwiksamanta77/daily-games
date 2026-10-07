@@ -1858,6 +1858,22 @@ def _plan_for(gid, answer):
             p = S.plan_sequence(a, bank, bank, opener=None)
         else:
             p = _honest_fallback(a)
+    elif gid in ("marveldle", "batterup"):
+        # Attribute games: 2 spread probes from the vendored pool + answer.
+        # This is the same list solve_attr_game plays, so slides/captions
+        # always match the footage (never generic CRANE/SLATE filler).
+        pool = [str(n) for n in _attr_pool(gid)
+                if str(n).lower() != str(a).lower()]
+        seq = []
+        for cand in ([pool[0] if pool else None,
+                      pool[len(pool) // 2] if pool else None]):
+            if cand and cand not in seq:
+                seq.append(cand)
+        seq = (seq[:2] + [a]) if a else seq
+        steps = [{"turn": i + 1, "guess": g, "pattern": "",
+                  "pool_before": None, "pool_after": None}
+                 for i, g in enumerate(seq)]
+        p = (seq, steps)
     else:
         p = _honest_fallback(a)
     _PLANS[gid] = p
@@ -2140,7 +2156,9 @@ def _type_country_guess(page, scope, country):
         page.wait_for_timeout(2500)
         picked, detail = scope.evaluate("""(want) => {
           const rows = Array.from(document.querySelectorAll(
-            '.react-autosuggest__suggestion, [role=option], [role=listbox] li, ul li'));
+            '.react-autosuggest__suggestion, [role=option], [role=listbox] li, ul li, ' +
+            '.dropdown-menu *, .dropdown-item, ngb-typeahead-window *, ' +
+            '[ngbtypeaheadwindow] *, .typeahead-dropdown *'));
           const vis = rows.filter(e => e && e.offsetParent !== null &&
             (e.innerText || '').trim().length > 0);
           const w = want.trim().toLowerCase();
