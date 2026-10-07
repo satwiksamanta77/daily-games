@@ -64,6 +64,12 @@ except Exception:
 HEADLESS = os.environ.get("HEADLESS", "true").lower() == "true"
 
 _DBG_FH = {}
+_RELOADS = {}
+
+
+def _count_reload(gid, why):
+    _RELOADS[gid] = _RELOADS.get(gid, 0) + 1
+    _dbg(gid, f"PAGE RELOAD #{_RELOADS[gid]} ({why})")
 
 
 def _dbg(gid, msg):
@@ -1268,6 +1274,7 @@ def solve_framed_modes(page, answers):
                           })));
                   } } catch (e) {}
                 }""")
+                _count_reload("framed", f"mode reset before {mid}")
                 page.reload(wait_until="domcontentloaded")
                 page.wait_for_timeout(3500)
                 ready = _framed_board_ready(page)
@@ -2027,7 +2034,7 @@ def _align_answer_to_live_day(gid, ans, page=None):
     return out, want
 
 
-def _reset_site_state(page):
+def _reset_site_state(page, gid="?"):
     """Clear anything the site persisted so today's puzzle is what loads.
 
     Phoodle (and friends) keep the in-progress board, and sometimes the answer
@@ -2076,6 +2083,7 @@ def _reset_site_state(page):
             print("[reset] no persisted state; skipping reload")
             return True
         print(f"[reset] purged {n} persisted entry(ies); reloading")
+        _count_reload(gid, "storage purge")
         page.reload(wait_until="domcontentloaded")
         page.wait_for_timeout(4000)
         return True
@@ -2087,7 +2095,7 @@ def _s_wordle(page, ans, gid):
     _close_modals(page)
     # A stale saved board is the difference between "guessed and lost" and
     # "never had a chance": drop persisted state before trusting the answer.
-    _reset_site_state(page)
+    _reset_site_state(page, gid)
     _close_modals(page)
     return solve_wordle_like(page, ans, _guesses(gid, ans))
 
@@ -2139,7 +2147,13 @@ def _type_country_guess(page, scope, country):
           let best = vis.find(e => (e.innerText || '').trim().toLowerCase() === w)
             || vis.find(e => (e.innerText || '').trim().toLowerCase().startsWith(w))
             || vis[0];
-          if (!best) return [false, 'no suggestions'];
+          if (!best) {
+            const all = document.querySelectorAll(
+              'input,textarea,[role=listbox],[role=option],ul,li').length;
+            const inp = document.activeElement;
+            return [false, 'no suggestions (dom nodes=' + all +
+              ' focused=' + (inp ? (inp.tagName + ':' + (inp.outerHTML || '').slice(0, 120)) : 'none') + ')'];
+          }
           const t = (best.innerText || '').trim().slice(0, 60);
           best.click();
           return [true, t];
@@ -2451,7 +2465,7 @@ def _s_waffle(page, ans, gid):
 def _s_worgle(page, ans, gid):
     """Worgle: wordle-like board in a <game-app> shell; type + Enter."""
     _close_modals(page)
-    _reset_site_state(page)
+    _reset_site_state(page, gid)
     _close_modals(page)
     seq = _guesses(gid, ans)
     a = str(ans or "").strip()
@@ -2822,7 +2836,7 @@ def _s_phoodle(page, ans, gid):
     # the correct answer was scored as all-grey. Purging storage and reloading
     # forces the site to rebuild today's board. The live-day probe is attached
     # at page creation, so it also captures the post-reload request.
-    _reset_site_state(page)
+    _reset_site_state(page, gid)
     _close_modals(page)
     try:
         page.wait_for_timeout(2000)
@@ -3071,6 +3085,70 @@ def _db_save(date_key, gid, record):
         pass
 
 
+def _probe_video(path):
+    """ffprobe a final mp4 -> dict(resolution, duration, size). Never raises."""
+    info = {"path": str(path), "size_mb": 0, "width": 0, "height": 0,
+            "duration_s": 0, "ok": False}
+    try:
+        p = Path(str(path))
+        if p.exists():
+            info["size_mb"] = round(p.stat().st_size / 1e6, 2)
+    except Exception:
+        pass
+    try:
+        import subprocess as _sp, json as _js
+        r = _sp.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                     "-show_entries", "stream=width,height,duration",
+                     "-show_entries", "format=duration", "-of", "json",
+                     str(path)], capture_output=True, text=True, timeout=60)
+        j = _js.loads(r.stdout or "{}")
+        st = (j.get("streams") or [{}])[0]
+        info["width"] = int(st.get("width") or 0)
+        info["height"] = int(st.get("height") or 0)
+        dur = st.get("duration") or (j.get("format") or {}).get("duration") or 0
+        info["duration_s"] = round(float(dur), 1)
+        info["ok"] = info["width"] > 0
+    except Exception as e:
+        info["error"] = str(e)[:100]
+    return info
+
+
+def _report_game(gid, date_key, *, answer=None, guesses=None, rejected=None,
+                 reloads=None, verify=None, video=None, chapters=None,
+                 upload=None, extra=None):
+    """One A-to-Z banner per game: everything a log reader needs, no video
+    rewatch required. Quality WARNs fire when the final mp4 looks wrong."""
+    gs = guesses or []
+    print(f"========== REPORT {gid} {date_key} ==========")
+    print(f"env: tz={os.environ.get('BROWSER_TZ')} "
+          f"tzoff={os.environ.get('TZ_OFFSET_MINUTES')} "
+          f"fake={os.environ.get('FAKE_DATE_ISO', '') or 'auto'} "
+          f"headless={HEADLESS}")
+    print(f"answer: {str(answer)[:80]}")
+    print(f"guesses: n={len(gs)} {gs} rejected={rejected or []}")
+    print(f"reloads: n={reloads or 0} (0-1 normal; more = instability)")
+    print(f"verify: {verify}")
+    if isinstance(video, dict):
+        print(f"video: {video.get('path')} size={video.get('size_mb')}MB "
+              f"res={video.get('width')}x{video.get('height')} "
+              f"dur={video.get('duration_s')}s")
+        if not video.get("ok"):
+            print("WARN: video probe failed (missing ffprobe or bad file)")
+        if video.get("duration_s", 0) < 20:
+            print("WARN: video shorter than 20s")
+        if video.get("width") not in (0, 1920):
+            print(f"WARN: width {video.get('width')} != 1920")
+        if video.get("size_mb", 0) < 0.5:
+            print("WARN: video file tiny/missing")
+    else:
+        print(f"video: {video} (no probe)")
+    print(f"chapters: {chapters or []}")
+    print(f"upload: {upload}")
+    for k, v in (extra or {}).items():
+        print(f"{k}: {v}")
+    print(f"========== END REPORT {gid} ==========")
+
+
 def run_nerdle_external(g, tgt, date_key, today, short):
     """Run the merged 9-mode nerdle solver (async, kept as-is) via subprocess."""
     import subprocess as _sp
@@ -3124,6 +3202,21 @@ def run_nerdle_external(g, tgt, date_key, today, short):
     record = {"game": "nerdle", "date": date_key, "solved": solved,
               "evidence": str(evidence)[:300], "video": str(final) if final.exists() else None}
     _db_save(date_key, "nerdle", record)
+    try:
+        _modes = json.loads((vdir / f"result_{date_key}.json").read_text(
+            encoding="utf-8")).get("modes", [])
+    except Exception:
+        _modes = []
+    _report_game("nerdle", date_key, answer="9 modes (see modes)",
+                 guesses=[f"{m.get('id')}:{m.get('typed')}" for m in _modes
+                          if isinstance(m, dict)],
+                 reloads=_RELOADS.get("nerdle", 0),
+                 verify=f"solved={solved} evidence={str(evidence)[:200]}",
+                 video=_probe_video(final) if final.exists() else None,
+                 chapters=[m.get("id") for m in _modes
+                           if isinstance(m, dict)],
+                 upload="skipped-no-creds",
+                 extra={"assembly": "intro+9 mode cards+gameplay"})
     return {"game": "nerdle", "solved": solved, "video": record["video"], "evidence": evidence}
 
 
@@ -3343,6 +3436,18 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
         {"game": gid, "date": date_key, "solved": solved, "evidence": evidence,
          "video": str(final), "modes": per_mode, "answers": answers,
          "chapters": chapters}, indent=1))
+    _db_save(date_key, gid, {"game": gid, "date": date_key, "solved": solved,
+                             "evidence": evidence, "video": str(final)})
+    _report_game(gid, date_key,
+                 answer={m: answers.get(m) for m in
+                         (answers if isinstance(answers, dict) else {})},
+                 guesses=[f"{d.get('mode')}:{d.get('solved')}" for d in per_mode],
+                 reloads=_RELOADS.get("framed", 0),
+                 verify=f"solved={solved} ({evidence})",
+                 video=_probe_video(final) if final else None,
+                 chapters=[t for _, t in chapters],
+                 upload="skipped-no-creds",
+                 extra={"assembly": "intro+4 mode cards+gameplay+slides"})
     return {"game": gid, "solved": solved, "video": str(final),
             "evidence": evidence, "guesses": len(per_mode) * 2}
 
@@ -3385,6 +3490,10 @@ def run_one(gid):
     today = tgt.strftime("%B %d, %Y")
     short = tgt.strftime("%b %d")
     print(f"[{gid}] {g['name']} target {date_key}")
+    _dbg(gid, f"START env tz={os.environ.get('BROWSER_TZ')} "
+              f"tzoff={os.environ.get('TZ_OFFSET_MINUTES')} "
+              f"fake={os.environ.get('FAKE_DATE_ISO', '') or 'auto'} "
+              f"headless={HEADLESS} url={g['url']}")
     if gid == "nerdle" or g.get("external") == "nerdle_solver.py":
         return run_nerdle_external(g, tgt, date_key, today, short)
     # No-duplicate guard: skip if database/{date}/{game} already solved.
@@ -3628,6 +3737,15 @@ def run_one(gid):
     _db_save(date_key, gid, {"game": gid, "date": date_key, "solved": solved,
                              "evidence": evidence, "video": str(final),
                              "youtube_url": vid if 'vid' in dir() else None})
+    _report_game(gid, date_key, answer=f"{aval} ({ans.get('via', '?')})",
+                 guesses=_guesses(gid, aval),
+                 reloads=_RELOADS.get(gid, 0),
+                 verify=f"solved={solved} evidence={evidence}",
+                 video=_probe_video(final) if final else None,
+                 chapters=[t for _, t in chapters],
+                 upload=(vid if 'vid' in dir() and vid else
+                         "skipped-no-creds"),
+                 extra={"slides": "recap+hints+reveal+facts+teaser+intro"})
     return {"game": gid, "solved": solved, "video": str(final),
             "evidence": evidence, "guesses": nguess}
 
