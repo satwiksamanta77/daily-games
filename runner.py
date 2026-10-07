@@ -2990,8 +2990,6 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
                 page.wait_for_timeout(5000)
                 okw, ev = _strict_win(page, answer_name)
                 _dbg(gid, f"recheck after 5s: ok={okw} ({ev})")
-        if last:
-            okw, ev = _strict_win(page, answer_name)
             if okw:
                 return True, f"{ev} after {len(seq)} guesses"
             low = txt.lower()
