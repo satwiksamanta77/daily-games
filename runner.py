@@ -2540,7 +2540,13 @@ def _waffle_board(page):
             if (grp.length > best.length && grp.length <= 30) best = grp;
           }
           if (!best.length) best = all.slice(0, 30);
-          return best.map(t => {
+          const par = best.length && best[0].parentElement;
+          const diag = par ? (par.tagName + '.' +
+            (par.className || '').slice(0, 60) + ' kids=' +
+            par.children.length) : 'noparent';
+          const sample = best.slice(0, 2).map(t =>
+            (t.outerHTML || '').slice(0, 220)).join(' ||| ');
+          return {tiles: best.map(t => {
             const r = t.getBoundingClientRect();
             // textContent, not innerText: letters sit in nested spans that
             // report empty innerText in headless yet have real text content.
@@ -2550,10 +2556,20 @@ def _waffle_board(page):
                     green: /green/.test(t.className || ''),
                     cls: (t.className || '').slice(0, 60),
                     n: best.length};
-          });
-        }""") or []
+          }), diag: diag, sample: sample};
+        }""")
     except Exception:
-        return []
+        return {"tiles": []}
+    if isinstance(board, dict):
+        _diag = board.get("diag", "?") + " sample=" + board.get("sample", "?")
+        _tiles = board.get("tiles") or []
+    else:
+        _diag, _tiles = "legacy-list", board
+    try:
+        _dbg("waffle", f"container {_diag}")
+    except Exception:
+        pass
+    return _tiles
 
 
 def _s_waffle(page, ans, gid):
