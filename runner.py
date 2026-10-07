@@ -2104,8 +2104,18 @@ def _type_country_guess(page, scope, country):
         return False, "empty country"
     try:
         inp = scope.query_selector(
-            "input[type=text], input:not([type]), input[name=guess]")
+            "input[type=text], input:not([type]), input[name=guess], "
+            "input[type=search], input[placeholder], textarea, "
+            "[contenteditable=true], [role=searchbox], [role=combobox] input, "
+            "[role=combobox]")
         if not inp:
+            try:
+                n = scope.evaluate(
+                    "() => document.querySelectorAll("
+                    "'input,textarea,[contenteditable=true]').length")
+            except Exception:
+                n = "?"
+            _dbg("attr", f"no text input (inputs on page: {n}) url={page.url}")
             return False, "no text input"
         try:
             inp.scroll_into_view_if_needed(timeout=3000)
@@ -2941,6 +2951,16 @@ def _s_batterup(page, ans, gid):
 
 def _s_marveldle(page, ans, gid):
     _close_modals(page)
+    # Marveldle lands on a mode menu: enter Classic/Comics + Play if offered.
+    for label in ("Comics", "Classic", "Play", "Start", "Daily"):
+        try:
+            el = page.query_selector(f"button:has-text('{label}')")
+            if el and el.is_visible():
+                el.click(timeout=3000)
+                page.wait_for_timeout(1500)
+                _dbg(gid, f"clicked {label!r}")
+        except Exception:
+            pass
     probes = []
     try:
         info = A.marveldle(A.target_date())

@@ -721,10 +721,15 @@ def batterup(d=None):
             if not r.ok:
                 continue
             j = r.json()
-            entry = j.get(key) or j.get("current") or j
-            pl = (entry or {}).get("player") if isinstance(entry, dict) else None
-            if isinstance(pl, dict) and pl.get("player_name"):
-                return {"answer": pl["player_name"], "player": pl,
+            games = j.get("games") if isinstance(j, dict) else j
+            if not isinstance(games, list):
+                continue
+            entry = next((g for g in games
+                          if isinstance(g, dict) and g.get("game_date") == key),
+                         None)
+            pl = {"player_name": (entry or {}).get("player_name")}
+            if pl["player_name"]:
+                return {"answer": pl["player_name"], "player": entry,
                         "date": key, "via": "cdn"}
         except Exception as e:
             print(f"[batterup] cdn {key} failed: {str(e)[:100]}")

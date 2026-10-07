@@ -30,6 +30,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install --prefer-binary -r requirements.txt
           python -m playwright install --with-deps chromium
+          npm init -y >/dev/null 2>&1 || true
+          npm install --no-save seedrandom 2>&1 | tail -1 || true
       - name: Run game (never fails - saves artifact)
         env:
           HEADLESS: 'true'
@@ -55,7 +57,7 @@ jobs:
           git config user.email "video-bot@users.noreply.github.com"
           git add database/ || true
           git diff --cached --quiet || git commit -m "db: ${{ matrix.game }} $(date -u +%F)"
-          git push || true
+          for i in 1 2 3 4 5; do git pull --rebase 2>/dev/null && git push 2>/dev/null && break || sleep 7; done || true
   batch-b:
     permissions:
       contents: write
@@ -77,6 +79,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install --prefer-binary -r requirements.txt
           python -m playwright install --with-deps chromium
+          npm init -y >/dev/null 2>&1 || true
+          npm install --no-save seedrandom 2>&1 | tail -1 || true
       - name: Run game (never fails - saves artifact)
         env:
           HEADLESS: 'true'
@@ -102,4 +106,4 @@ jobs:
           git config user.email "video-bot@users.noreply.github.com"
           git add database/ || true
           git diff --cached --quiet || git commit -m "db: ${{ matrix.game }} $(date -u +%F)"
-          git push || true
+          for i in 1 2 3 4 5; do git pull --rebase 2>/dev/null && git push 2>/dev/null && break || sleep 7; done || true
