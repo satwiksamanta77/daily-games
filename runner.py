@@ -2570,8 +2570,10 @@ def _waffle_board(page):
             // textContent, not innerText: letters sit in nested spans that
             // report empty innerText in headless yet have real text content.
             const ch = ((t.textContent || '').trim()[0] || '');
+            let pos = '';
+            try { pos = t.getAttribute('data-pos') || ''; } catch (e) {}
             return {x: r.x + r.width / 2, y: r.y + r.height / 2,
-                    ch: ch, empty: !ch,
+                    ch: ch, empty: !ch, pos: pos,
                     green: /green/.test(t.className || ''),
                     cls: (t.className || '').slice(0, 60),
                     n: best.length};
@@ -2622,8 +2624,10 @@ def _s_waffle(page, ans, gid):
                   "bi": i} for i in cells]
         _dbg("waffle", f"round {_round + 1}: {len(board)} tiles, "
                         f"{len(cells)} letters")
+        # The game's logical state lives in data-pos (DOM order never
+        # changes on a swap), so moved = position assignment changed.
         sol = list(solution.replace(" ", ""))
-        cur = [s["ch"] for s in state]
+        cur = [(s["ch"], board[s["bi"]].get("pos")) for s in state]
         idx = next((k for k, s in enumerate(state)
                     if not s["green"] and k < len(sol)
                     and s["ch"] != sol[k]), None)
@@ -2663,10 +2667,11 @@ def _s_waffle(page, ans, gid):
         page.wait_for_timeout(1600)
         try:
             _nb = _waffle_board(page)
-            _nc = [t["ch"] for t in _nb if not t.get("empty")]
+            _nc = [(t["ch"], t.get("pos")) for t in _nb
+                   if not t.get("empty")]
             _moved = (_nc != cur)
-            _dbg("waffle", f"swap {swaps}: idx {idx}({cur[idx]})"
-                            f"<->{j}({cur[j]}) {detail} moved={_moved}")
+            _dbg("waffle", f"swap {swaps}: idx {idx}({cur[idx][0]})"
+                            f"<->{j}({cur[j][0]}) {detail} moved={_moved}")
             if not _moved:
                 bad_pairs.add((idx, j))
                 if len(bad_pairs) >= 3:
