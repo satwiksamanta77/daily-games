@@ -2613,7 +2613,7 @@ def _s_waffle(page, ans, gid):
         b0 = "?"
     swaps = 0
     bad_pairs = set()
-    for _round in range(10):
+    for _round in range(15):
         board = _waffle_board(page)
         if not board:
             return False, "no waffle tiles found"
