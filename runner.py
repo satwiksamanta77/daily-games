@@ -72,6 +72,17 @@ def _count_reload(gid, why):
     _dbg(gid, f"PAGE RELOAD #{_RELOADS[gid]} ({why})")
 
 
+def _log_nav(gid):
+    """Top-level browser log: every navigation with its URL, so page-hops
+    (framed daily->one-frame->daily etc.) are visible in the log alone."""
+    def _h(frame):
+        try:
+            _dbg(gid, f"NAV -> {frame.url}")
+        except Exception:
+            pass
+    return _h
+
+
 def _dbg(gid, msg):
     """Timestamped debug line -> stdout AND videos/{gid}/debug_{date}.log.
 
@@ -342,6 +353,16 @@ def _settle(page, base=260):
     """
     import random
     page.wait_for_timeout(int(random.uniform(base * 0.6, base * 1.9)))
+
+
+def _daily_opener(choices):
+    """Pick a deterministic-per-day opener so videos never all start the
+    same way (bot tell). Same date -> same opener (reproducible)."""
+    try:
+        seed = int(str(A.target_date()).replace("-", ""))
+    except Exception:
+        seed = 0
+    return list(choices)[seed % len(list(choices))]
 
 
 def _idle_drift(page, lo=300, hi=900, chance=0.25):
@@ -782,13 +803,33 @@ def _betweenle_invalid_showing(page):
                                   "not in the word list", "unknown word"))
 
 
+def _betweenle_state(page):
+    """Snapshot the board: bounds + typed rows + toasts, for submit verify."""
+    try:
+        return page.evaluate("""() => {
+          const t = (document.body.innerText || '');
+          const rows = Array.from(document.querySelectorAll(
+            '[class*="guess" i], [class*="row" i]'))
+            .filter(e => e && e.offsetParent !== null).length;
+          return {len: t.length, rows: rows,
+                  tail: t.slice(-160),
+                  invalid: /not a word|not valid|invalid word|not in the word list|unknown word|before|after/i.test(t)};
+        }""") or {}
+    except Exception:
+        return {}
+
+
 def _type_betweenle_word(page, gid, word, used):
     """Type one betweenle guess; on 'not a word' drop it and try the next
-    bank word exactly like a human would (never hammer Enter on a dead word)."""
+    bank word exactly like a human would (never hammer Enter on a dead word).
+    Verifies the Enter actually submitted (state changed); otherwise refocuses
+    the board and resends once instead of typing into the void."""
+    before = _betweenle_state(page)
     _type_like_a_person(page, word, base_delay=170)
     page.wait_for_timeout(300)
     page.keyboard.press("Enter")
     page.wait_for_timeout(3000)
+    after = _betweenle_state(page)
     if _betweenle_invalid_showing(page):
         _dbg(gid, f"{word!r} rejected by site; replacing from bank")
         try:
@@ -801,7 +842,27 @@ def _type_betweenle_word(page, gid, word, used):
                 _dbg(gid, f"retry with {a!r}")
                 return _type_betweenle_word(page, gid, a, used | {a})
         return False, word
+    if after.get("len") == before.get("len") and \
+            after.get("rows") == before.get("rows"):
+        # Enter went nowhere (focus on tooltip, not the board): refocus the
+        # board centre and resend Enter once.
+        _dbg(gid, f"{word!r} no board change; refocusing + resending Enter")
+        try:
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(400)
+            page.mouse.click(960, 620)
+            page.wait_for_timeout(400)
+            page.keyboard.press("Enter")
+            page.wait_for_timeout(3000)
+        except Exception:
+            pass
+        after2 = _betweenle_state(page)
+        if after2.get("len") == before.get("len") and \
+                _betweenle_invalid_showing(page):
+            _dbg(gid, f"{word!r} still rejected after resend; replacing")
+            return _type_betweenle_word(page, gid, word + "", used)
     used.add(word.upper())
+    _dbg(gid, f"{word!r} submitted (board {before.get('len')}->{after.get('len')} chars)")
     return True, word
 
 
@@ -816,8 +877,47 @@ def solve_betweenle(page, ans):
     # The How-to-Play panel only appears AFTER the daily game starts, so this
     # must run after the mode click, not before it.
     _close_betweenle_help(page)
+    # The helper tooltip bubble sits over the board centre and swallows the
+    # focus click; dismiss it (X, then Escape) before touching the board.
+    for _t in range(3):
+        try:
+            x = page.query_selector(
+                "[class*=tooltip] [class*=close], [class*=help] [class*=close],"
+                " [class*=popover] [aria-label=Close], button:has-text('×')")
+            if x and x.is_visible():
+                x.click(timeout=2000)
+                page.wait_for_timeout(600)
+        except Exception:
+            pass
+        try:
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(300)
+        except Exception:
+            pass
+    # Verify the daily board actually opened (ENTER key + bounds visible);
+    # otherwise click DAILY WORD by text and wait again.
+    def _board_on():
+        try:
+            t = (page.evaluate("() => document.body.innerText") or "")
+            return ("ENTER" in t.upper() and "DAILY" not in t.upper()[:500]) or \
+                bool(page.query_selector("button:has-text('ENTER')"))
+        except Exception:
+            return False
+    if not _board_on():
+        _dbg("betweenle", "board not open; clicking DAILY WORD by text")
+        for sel in ("button:has-text('DAILY WORD')", "text=DAILY WORD"):
+            try:
+                el = page.query_selector(sel)
+                if el and el.is_visible():
+                    el.click(timeout=3000)
+                    page.wait_for_timeout(4000)
+                    break
+            except Exception:
+                continue
+        _close_betweenle_help(page)
+    _dbg("betweenle", f"board open={_board_on()}")
     # canvas game: no DOM input, so drive the physical keyboard
-    page.mouse.click(960, 600)
+    page.mouse.click(960, 620)
     page.wait_for_timeout(500)
     used = set()
     ok1, first = _type_betweenle_word(page, gid="betweenle", word="about",
@@ -863,7 +963,7 @@ def solve_colordle(page, ans):
     guesses = [name]
     if hexv:
         try:
-            seq, _ = S.plan_colordle(hexv)
+            seq, _ = S.plan_colordle(hexv, date_str=A.target_date().isoformat())
             if seq and seq[-1].lower() == str(name).lower():
                 guesses = seq
         except Exception as e:
@@ -899,19 +999,33 @@ def solve_colordle(page, ans):
 
 
 def _colorfle_swatches(page):
-    """Map Colorfle palette index -> clickable element, by background colour."""
+    """Map Colorfle palette index -> clickable element, by background colour.
+
+    One evaluate call returns every button's colour at once; the old version
+    did a getComputedStyle round-trip per button and took forever on camera.
+    """
     import re as _re
     sw = {}
-    for b in page.query_selector_all("button"):
+    try:
+        items = page.evaluate("""() => {
+          const all = Array.from(document.querySelectorAll('button'));
+          return all.map(e => ({bg: getComputedStyle(e).backgroundColor,
+            vis: !!e.offsetParent, i: all.indexOf(e)})); }""") or []
+    except Exception:
+        items = []
+    btns = page.query_selector_all("button") or []
+    for it in items:
         try:
-            bg = b.evaluate("e => getComputedStyle(e).backgroundColor")
-            m = _re.match(r"rgb\((\d+),\s*(\d+),\s*(\d+)\)", bg or "")
+            if not it.get("vis"):
+                continue
+            m = _re.match(r"rgb\((\d+),\s*(\d+),\s*(\d+)\)", it.get("bg") or "")
             if not m:
                 continue
             rgb = tuple(map(int, m.groups()))
             for i, hx in enumerate(COLORFLE_HEX):
-                if _hex_to_rgb(hx) == rgb and i not in sw:
-                    sw[i] = b
+                if _hex_to_rgb(hx) == rgb and i not in sw \
+                        and it["i"] < len(btns):
+                    sw[i] = btns[it["i"]]
                     break
         except Exception:
             continue
@@ -1023,27 +1137,22 @@ def _framed_open_mode(page, url):
     """
     page.goto(url, wait_until="domcontentloaded", timeout=45000)
     page.wait_for_timeout(6000)
+    if _framed_board_ready(page):
+        return True
     # The mode menu lives in an OFF-SCREEN sidebar (its tiles measure x = -288),
-    # so is_visible() is false and a normal click is impossible. The tiles are
-    # real anchors with hrefs though, so navigate to the mode route directly
-    # rather than trying to click a tile that cannot be clicked.
-    if "/one-frame" not in page.url and "/titleshot" not in page.url \
-            and "/poster" not in page.url:
-        hrefs = page.evaluate("""() => {
-          const vis = e => e && e.offsetParent !== null;
-          return Array.from(document.querySelectorAll('a[href]'))
-            .map(a => (a.getAttribute('href') || '').trim())
-            .filter(h => h && h !== '/' && !h.startsWith('http'));
-        }""") or []
-        for h in hrefs:
-            if h in ("/one-frame", "/titleshot", "/poster", "/classic"):
-                try:
-                    page.goto("https://framed.wtf" + h,
-                              wait_until="domcontentloaded", timeout=45000)
-                    page.wait_for_timeout(6000)
-                    break
-                except Exception:
-                    continue
+    # so is_visible() is false and a normal click is impossible. Go to the
+    # REQUESTED mode route directly - never the first mode link found (that
+    # hopped daily->one-frame->daily on camera).
+    from urllib.parse import urlparse as _up
+    want = (_up(url).path or "/").rstrip("/") or "/"
+    norm = (page.url.rstrip("/")) if isinstance(page.url, str) else ""
+    if want != "/" and not norm.endswith(want):
+        try:
+            page.goto("https://framed.wtf" + want,
+                      wait_until="domcontentloaded", timeout=45000)
+            page.wait_for_timeout(6000)
+        except Exception:
+            pass
     return _framed_board_ready(page)
 
 
@@ -1463,11 +1572,13 @@ def _play_guesses(page, guesses, after_each=None, answer=None):
     return _strict_win(page, answer)
 
 
-def solve_wordle_like(page, ans, guesses=None, opener="CRANE"):
+def solve_wordle_like(page, ans, guesses=None, opener=None):
     """Wordle-style games (canuckle, phoodle): real deduction sequence."""
     _close_modals(page)
     if not guesses:
         g5, pool = S.words_generic5()
+        opener = opener or _daily_opener(["CRANE", "SLATE", "ADIEU", "TRACE",
+                                          "ROAST", "AUDIO"])
         guesses, _ = S.plan_sequence(ans, pool, g5, opener=opener)
     ok, ev = _play_guesses(page, guesses, answer=ans)
     return ok, (ev if ok else f"{ev} (typed {guesses})")
@@ -1749,10 +1860,14 @@ def _plan_for(gid, answer):
     a = str(answer).upper()
     if gid == "betweenle":
         g, pool = S.words_betweenle()
-        p = S.plan_sequence(a, pool, g, opener="CRANE")
+        p = S.plan_sequence(a, pool, g,
+                            opener=_daily_opener(["ABOUT", "CRANE", "SLATE",
+                                                  "TRACE", "ADIEU", "ROAST"]))
     elif gid == "canuckle":
         g, pool = S.words_canuckle()
-        p = S.plan_sequence(a, pool, g, opener="CRANE")
+        p = S.plan_sequence(a, pool, g,
+                            opener=_daily_opener(["CRANE", "SLATE", "TRACE",
+                                                  "ADIEU", "ROAST", "AUDIO"]))
     elif gid == "phoodle":
         g, pool = S.words_food()
         p = S.plan_sequence(a, pool, g, max_guesses=5, opener=None)
@@ -1795,7 +1910,7 @@ def _plan_for(gid, answer):
         # secret hex, which the caller stashes in _HEX (see run_one).
         hx = _HEX.get(gid)
         if hx:
-            p = S.plan_colordle(hx)
+            p = S.plan_colordle(hx, date_str=A.target_date().isoformat())
         else:
             p = _honest_fallback(a, max_guesses=5)
     elif gid == "colorfle":
@@ -1820,14 +1935,15 @@ def _plan_for(gid, answer):
         # that rather than dressing it up as deduction.
         p = _framed_probe_path(a)
     elif gid == "worldle":
-        p = S.geo_probe_path(a, S.countries_worldle(), gid=gid, width=5,
+        # 3 probes + answer = 4 total: tight, human, always 3-5 steps.
+        p = S.geo_probe_path(a, S.countries_worldle(), gid=gid, width=3,
                              seed=_day_seed(gid))
     elif gid == "globle":
-        p = S.geo_probe_path(a, S.countries_globle(), gid=gid, width=5,
+        p = S.geo_probe_path(a, S.countries_globle(), gid=gid, width=3,
                              seed=_day_seed(gid))
     elif gid == "countryle":
         bank = S.countries_countryle() or S.countries_globle()
-        p = S.geo_probe_path(a, bank, gid=gid, width=5, seed=_day_seed(gid))
+        p = S.geo_probe_path(a, bank, gid=gid, width=3, seed=_day_seed(gid))
     elif gid == "waffle":
         # Waffle is a swap puzzle, not a guess puzzle: every plan is the solved
         # grid's own words (already known from the worker API) followed by the
@@ -2280,13 +2396,30 @@ def _s_countryle(page, ans, gid):
     except Exception:
         b0 = ""
     if "MISSION" in b0 or "Welcome to" in b0 or "GUESS" in b0.upper() or len(b0.strip()) < 50:
-        for txt in ("Play", "Start", "Continue", "Go"):
+        # Onboarding carousel (Welcome -> NEXT xN -> Skip) must be walked
+        # through first; Play/Start do not exist on those screens.
+        for _tap in range(7):
+            advanced = False
+            for txt in ("NEXT", "Next", "Skip", "SKIP", "Play", "Start",
+                        "Continue", "Go", "Got it"):
+                try:
+                    el = page.get_by_text(txt, exact=True).first
+                    if el and el.is_visible():
+                        el.click(timeout=3000)
+                        page.wait_for_timeout(1800)
+                        _dbg(gid, f"onboarding clicked {txt!r}")
+                        advanced = True
+                        break
+                except Exception:
+                    continue
             try:
-                page.get_by_text(txt, exact=True).first.click(timeout=3000)
-                page.wait_for_timeout(2500)
-                break
+                cur = (page.evaluate("() => document.body.innerText") or "")
             except Exception:
-                continue
+                cur = ""
+            if "GUESS" in cur.upper() and "Welcome to" not in cur:
+                break
+            if not advanced:
+                break
         for sel in ("button:has-text('Play')", "a:has-text('Play')",
                     "div:has-text('Play')", "button:has-text('Start')", "text=Play"):
             try:
@@ -2432,20 +2565,43 @@ def _s_waffle(page, ans, gid):
                       if k != idx and not s["green"]), None)
         if j is None:
             break
-        # Click by TILE INDEX, never by letter: duplicate letters made the old
-        # letter-matching click the wrong tile and swaps silently did nothing.
-        detail = page.evaluate("""([ia, ib]) => {
-          const tiles = Array.from(document.querySelectorAll('.tile'))
-            .filter(t => t.offsetParent !== null);
-          if (ia >= tiles.length || ib >= tiles.length) return 'bad-index';
-          const fa = tiles[ia], fb = tiles[ib];
-          if (/green/.test(fa.className||'')) return 'already-green-' + ia;
-          fa.click();
-          const t2 = Array.from(document.querySelectorAll('.tile'))
-            .filter(t => t.offsetParent !== null);
-          if (ib >= t2.length) return 'bad-index-after';
-          t2[ib].click();
-          return 'swapped-' + ia + '-' + ib; }""", [idx, j])
+        # Real mouse clicks at tile centres (like a finger), with selection
+        # verified between the two clicks. The old in-page .click() calls
+        # never selected anything - the board sat at 15 swaps remaining.
+        def _tile_xy(k):
+            try:
+                bb = page.evaluate("""(k) => {
+                  const t = Array.from(document.querySelectorAll('.tile'))
+                    .filter(x => x && x.offsetParent !== null)[k];
+                  if (!t) return null;
+                  const r = t.getBoundingClientRect();
+                  return [r.x + r.width / 2, r.y + r.height / 2,
+                          t.className || '']; }""", k)
+            except Exception:
+                bb = None
+            return bb
+        detail = "mouse-swap"
+        try:
+            a_xy = _tile_xy(idx)
+            if not a_xy:
+                detail = f"bad-index-{idx}"
+            else:
+                page.mouse.click(a_xy[0], a_xy[1])
+                page.wait_for_timeout(700)
+                sel = page.evaluate("""() => Array.from(
+                  document.querySelectorAll('.tile')).filter(t =>
+                  /select|active|highlight|chosen/i.test(t.className || ''))
+                  .length""")
+                _dbg("waffle", f"first click idx {idx} ({cur[idx]}): "
+                                f"selectedTiles={sel}")
+                b_xy = _tile_xy(j)
+                if not b_xy:
+                    detail = f"bad-index-{j}"
+                else:
+                    page.mouse.click(b_xy[0], b_xy[1])
+                    page.wait_for_timeout(700)
+        except Exception as e:
+            detail = f"ERR mouse {str(e)[:80]}"
         swaps += 1
         page.wait_for_timeout(1600)
         try:
@@ -2970,10 +3126,18 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
                     sample: hit.slice(0, 8).map(e =>
                       (e.className.baseVal !== undefined ? e.className.baseVal
                         : e.className)).join('|').slice(0, 200)}; }""")
+            rows = page.evaluate(
+                """() => Array.from(document.querySelectorAll(
+                  '[class*=guess i], [class*=row i], [class*=tile i], li'))
+                  .filter(e => e && e.offsetParent !== null)
+                  .map(e => (e.innerText || '').trim().slice(0, 60))
+                  .filter(t => t).slice(-6)""") or []
         except Exception:
-            txt, cols = "", {}
+            txt, cols, rows = "", {}, []
         _dbg(gid, f"guess {n + 1} feedback chars={len(txt)} "
-                  f"hit-tiles={cols}")
+                  f"hit-tiles={cols} rows={rows}")
+        if last and not rows:
+            _dbg(gid, "WARN: guess rows show no words on screen")
         if last:
             okw, ev = _strict_win(page, answer_name)
             try:
@@ -3315,6 +3479,10 @@ def run_framed_all(gid, g, tgt, date_key, today, short):
         ctx.route("**/*", _route)
         pg = ctx.new_page()
         try:
+            pg.on("framenavigated", _log_nav("framed"))
+        except Exception:
+            pass
+        try:
             pg.goto(FRAMED_MODES[0][2], wait_until="domcontentloaded", timeout=45000)
             pg.wait_for_timeout(6000)
             per_mode, solved_modes = solve_framed_modes(pg, answers)
@@ -3462,6 +3630,19 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
                         break
                     except Exception:
                         continue
+            # Brand intro LAST so the bg song never covers its own audio.
+            _fintro = HERE / "intro" / "wordsolverx-intro-20s.mp4"
+            if _fintro.exists():
+                try:
+                    _fic = VideoFileClip(str(_fintro)).resize(width=1920, height=1080)
+                    clip = concatenate_videoclips([_fic, clip], method="compose")
+                    chapters = [(0, "Intro")] + [(s + float(_fic.duration or 0), t)
+                                                for s, t in chapters]
+                    cur += float(_fic.duration or 0)
+                    total = cur
+                    _dbg(gid, f"intro prepended ({_fic.duration:.1f}s, own audio)")
+                except Exception as e:
+                    _dbg(gid, f"intro skipped: {str(e)[:120]}")
             out = str(vdir / f"{gid}_final_{date_key}.mp4")
             clip.write_videofile(out, codec="libx264", audio_codec="aac",
                                  fps=24, verbose=False, logger=None)
@@ -3596,6 +3777,10 @@ def run_one(gid):
             return route.continue_()
         ctx.route("**/*", _route)
         pg = ctx.new_page()
+        try:
+            pg.on("framenavigated", _log_nav(gid))
+        except Exception:
+            pass
         # Attach the daily-puzzle response probe BEFORE the first navigation, so
         # the site's own answer request is captured on the initial page load.
         _install_live_day_probe(pg)
@@ -3671,6 +3856,17 @@ def run_one(gid):
                               + [f"Find {_w[:12]}" for _w in _ww[:2]])
                 except Exception:
                     _hints = ["Swap tiles to solve", "Greens stay put"]
+            elif gid == "batterup":
+                try:
+                    _bp = ans.get("player") if isinstance(ans, dict) else {}
+                    _hints = [f"Team: {_bp.get('team_name', '?')}",
+                              f"Position: {', '.join(_bp.get('position', [])) or '?'}",
+                              f"Born: {_bp.get('born', '?')}"]
+                except Exception:
+                    _hints = ["Guess the player", "Columns narrow it down"]
+            elif gid == "marveldle":
+                _hints = ["Comics hero or villain", "Check gender, type, era",
+                          "Answer last after 2 probes"]
             else:
                 _hints = S.compute_hints(str(aval))
             DP.generate_hints(str(hints_p), g["name"], today,
@@ -3703,20 +3899,6 @@ def run_one(gid):
                 cur += gd if p is None else secs
             total = cur
 
-            # Brand intro first (kept short on camera, full clip prepended).
-            _intro = HERE / "intro" / "wordsolverx-intro-20s.mp4"
-            if _intro.exists():
-                try:
-                    _ic = VideoFileClip(str(_intro)).resize(width=1920, height=1080)
-                    parts.insert(0, _ic)
-                    chapters = [(0, "Intro")] + [(s + _ic.duration, t)
-                                                for s, t in chapters]
-                    cur += float(_ic.duration or 0)
-                    total = cur
-                    _dbg(gid, f"intro prepended ({_ic.duration:.1f}s)")
-                except Exception as e:
-                    _dbg(gid, f"intro skipped: {str(e)[:120]}")
-
             clip = concatenate_videoclips(parts, method="compose")
             for _mp3 in ("song1.mp3", "song2.mp3"):
                 _sp = QDIR / _mp3
@@ -3727,9 +3909,24 @@ def run_one(gid):
                                 if sc.duration < clip.duration
                                 else sc.subclip(0, clip.duration))
                         clip = clip.set_audio(full.volumex(0.18))
+                        _dbg(gid, f"music {_sp.name} on main body "
+                                   f"({clip.duration:.1f}s)")
                         break
                     except Exception:
                         continue
+            # Brand intro LAST so the bg song never covers its own audio.
+            _intro = HERE / "intro" / "wordsolverx-intro-20s.mp4"
+            if _intro.exists():
+                try:
+                    _ic = VideoFileClip(str(_intro)).resize(width=1920, height=1080)
+                    clip = concatenate_videoclips([_ic, clip], method="compose")
+                    chapters = [(0, "Intro")] + [(s + float(_ic.duration or 0), t)
+                                                for s, t in chapters]
+                    cur += float(_ic.duration or 0)
+                    total = cur
+                    _dbg(gid, f"intro prepended ({_ic.duration:.1f}s, own audio)")
+                except Exception as e:
+                    _dbg(gid, f"intro skipped: {str(e)[:120]}")
             out = str(vdir / f"{gid}_final_{date_key}.mp4")
             clip.write_videofile(out, codec="libx264", audio_codec="aac",
                                  fps=24, verbose=False, logger=None)

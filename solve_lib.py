@@ -348,7 +348,7 @@ def _rgb_dist(a, b):
             + (2 + (255 - rm) / 256) * db * db) ** 0.5
 
 
-def plan_colordle(target_hex, max_guesses=5):
+def plan_colordle(target_hex, max_guesses=5, date_str=None):
     """Real Colordle solve: colour-space narrowing, answer last.
 
     Colordle scores a guess by how close its colour is to the secret one (the
@@ -378,7 +378,16 @@ def plan_colordle(target_hex, max_guesses=5):
     # Farthest-point sampling: each probe is chosen to be as far as possible
     # from everything already probed, so every guess really does narrow down.
     n_probes = max(1, max_guesses - 1)
-    probes = [pool[0][1]]  # deterministic seed
+    # Date-seeded opener: a different spread anchor each day (same date ->
+    # same opener, reproducible), never the same first guess two days running.
+    import random as _rnd
+    try:
+        _seed = int(str(date_str).replace("-", "")) if date_str else 0
+    except Exception:
+        _seed = 0
+    _pool = list(pool)
+    _rnd.Random(_seed).shuffle(_pool)
+    probes = [_pool[0][1]] if _pool else [pool[0][1]]
     while len(probes) < n_probes:
         nxt = max((rgb for _, rgb in pool if rgb not in probes),
                   key=lambda c: min(_rgb_dist(c, p) for p in probes))

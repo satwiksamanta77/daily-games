@@ -495,7 +495,8 @@ CONSENT_SELS = [
     "button:has-text('Accept all')", "button:has-text('Reject all')",
     "button:has-text('Accept')", "button:has-text('Reject')",
     "button:has-text('Agree')", "button:has-text('Allow all')",
-    "button:has-text('Got it')", "#truste-consent-button",
+    "button:has-text('Got it')", "button:has-text('OK')",
+    "#truste-consent-button",
 ]
 
 
@@ -771,11 +772,11 @@ async def play_mode(page, mode, script_dir, official=None):
             except Exception as e:
                 print(f"[{mode['id']}] goto {att + 1}/3 failed: {e}")
                 await page.wait_for_timeout(2500)
-        # Fill the 1280x720 frame: the board column is narrow on wide
-        # viewports, so zoom per mode (multi-board modes stay at 1.0).
-        _zoom = {"classic": 1.5, "micro": 1.7, "mini": 1.6, "midi": 1.5,
-                 "maxi": 1.15, "minibi": 1.2, "quad": 1.0, "speed": 1.1,
-                 "instant": 1.5}.get(mode["id"], 1.3)
+        # Fill the frame: the board column is narrow on wide viewports,
+        # so zoom per mode (multi-board modes stay at 1.0).
+        _zoom = {"classic": 1.2, "micro": 1.35, "mini": 1.3, "midi": 1.25,
+                 "maxi": 1.05, "minibi": 1.1, "quad": 1.0, "speed": 1.05,
+                 "instant": 1.2}.get(mode["id"], 1.15)
         try:
             await page.evaluate(f"() => {{ document.body.style.zoom = '{_zoom}'; }}")
             print(f"[{mode['id']}] zoom {_zoom}")
@@ -1040,8 +1041,8 @@ async def main():
         print(f"[tz] {tz}")
         context = await browser.new_context(
             record_video_dir=str(video_dir),
-            record_video_size={"width": 1280, "height": 720},
-            viewport={"width": 1280, "height": 720},
+            record_video_size={"width": 1024, "height": 768},
+            viewport={"width": 1024, "height": 768},
             timezone_id=tz, locale="en-US",
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
         )
