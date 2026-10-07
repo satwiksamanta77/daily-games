@@ -13,6 +13,10 @@ on:
         description: 'Puzzle date YYYY-MM-DD (empty = auto)'
         required: false
         default: ''
+      force:
+        description: 'Force re-render even if database says done (true/false)'
+        required: false
+        default: 'false'
 
 jobs:
   generate:
@@ -44,6 +48,7 @@ jobs:
           HEADLESS: 'true'
           TZ_OFFSET_MINUTES: '0'
           BROWSER_TZ: 'Etc/UTC'
+          FORCE_REGENERATE: ${{ inputs.force }}
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}

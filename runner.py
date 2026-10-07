@@ -3348,6 +3348,9 @@ def _db_already_done(date_key, gid):
         if p.exists():
             r = json.loads(p.read_text(encoding="utf-8"))
             if r.get("solved") and r.get("video"):
+                if os.environ.get("FORCE_REGENERATE") == "true":
+                    print(f"[{gid}] force mode: re-rendering despite record")
+                    return None
                 return r
     except Exception:
         pass

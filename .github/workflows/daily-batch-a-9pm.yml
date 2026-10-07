@@ -13,13 +13,17 @@ on:
         description: 'Puzzle date YYYY-MM-DD (empty = auto next-day board)'
         required: false
         default: ''
+      force:
+        description: 'Force re-render even if database says done (true/false)'
+        required: false
+        default: 'false'
 
 jobs:
   generate:
     permissions:
       contents: write
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -44,6 +48,7 @@ jobs:
           HEADLESS: 'true'
           TZ_OFFSET_MINUTES: '540'
           BROWSER_TZ: 'Asia/Tokyo'
+          FORCE_REGENERATE: ${{ inputs.force }}
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
