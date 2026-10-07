@@ -2542,8 +2542,11 @@ def _waffle_board(page):
           if (!best.length) best = all.slice(0, 30);
           return best.map(t => {
             const r = t.getBoundingClientRect();
+            // textContent, not innerText: letters sit in nested spans that
+            // report empty innerText in headless yet have real text content.
+            const ch = ((t.textContent || '').trim()[0] || '');
             return {x: r.x + r.width / 2, y: r.y + r.height / 2,
-                    ch: (t.innerText || '').trim(),
+                    ch: ch, empty: !ch,
                     green: /green/.test(t.className || ''),
                     cls: (t.className || '').slice(0, 60),
                     n: best.length};
@@ -2577,15 +2580,22 @@ def _s_waffle(page, ans, gid):
         board = _waffle_board(page)
         if not board:
             return False, "no waffle tiles found"
-        state = [{"ch": t["ch"], "green": t["green"]} for t in board]
+        # The 5x5 grid holds 4 empty gap cells; the worker solution is the
+        # 21 letter cells in row-major order. Align on letters only.
+        cells = [i for i, t in enumerate(board) if not t.get("empty")]
+        state = [{"ch": board[i]["ch"], "green": board[i]["green"],
+                  "bi": i} for i in cells]
+        _dbg("waffle", f"round {_round + 1}: {len(board)} tiles, "
+                        f"{len(cells)} letters")
         sol = list(solution.replace(" ", ""))
         cur = [s["ch"] for s in state]
-        idx = next((i for i, s in enumerate(state)
-                    if not s["green"] and i < len(sol)
-                    and s["ch"] != sol[i]), None)
+        idx = next((k for k, s in enumerate(state)
+                    if not s["green"] and k < len(sol)
+                    and s["ch"] != sol[k]), None)
         if idx is None:
             break
         want = sol[idx]
+        bi, bj = state[idx]["bi"], None
         # Skip pairs that already failed twice: rotate to the next candidate
         # instead of hammering a dead swap for 10 rounds on camera.
         cands = [k for k, s in enumerate(state)
@@ -2598,12 +2608,13 @@ def _s_waffle(page, ans, gid):
                 bad_pairs.clear()
                 continue
             break
+        bj = state[j]["bi"]
         # Tiles are draggable: drag idx onto j like a finger. Click-click
         # selects but never swaps on this board.
         detail = "drag-swap"
         try:
-            ax, ay = board[idx]["x"], board[idx]["y"]
-            bx, by = board[j]["x"], board[j]["y"]
+            ax, ay = board[bi]["x"], board[bi]["y"]
+            bx, by = board[bj]["x"], board[bj]["y"]
             page.mouse.move(ax, ay)
             page.wait_for_timeout(300)
             page.mouse.down()
@@ -2616,8 +2627,9 @@ def _s_waffle(page, ans, gid):
         swaps += 1
         page.wait_for_timeout(1600)
         try:
-            after = [t["ch"] for t in _waffle_board(page)]
-            _moved = (after != cur)
+            _nb = _waffle_board(page)
+            _nc = [t["ch"] for t in _nb if not t.get("empty")]
+            _moved = (_nc != cur)
             _dbg("waffle", f"swap {swaps}: idx {idx}({cur[idx]})"
                             f"<->{j}({cur[j]}) {detail} moved={_moved}")
             if not _moved:
@@ -2633,7 +2645,7 @@ def _s_waffle(page, ans, gid):
                 break
     page.wait_for_timeout(3000)
     try:
-        _end = _waffle_board(page)
+        _end = [t for t in _waffle_board(page) if not t.get("empty")]
         greens = sum(1 for t in _end if t["green"])
         total = len(_end)
         g1 = [greens, total]
