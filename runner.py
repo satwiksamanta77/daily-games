@@ -2542,6 +2542,7 @@ def _s_waffle(page, ans, gid):
     except Exception:
         b0 = "?"
     swaps = 0
+    bad_pairs = set()
     for _round in range(10):
         state = page.evaluate("""() => Array.from(
           document.querySelectorAll('.tile'))
@@ -2558,12 +2559,17 @@ def _s_waffle(page, ans, gid):
         if idx is None:
             break
         want = sol[idx]
-        j = next((k for k, s in enumerate(state)
-                  if k != idx and not s["green"] and s["ch"] == want), None)
+        # Skip pairs that already failed twice: rotate to the next candidate
+        # instead of hammering a dead swap for 10 rounds on camera.
+        cands = [k for k, s in enumerate(state)
+                 if k != idx and not s["green"] and (idx, k) not in bad_pairs]
+        j = next((k for k in cands if state[k]["ch"] == want), None)
         if j is None:
-            j = next((k for k, s in enumerate(state)
-                      if k != idx and not s["green"]), None)
+            j = next(iter(cands), None)
         if j is None:
+            if bad_pairs:
+                bad_pairs.clear()
+                continue
             break
         # Real mouse clicks at tile centres (like a finger), with selection
         # verified between the two clicks. The old in-page .click() calls
@@ -2598,6 +2604,22 @@ def _s_waffle(page, ans, gid):
                 if not b_xy:
                     detail = f"bad-index-{j}"
                 else:
+                    # What is actually under the second click point? An ad
+                    # overlay eats real mouse clicks (evaluate-clicks bypass
+                    # hit-testing, which is why the old code behaved
+                    # differently).
+                    try:
+                        under = page.evaluate("""([x, y]) => {
+                          const e = document.elementFromPoint(x, y);
+                          if (!e) return 'none';
+                          return (e.tagName || '?') + '.' +
+                            ((e.className.baseVal !== undefined
+                              ? e.className.baseVal : e.className) || '')
+                            .slice(0, 80); }""", [b_xy[0], b_xy[1]])
+                    except Exception:
+                        under = "?"
+                    _dbg("waffle", f"second click idx {j} ({cur[j]}) "
+                                    f"under-cursor={under}")
                     page.mouse.click(b_xy[0], b_xy[1])
                     page.wait_for_timeout(700)
         except Exception as e:
@@ -2609,8 +2631,14 @@ def _s_waffle(page, ans, gid):
               document.querySelectorAll('.tile'))
               .filter(t => t.offsetParent !== null)
               .map(t => ({ch: (t.innerText||'').trim()}))""")]
+            _moved = (after != cur)
             _dbg("waffle", f"swap {swaps}: idx {idx}<->{j} {detail} "
-                 f"moved={after != cur}")
+                 f"moved={_moved}")
+            if not _moved:
+                bad_pairs.add((idx, j))
+                if len(bad_pairs) >= 3:
+                    _dbg("waffle", "3 dead pairs; stopping swaps early")
+                    break
         except Exception:
             pass
         if "ERR" in str(detail) or str(detail).startswith(("no-", "bad-", "already-")):
