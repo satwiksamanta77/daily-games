@@ -2620,20 +2620,30 @@ def _s_waffle(page, ans, gid):
     page.wait_for_timeout(3000)
     try:
         g1 = page.evaluate("""() => {
-          const t = Array.from(document.querySelectorAll('.tile'));
+          const t = Array.from(document.querySelectorAll('.tile'))
+            .filter(x => x && x.offsetParent !== null);
           let g = 0;
           for (const x of t) if (/green/.test(x.className||'')) g++;
-          return g; }""")
+          return [g, t.length]; }""")
         body = (page.evaluate("() => document.body.innerText") or "")
     except Exception:
-        g1, body = 0, ""
+        g1, body = [0, 0], ""
     low = body.lower()
-    won = ("star" in low or "well done" in low or "solved" in low
-           or "complete" in low)
-    if won or (isinstance(g1, int) and str(b0).split("/")[0] != str(g1)
-               and g1 > 0):
-        return True, f"{swaps} swaps, greens {b0}->{g1} ({str(words)[:80]})"
-    return False, f"{swaps} swaps, greens {b0}->{g1}; no win text"
+    try:
+        greens, total = int(g1[0]), int(g1[1])
+    except Exception:
+        greens, total = 0, 0
+    # STRICT: every tile green (a partial board is never a win, even if the
+    # page contains words like "complete" somewhere in static text).
+    won = (total > 0 and greens >= total) or (
+        ("star" in low and "swaps" in low) or "you win" in low
+        or "sweet" in low or "well done" in low)
+    if won and total > 0 and greens < total and "you win" not in low \
+            and "sweet" not in low:
+        won = False
+    if won:
+        return True, f"{swaps} swaps, greens {b0}->{greens}/{total} ({str(words)[:80]})"
+    return False, f"{swaps} swaps, greens {b0}->{greens}/{total}; no win"
 
 
 def _s_worgle(page, ans, gid):
