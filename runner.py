@@ -2618,8 +2618,17 @@ def _s_waffle(page, ans, gid):
         if not board:
             return False, "no waffle tiles found"
         # The 5x5 grid holds 4 empty gap cells; the worker solution is the
-        # 21 letter cells in row-major order. Align on letters only.
-        cells = [i for i, t in enumerate(board) if not t.get("empty")]
+        # 21 letter cells in row-major order. DOM order is NOT row-major
+        # (React key order), so sort by the tiles' own data-pos grid coords.
+        import json as _js
+        def _pos(t):
+            try:
+                p = _js.loads(t.get("pos") or "{}")
+                return (int(p.get("y", 0)), int(p.get("x", 0)))
+            except Exception:
+                return (99, 99)
+        cells = sorted([i for i, t in enumerate(board) if not t.get("empty")],
+                       key=lambda i: _pos(board[i]))
         state = [{"ch": board[i]["ch"], "green": board[i]["green"],
                   "bi": i} for i in cells]
         _dbg("waffle", f"round {_round + 1}: {len(board)} tiles, "
@@ -2669,7 +2678,7 @@ def _s_waffle(page, ans, gid):
             _nb = _waffle_board(page)
             _nc = [(t["ch"], t.get("pos")) for t in _nb
                    if not t.get("empty")]
-            _moved = (_nc != cur)
+            _moved = (sorted(_nc) != sorted(cur))
             _dbg("waffle", f"swap {swaps}: idx {idx}({cur[idx][0]})"
                             f"<->{j}({cur[j][0]}) {detail} moved={_moved}")
             if not _moved:
