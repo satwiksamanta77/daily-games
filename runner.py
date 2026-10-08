@@ -3751,11 +3751,13 @@ def run_framed_all(gid, g, tgt, date_key, today, short):
 
     with sync_playwright() as p:
         b = p.chromium.launch(headless=HEADLESS)
+        _sstate = HERE / "browser_state.json"
+        _state_kwargs = {"storage_state": str(_sstate)} if _sstate.exists() else {}
         ctx = b.new_context(record_video_dir=str(vdir),
                             record_video_size={"width": 1920, "height": 1080},
                             viewport={"width": 1920, "height": 1080},
                             timezone_id=os.environ.get("BROWSER_TZ", "Asia/Kolkata"),
-                            locale="en-US")
+                            locale="en-US", **_state_kwargs)
         if HAS:
             iso = os.environ.get("FAKE_DATE_ISO", tgt.strftime("%Y-%m-%dT00:05:00"))
             try:
@@ -3798,6 +3800,11 @@ def run_framed_all(gid, g, tgt, date_key, today, short):
             vpath = pg.video.path()
         except Exception:
             vpath = None
+        try:
+            ctx.storage_state(path=str(HERE / "browser_state.json"))
+            print(f"[{gid}] browser_state.json saved")
+        except Exception as _e:
+            print(f"[{gid}] state save failed: {str(_e)[:120]}")
         ctx.close()
         b.close()
 
@@ -4048,6 +4055,8 @@ def run_one(gid):
 
     with sync_playwright() as p:
         b = p.chromium.launch(headless=HEADLESS)
+        _sstate = HERE / "browser_state.json"
+        _state_kwargs = {"storage_state": str(_sstate)} if _sstate.exists() else {}
         # Record at native 1080p so the final video is real FHD, not an upscale.
         ctx = b.new_context(record_video_dir=str(vdir),
                             record_video_size={"width": 1920, "height": 1080},
@@ -4136,6 +4145,11 @@ def run_one(gid):
             vpath = pg.video.path()
         except Exception:
             vpath = None
+        try:
+            ctx.storage_state(path=str(HERE / "browser_state.json"))
+            print(f"[{gid}] browser_state.json saved")
+        except Exception as _e:
+            print(f"[{gid}] state save failed: {str(_e)[:120]}")
         ctx.close()
         b.close()
 

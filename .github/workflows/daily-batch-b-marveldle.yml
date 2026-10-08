@@ -70,7 +70,8 @@ jobs:
         run: |
           git config user.name "video-bot"
           git config user.email "video-bot@users.noreply.github.com"
-          git add database/ || true
+          git add database/ browser_state.json || true
           git diff --cached --quiet || git commit -m "db: ${{ matrix.game }} $(date -u +%F)"
           for i in 1 2 3 4 5; do git pull --rebase 2>/dev/null && git push 2>/dev/null && break || sleep 7; done || true
+
 
