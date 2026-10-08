@@ -1,4 +1,4 @@
-"""Daily-games video runner — SOLVING videos, not answer reveals.
+﻿"""Daily-games video runner — SOLVING videos, not answer reveals.
 
 Flow per game (Wordle-parity):
   1. Open real game site (BROWSER_TZ + FAKE_DATE_ISO time-travel for next-day).
@@ -74,6 +74,7 @@ def _count_reload(gid, why):
 
 _VIDEO_T0 = None
 _CLICKS = []
+_LAST_BOARD_SHOT = None
 
 
 def _push_click_at(x, y):
@@ -2596,30 +2597,32 @@ def _s_countryle(page, ans, gid):
     except Exception:
         b0 = ""
     if "MISSION" in b0 or "Welcome to" in b0 or "GUESS" in b0.upper() or len(b0.strip()) < 50:
-        # Onboarding carousel (Welcome -> NEXT xN -> Skip) must be walked
-        # through first; Play/Start do not exist on those screens.
-        for _tap in range(7):
-            advanced = False
-            for txt in ("NEXT", "Next", "Skip", "SKIP", "Play", "Start",
-                        "Continue", "Go", "Got it"):
-                try:
-                    el = page.get_by_text(txt, exact=True).first
-                    if el and el.is_visible():
-                        el.click(timeout=3000)
-                        page.wait_for_timeout(1800)
-                        _dbg(gid, f"onboarding clicked {txt!r}")
-                        advanced = True
-                        break
-                except Exception:
-                    continue
+        for _tap in range(15):
             try:
-                cur = (page.evaluate("() => document.body.innerText") or "")
+                _n = page.evaluate("""() => {
+                    const btns = Array.from(document.querySelectorAll('button, a')).filter(e => e && e.offsetParent !== null);
+                    for (const b of btns) {
+                        const t = (b.innerText || '').trim().toUpperCase();
+                        if (/NEXT|SKIP|PLAY|START|CONTINUE|GO/i.test(t)) {
+                            const r = b.getBoundingClientRect();
+                            if (r.width > 0 && r.height > 0) { b.click(); return t; }
+                        }
+                    }
+                    return null;
+                }""")
             except Exception:
-                cur = ""
-            if "GUESS" in cur.upper() and "Welcome to" not in cur:
+                _n = None
+            if _n:
+                _dbg(gid, f"onboarding tap {_n!r}")
+                page.wait_for_timeout(1500)
+            else:
                 break
-            if not advanced:
-                break
+            try:
+                if page.query_selector("input"):
+                    _dbg(gid, "input visible, onboarding done")
+                    break
+            except Exception:
+                pass
         for sel in ("button:has-text('Play')", "a:has-text('Play')",
                     "div:has-text('Play')", "button:has-text('Start')", "text=Play"):
             try:
@@ -2907,6 +2910,22 @@ def _s_waffle(page, ans, gid):
             and "sweet" not in low:
         won = False
     if won:
+        # capture the final board screenshot for the "answer" slide
+        try:
+            box = page.evaluate("""() => {
+              const c = document.querySelector('div.board');
+              if (!c) return null;
+              const r = c.getBoundingClientRect();
+              return {x: r.x, y: r.y, width: r.width, height: r.height};
+            }""")
+            if box and box["width"] > 50 and box["height"] > 50:
+                bp = HERE / "videos" / "waffle" / f"board_{A.target_date().isoformat()}.png"
+                bp.parent.mkdir(parents=True, exist_ok=True)
+                page.screenshot(path=str(bp), clip=box)
+                global _LAST_BOARD_SHOT; _LAST_BOARD_SHOT = str(bp)
+                _dbg("waffle", f"board screenshot saved: {bp}")
+        except Exception as e:
+            _dbg("waffle", f"board screenshot failed: {str(e)[:120]}")
         return True, f"{swaps} swaps, greens {b0}->{greens}/{total} ({str(words)[:80]})"
     return False, f"{swaps} swaps, greens {b0}->{greens}/{total}; no win"
 
@@ -3645,8 +3664,8 @@ def run_nerdle_external(g, tgt, date_key, today, short):
     vdir.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
     env.setdefault("HEADLESS", "true")
-    env.setdefault("TZ_OFFSET_MINUTES", "540")
-    env.setdefault("BROWSER_TZ", "Asia/Tokyo")
+    env.setdefault("TZ_OFFSET_MINUTES", "330")
+    env.setdefault("BROWSER_TZ", "Asia/Kolkata")
     print(f"[nerdle] target {date_key} (9 modes, one video)")
     try:
         r = _sp.run([sys.executable, str(HERE / "nerdle_solver.py")],
@@ -3735,7 +3754,7 @@ def run_framed_all(gid, g, tgt, date_key, today, short):
         ctx = b.new_context(record_video_dir=str(vdir),
                             record_video_size={"width": 1920, "height": 1080},
                             viewport={"width": 1920, "height": 1080},
-                            timezone_id=os.environ.get("BROWSER_TZ", "Asia/Tokyo"),
+                            timezone_id=os.environ.get("BROWSER_TZ", "Asia/Kolkata"),
                             locale="en-US")
         if HAS:
             iso = os.environ.get("FAKE_DATE_ISO", tgt.strftime("%Y-%m-%dT00:05:00"))
@@ -4033,7 +4052,7 @@ def run_one(gid):
         ctx = b.new_context(record_video_dir=str(vdir),
                             record_video_size={"width": 1920, "height": 1080},
                             viewport={"width": 1920, "height": 1080},
-                            timezone_id=os.environ.get("BROWSER_TZ", "Asia/Tokyo"),
+                            timezone_id=os.environ.get("BROWSER_TZ", "Asia/Kolkata"),
                             locale="en-US",
                             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36")
         # Pin EVERY game to the target date. Contexto and semantle used to be
@@ -4068,6 +4087,10 @@ def run_one(gid):
         # the site's own answer request is captured on the initial page load.
         _install_live_day_probe(pg)
         solved, evidence = False, "exception before solve"
+        try:
+            global _LAST_BOARD_SHOT; _LAST_BOARD_SHOT = None
+        except Exception:
+            pass
         try:
             pg.goto(g["url"], wait_until="domcontentloaded", timeout=45000)
             pg.wait_for_timeout(6000)
@@ -4154,7 +4177,23 @@ def run_one(gid):
                 _hints = S.compute_hints(str(aval))
             DP.generate_hints(str(hints_p), g["name"], today,
                               _hints, str(aval))
-            DP.generate_reveal(str(reveal_p), g["name"], today, str(aval), steps)
+            if gid == "waffle" and _LAST_BOARD_SHOT and Path(_LAST_BOARD_SHOT).exists():
+                _bb = Image.open(_LAST_BOARD_SHOT).convert("RGB")
+                _bg = Image.new("RGB", (1920, 1080), (13, 20, 38))
+                _bgy = 240
+                _tw = int(_bgy * _bb.width / _bb.height)
+                _bb = _bb.resize((_tw, _bgy), Image.LANCZOS)
+                _bg.paste(_bb, ((1920 - _tw) // 2, (1080 - _bgy) // 2))
+                _draw = ImageDraw.Draw(_bg)
+                _fd = DP._fonts()
+                _draw.text((80, 80), f"{g['name'].upper()} — TODAY'S SOLVED BOARD",
+                            fill=(46, 204, 113), font=_fd["m"])
+                _draw.text((80, 160), today, fill=(200, 210, 230),
+                           font=_fd["b"])
+                _bg.save(str(reveal_p), "PNG", optimize=True)
+                _dbg(gid, f"reveal slide uses board screenshot {_LAST_BOARD_SHOT}")
+            else:
+                DP.generate_reveal(str(reveal_p), g["name"], today, str(aval), steps)
             DP.generate_facts(str(facts_p), g["name"], today, str(aval), steps)
             DP.generate_teaser(str(teaser_p), g["name"], today, g["slug"])
 

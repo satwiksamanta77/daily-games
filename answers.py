@@ -63,9 +63,9 @@ def target_date():
         except ValueError:
             pass
     try:
-        off = int(os.environ.get("TZ_OFFSET_MINUTES", "540"))
+        off = int(os.environ.get("TZ_OFFSET_MINUTES", "330"))
     except ValueError:
-        off = 540
+        off = 330
     return (datetime.utcnow() + timedelta(minutes=off)).date()
 
 

@@ -46,8 +46,8 @@ jobs:
       - name: Run game (never fails job without secrets - local mode, saves artifact)
         env:
           HEADLESS: 'true'
-          TZ_OFFSET_MINUTES: '0'
-          BROWSER_TZ: 'Etc/UTC'
+          TZ_OFFSET_MINUTES: '330'
+          BROWSER_TZ: 'Asia/Kolkata'
           FORCE_REGENERATE: ${{ inputs.force }}
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
@@ -73,3 +73,4 @@ jobs:
           git add database/ || true
           git diff --cached --quiet || git commit -m "db: ${{ matrix.game }} $(date -u +%F)"
           for i in 1 2 3 4 5; do git pull --rebase 2>/dev/null && git push 2>/dev/null && break || sleep 7; done || true
+

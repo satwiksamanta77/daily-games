@@ -1,4 +1,4 @@
-"""Nerdle daily video — all modes solved in one run (Quordle-style).
+﻿"""Nerdle daily video — all modes solved in one run (Quordle-style).
 
 Modes (9, from all-wordsolverx-workers/nerdle-answers):
   classic(8), micro(5), mini(6), midi(7), maxi(10),
@@ -85,9 +85,9 @@ def _visible_now():
         try:
             dt = datetime.fromisoformat(fake)
             try:
-                off = int(os.environ.get("TZ_OFFSET_MINUTES", "540"))
+                off = int(os.environ.get("TZ_OFFSET_MINUTES", "330"))
             except ValueError:
-                off = 540
+                off = 330
             return dt - timedelta(minutes=off)
         except ValueError:
             pass
@@ -1037,7 +1037,7 @@ async def main():
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=HEADLESS)
-        tz = os.environ.get("BROWSER_TZ", "Asia/Tokyo")
+        tz = os.environ.get("BROWSER_TZ", "Asia/Kolkata")
         print(f"[tz] {tz}")
         context = await browser.new_context(
             record_video_dir=str(video_dir),
