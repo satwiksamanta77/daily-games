@@ -336,14 +336,14 @@ def _polish_gameplay(src, out_path, crf=17):
                          "saturation=1.2", "-c:v", "libx264", "-preset", "medium",
                          "-crf", "20", "-pix_fmt", "yuv420p", "-r", "24",
                          str(wall_mp4)], capture_output=True, text=True, timeout=1800)
-        arrow = Image.new("RGBA", (40, 52), (0, 0, 0, 0))
+        arrow = Image.new("RGBA", (64, 84), (0, 0, 0, 0))
         pa = ImageDraw.Draw(arrow)
-        pa.polygon([(6, 2), (6, 42), (16, 34), (22, 50), (28, 46),
-                    (21, 31), (32, 30)], fill=(255, 255, 255, 255),
+        pa.polygon([(10, 4), (10, 68), (25, 54), (34, 80), (43, 73),
+                    (34, 47), (52, 46)], fill=(255, 255, 255, 255),
                    outline=(15, 15, 15, 255))
         arrow.save(cursor_p)
         ring = Image.new("RGBA", (96, 96), (0, 0, 0, 0))
-        ImageDraw.Draw(ring).ellipse([16, 16, 80, 80], outline=(255, 255, 255, 220), width=6)
+        ImageDraw.Draw(ring).ellipse([10, 10, 86, 86], outline=(255, 255, 255, 220), width=7)
         ring.save(ring_p)
     except Exception as e:
         print(f"[polish] assets failed: {e}")
@@ -383,26 +383,51 @@ def _polish_gameplay(src, out_path, crf=17):
     # close enough to the video start). Positions are translated/scaled from
     # the raw capture (1920x1080 viewport) into the polished inner frame.
     if _CLICKS:
-        pts = []
+        events = []
         _sx = fw / 1920.0
         _sy = fh / 1080.0
         _ox = (1920 - fw) / 2.0
         _oy = (1080 - fh) / 2.0
-        for _t, _x, _y in _CLICKS[:25]:
-            pts.append((max(0.0, _t - 0.15), int(_ox + _x * _sx),
-                        int(_oy + _y * _sy)))
+        for _t, _x, _y in _CLICKS[:60]:
+            events.append((max(0.0, _t), int(_ox + _x * _sx),
+                           int(_oy + _y * _sy)))
+        events.sort(key=lambda e: e[0])
         try:
             base_clip = VideoFileClip(str(base))
             over = [base_clip]
-            for _t, _x, _y in pts:
-                if cursor_p and cursor_p.exists():
-                    dc = (ImageClip(str(cursor_p), transparent=True)
-                          .set_start(_t).set_duration(0.4)
-                          .set_position((_x - 6, _y - 2)))
-                    over.append(dc)
+
+            def _cpos(t):
+                if not events:
+                    return (0, 0)
+                if t <= events[0][0]:
+                    return (events[0][1], events[0][2])
+                if t >= events[-1][0]:
+                    return (events[-1][1], events[-1][2])
+                for i in range(len(events) - 1):
+                    t0, x0, y0 = events[i]
+                    t1, x1, y1 = events[i + 1]
+                    if t0 <= t < t1:
+                        # hold the current point, then glide to the next over the
+                        # final ~0.35s before it so the arrow actually moves.
+                        move_start = max(t0, t1 - 0.35)
+                        if t <= move_start:
+                            return (x0, y0)
+                        alpha = (t - move_start) / max(0.001, t1 - move_start)
+                        return (x0 + (x1 - x0) * alpha,
+                                y0 + (y1 - y0) * alpha)
+                return (events[-1][1], events[-1][2])
+
+            if cursor_p and cursor_p.exists():
+                dot = (ImageClip(str(cursor_p), transparent=True)
+                       .set_duration(base_clip.duration)
+                       .set_start(0)
+                       .set_position(lambda t: (_cpos(t)[0] - 10,
+                                                _cpos(t)[1] - 4)))
+                over.append(dot)
+            for _t, _x, _y in events[:: max(1, len(events) // 25)]:
                 if ring_p and ring_p.exists():
                     rc = (ImageClip(str(ring_p), transparent=True)
-                          .set_start(_t + 0.15).set_duration(0.55)
+                          .set_start(_t).set_duration(0.55)
                           .set_position((_x - 48, _y - 48)))
                     over.append(rc)
             out_cur = str(Path(base).parent / (Path(base).stem + "_cur.mp4"))
