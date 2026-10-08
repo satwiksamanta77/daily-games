@@ -63,6 +63,9 @@ jobs:
           path: |
             videos/${{ matrix.game }}/*.mp4
             videos/${{ matrix.game }}/*.log
+            videos/${{ matrix.game }}/qc_*.json
+            videos/${{ matrix.game }}/telemetry_*.json
+            videos/${{ matrix.game }}/result.json
           retention-days: 7
           if-no-files-found: warn
       - name: Commit database record

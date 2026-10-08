@@ -767,6 +767,8 @@ def _marvel_call(path, sid, timeout=30):
                      headers={**_MARVEL_HDR, "sessionId": sid},
                      timeout=timeout)
     r.raise_for_status()
+    if not (r.text or "").strip():      # API now answers 205-empty to guesses
+        return {}
     return r.json()
 
 
@@ -835,6 +837,8 @@ def marveldle(d=None, mode="comics"):
             except Exception as e:
                 print(f"[marveldle] probe failed: {str(e)[:100]}")
                 continue
+            if not fb:
+                raise ValueError("guess endpoint returned no feedback (205)")
             probes.append({"name": seed.get("name"), "id": seed["id"]})
             if fb.get("isExact"):
                 return {"answer": seed.get("name"), "id": seed.get("id"),

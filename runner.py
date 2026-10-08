@@ -74,6 +74,7 @@ def _count_reload(gid, why):
 
 _VIDEO_T0 = None
 _CLICKS = []
+_FOUND_ANSWER = {}
 _LAST_BOARD_SHOT = None
 
 
@@ -2923,6 +2924,13 @@ def _s_worgle(page, ans, gid):
             break
         page.wait_for_timeout(2000)
     _dbg(gid, f"board tiles visible: {_nt} after {(_tw + 1) * 2}s")
+    try:
+        _gb = (page.query_selector("game-app") or page).bounding_box()
+        if _gb:
+            QP.ev_push(_gb["x"] + _gb["width"] / 2,
+                       _gb["y"] + min(300, _gb["height"] / 2), "focus")
+    except Exception:
+        pass
     page.wait_for_timeout(800)
     for n, g in enumerate(seq):
         _idle_drift(page)
@@ -3500,7 +3508,65 @@ def _s_marveldle(page, ans, gid):
                   if isinstance(p, dict) and p.get("name")]
     except Exception as e:
         print(f"[marveldle] probe info failed: {str(e)[:110]}")
+    if not str(ans or "").strip() or str(ans) == "None":
+        return _marveldle_browser_solve(page, gid)
     return solve_attr_game(page, ans, gid, api_probes=probes)
+
+
+def _marveldle_browser_solve(page, gid, max_guesses=14):
+    """Identify today's character IN-PAGE (the public guess API answers
+    205-empty): guess date-seeded candidates from the vendored comics pool,
+    read the column feedback, stop on an all-Exact win."""
+    import json as _j
+    import random as _r
+    try:
+        pool = [c for c in _j.loads((HERE / "frontend_data" / "src" / "lib" /
+                                     "data" / "marveldle-comics.json")
+                                    .read_text(encoding="utf-8"))
+                if isinstance(c, dict) and c.get("name")]
+    except Exception as e:
+        return False, f"no comics pool: {str(e)[:80]}"
+    rnd = _r.Random(f"marveldle:{A.target_date().isoformat()}")
+    rnd.shuffle(pool)
+    tried = set()
+    for n in range(max_guesses):
+        cand = next((c for c in pool if c["name"] not in tried), None)
+        if not cand:
+            break
+        tried.add(cand["name"])
+        ok, detail = _type_country_guess(page, page, cand["name"])
+        _dbg(gid, f"browser-solve guess {n + 1}: {cand['name']!r} ok={ok}")
+        if not ok:
+            continue
+        try:
+            btn = page.query_selector(
+                "button:has-text('Guess'), button:has-text('Submit')")
+            if btn and btn.is_visible():
+                btn.click(timeout=3000)
+            else:
+                page.keyboard.press("Enter")
+        except Exception:
+            page.keyboard.press("Enter")
+        _settle(page, base=3000)
+        fb = page.evaluate("""() => {
+          const rows = Array.from(document.querySelectorAll(
+            '[class*=guess i], [class*=row i], li, tr'))
+            .filter(e => e.offsetParent !== null);
+          const last = rows[rows.length - 1];
+          if (!last) return null;
+          const cols = Array.from(last.querySelectorAll(
+            '[class*=exact i], [class*=correct i], [class*=none i], td, div'))
+            .map(e => ((e.className || '').toString() + ' ' +
+                       (e.innerText || '')).toLowerCase());
+          return cols.slice(0, 14);
+        }""") or []
+        blob = " ".join(fb)
+        _dbg(gid, f"feedback cols: {blob[:140]!r}")
+        if "exact" in blob and " none" not in blob:
+            _FOUND_ANSWER[gid] = cand["name"]
+            return True, (f"browser-solve win on guess {n + 1}: "
+                          f"{cand['name']!r}")
+    return False, f"browser-solve exhausted {len(tried)} candidates"
 
 
 SOLVERS = {
@@ -4040,8 +4106,20 @@ def run_one(gid):
     try:
         ans = getattr(A, key)(tgt)
     except SystemExit as e:
-        return {"game": gid, "solved": False, "video": None, "evidence": f"answer unavailable: {e}"}
+        if gid == "marveldle":
+            ans = {"answer": None, "via": "browser-solve"}
+            _dbg(gid, f"answer source unavailable ({e}); browser solve on")
+        else:
+            _dbg(gid, f"QC FAIL: answer unavailable: {e}")
+            _db_save(date_key, gid, {"game": gid, "date": date_key,
+                                     "solved": False,
+                                     "evidence": f"answer unavailable: {e}",
+                                     "video": None})
+            return {"game": gid, "solved": False, "video": None,
+                    "evidence": f"answer unavailable: {e}"}
     aval = ans.get("answer") or ans.get("name") or str(ans.get("colors"))
+    if gid == "marveldle" and not ans.get("answer"):
+        aval = None
     if gid == "colordle" and ans.get("hex"):
         # Seed the planner cache before anything calls _guesses/_steps, so the
         # slides and result.json report the real multi-guess solve.
@@ -4155,6 +4233,10 @@ def run_one(gid):
                         solved, evidence = solver(pg, aval_s, gid)
                 except TypeError:
                     solved, evidence = solver(pg, aval_s)
+                if solved and gid == "marveldle" and _FOUND_ANSWER.get(gid):
+                    aval = _FOUND_ANSWER[gid]
+                    aval_s = str(aval)
+                    ans = {"answer": aval, "via": "browser-solve"}
                 if not solved and not _defer_stale:
                     # Server-keyed sites can lag a day behind the publish
                     # date: replay once with yesterday's answer and re-key.
