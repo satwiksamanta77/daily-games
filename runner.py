@@ -282,6 +282,31 @@ def _polish_gameplay(src, out_path, crf=17):
         return str(src)
 
 
+def _instrument_mouse(page):
+    """Wrap page.mouse.* so EVERY synthetic mouse call lands in the cursor
+    telemetry track - per-site call sites were too sparse to look alive."""
+    try:
+        m = page.mouse
+        for name in ("move", "down", "up", "click", "dblclick"):
+            orig = getattr(m, name)
+
+            def _wrap(*a, _o=orig, _n=name, **kw):
+                res = _o(*a, **kw)
+                try:
+                    x = a[0] if len(a) > 0 else kw.get("x")
+                    y = a[1] if len(a) > 1 else kw.get("y")
+                    if x is not None and y is not None:
+                        QP.ev_push(x, y,
+                                   "click" if _n in ("click", "dblclick", "down")
+                                   else "move")
+                except Exception:
+                    pass
+                return res
+            setattr(m, name, _wrap)
+    except Exception:
+        pass
+
+
 def _focus_board(page):
     """Focus the game without clicking a random coordinate.
 
@@ -2484,35 +2509,42 @@ def _s_globle(page, ans, gid):
     return False, "answer not found in guess list"
 
 
+def _countryle_frame(page):
+    """The playable app lives in a full-page iframe (rm-app-frame ->
+    /index.html); the outer document is an ad shell with an empty body - which
+    is why every mount check (all versions) reported 'UI still empty'."""
+    for _ in range(20):
+        for fr in page.frames:
+            try:
+                u = (fr.url or "")
+                if u == page.url or not u.startswith("http"):
+                    continue
+                if fr.query_selector("input") or fr.query_selector("button"):
+                    return fr
+            except Exception:
+                continue
+        page.wait_for_timeout(3000)
+    return None
+
+
 def _s_countryle(page, ans, gid):
-    """Countryle: pass the /welcome gate, then suggest-pick + Guess it."""
+    """Countryle: pass the /welcome gate INSIDE the app iframe, then guess."""
     _close_modals(page)
+    fr = _countryle_frame(page)
+    if fr is None:
+        _dbg(gid, "app iframe never produced UI (bot-gate?)")
+        return False, "app iframe empty after 60 s"
+    _dbg(gid, f"app frame: {fr.url[:60]}")
     try:
-        b0 = (page.evaluate("() => document.body.innerText") or "")[:400]
+        b0 = (fr.evaluate("() => document.body.innerText") or "")[:400]
     except Exception:
         b0 = ""
-    # Wait for the SPA to actually MOUNT: probes showed the body can stay
-    # empty for 20-30 s while ads/config load. The old fixed 6 s wait made the
-    # gate decide on an empty page and the video recorded the welcome deck.
-    for _mw in range(15):
-        try:
-            if page.query_selector("input") or page.query_selector(
-                    "button.next, button:has-text('NEXT')"):
-                break
-        except Exception:
-            pass
-        page.wait_for_timeout(5000)
-    try:
-        b0 = (page.evaluate("() => document.body.innerText") or "")[:400]
-        if len(b0.strip()) < 30:
-            _dbg(gid, f"UI still empty after {(_mw + 1) * 5} s (bot-gate?)")
-    except Exception:
-        b0 = ""
-    if "MISSION" in b0 or "Welcome to" in b0 or "GUESS" in b0.upper() or len(b0.strip()) < 50:
+    if "MISSION" in b0 or "Welcome to" in b0 or "GUESS" in b0.upper() \
+            or len(b0.strip()) < 50:
         for _tap in range(10):
             box = None
             try:
-                box = page.evaluate("""() => {
+                box = fr.evaluate("""() => {
                     const btns = Array.from(document.querySelectorAll('button, a'))
                         .filter(e => e && e.offsetParent !== null);
                     for (const b of btns) {
@@ -2531,126 +2563,69 @@ def _s_countryle(page, ans, gid):
             if not box:
                 break
             try:
-                _before = (page.evaluate(
+                _before = (fr.evaluate(
                     "() => document.body.innerText.slice(0, 200)") or "")
             except Exception:
                 _before = ""
-            # TRUSTED mouse click: in-page el.click() never advanced this
-            # onboarding (25 s stuck-on-NEXT videos).
-            page.mouse.click(box["x"], box["y"])
+            page.mouse.click(box["x"], box["y"])   # iframe is full-page: 0,0
             _push_click_at(box["x"], box["y"])
             _dbg(gid, f"onboarding trusted tap {box['t']!r}")
             page.wait_for_timeout(1400)
             try:
-                if page.query_selector("input"):
+                if fr.query_selector("input"):
                     _dbg(gid, "input visible, onboarding done")
                     break
-                _after = (page.evaluate(
+                _after = (fr.evaluate(
                     "() => document.body.innerText.slice(0, 200)") or "")
                 if _after == _before:
                     _dbg(gid, "slide unchanged after trusted tap")
             except Exception:
                 pass
-        for sel in ("button:has-text('Play')", "a:has-text('Play')",
-                    "button:has-text('Start')", "text=Play"):
-            try:
-                el = page.query_selector(sel)
-                if el and el.is_visible():
-                    el.click(timeout=3000)
-                    page.wait_for_timeout(2500)
-                    break
-            except Exception:
-                continue
-    target = page
-    try:
-        for f in page.frames:
-            try:
-                u = f.url or ""
-                t = (f.evaluate("() => document.body ? "
-                               "document.body.innerText.slice(0,200) : ''") or "")
-                if "index.html" in u or "Guess it" in t:
-                    target = f
-                    break
-            except Exception:
-                continue
-    except Exception:
-        pass
     seq = _guesses(gid, ans)
     a = str(ans or "").strip()
-    scope = target if target is not page else page
     picked = "none"
+    _fin = None
     for _w in range(20):
         try:
-            _fin = page.query_selector("input") or scope.query_selector("input")
+            _fin = fr.query_selector("input")
         except Exception:
             _fin = None
         if _fin:
             break
         page.wait_for_timeout(1000)
+    if not _fin:
+        return False, "no input inside app iframe"
     for n, g in enumerate(seq):
+        last = (n == len(seq) - 1)
         _idle_drift(page)
+        ok, detail = _type_country_guess(page, fr, g)
+        _dbg(gid, f"guess {n + 1}/{len(seq)} {g!r}: ok={ok} ({detail[:80]})")
+        if not ok:
+            if last:
+                return False, f"guess {n + 1} pick failed ({detail[:120]})"
+            continue
+        picked = g
         try:
-            inp = scope.query_selector(
-                "input[type=text], input:not([type]), input")
-            if not inp:
-                inp = page.query_selector(
-                    "input[type=text], input:not([type]), input")
-                scope = page
-            if not inp:
-                return False, f"guess {n + 1}: no input"
-            inp.click(timeout=3000)
-            page.wait_for_timeout(500)
-            try:
-                page.keyboard.press("ControlOrMeta+a")
-            except Exception:
-                pass
-            _type_like_a_person(page, str(g).strip(), base_delay=90)
-            page.wait_for_timeout(2200)
-            picked = scope.evaluate("""(want) => {
-              const rows = Array.from(document.querySelectorAll(
-                '[role=option], [role=listbox] li, ul li'));
-              const vis = rows.filter(e => e && e.offsetParent !== null &&
-                (e.innerText||'').trim());
-              const w = want.trim().toLowerCase();
-              const best = rows.find(e => true);
-              let b = vis.find(e => (e.innerText||'').trim().toLowerCase() === w)
-                || vis.find(e => (e.innerText||'').trim().toLowerCase().startsWith(w))
-                || vis[0];
-              if (!b) return 'none';
-              const t = (b.innerText||'').trim().slice(0,50);
-              b.click();
-              return t;
-            }""", str(g).strip())
-            page.wait_for_timeout(800)
-            clicked = False
-            for sel in ("button:has-text('Guess it')",
-                        "button:has-text('Guess')"):
-                try:
-                    b2 = scope.query_selector(sel) or page.query_selector(sel)
-                    if b2 and b2.is_visible():
-                        b2.click(timeout=3000)
-                        clicked = True
-                        break
-                except Exception:
-                    continue
-            if not clicked:
-                try:
-                    page.keyboard.press("Enter")
-                except Exception:
-                    pass
-        except Exception as e:
-            return False, f"guess {n + 1} {g!r}: {str(e)[:110]}"
+            btn = fr.query_selector("button:has-text('Guess')") or \
+                fr.query_selector("button:has-text('GUESS')")
+            if btn and btn.is_visible():
+                btn.click(timeout=3000)
+            else:
+                page.keyboard.press("Enter")
+        except Exception:
+            page.keyboard.press("Enter")
         _settle(page, base=3000)
     page.wait_for_timeout(2500)
     try:
-        extra = (target.evaluate("() => document.body.innerText")
-                 if target is not page else "")
-        body = (page.evaluate("() => document.body.innerText") or "") + extra
+        body = ((fr.evaluate("() => document.body.innerText") or "")
+                + (page.evaluate("() => document.body.innerText") or ""))
     except Exception:
         body = ""
-    if a.lower() in body.lower():
-        return True, "answer present after final guess"
-    return False, f"pick ended at {picked!r}; answer not confirmed"
+    low = body.lower()
+    if a.lower() in low and any(k in low for k in (
+            "guessed", "correct", "well done", "statistics", "share")):
+        return True, f"answer row rendered (picked {picked!r})"
+    return False, f"board did not confirm {a!r} (picked {picked!r})"
 
 
 def _waffle_board(page):
@@ -3784,7 +3759,7 @@ def run_framed_all(gid, g, tgt, date_key, today, short):
     per_mode, solved_modes = [], []
 
     with sync_playwright() as p:
-        b = p.chromium.launch(headless=HEADLESS)
+        b = p.chromium.launch(headless=HEADLESS, args=["--js-flags=--max-old-space-size=1536", "--renderer-process-limit=8", "--disable-dev-shm-usage"])
         _sstate = HERE / "browser_state.json"
         _state_kwargs = {"storage_state": str(_sstate)} if _sstate.exists() else {}
         ctx = b.new_context(record_video_dir=str(vdir),
@@ -3816,6 +3791,7 @@ def run_framed_all(gid, g, tgt, date_key, today, short):
             return route.continue_()
         ctx.route("**/*", _route)
         pg = ctx.new_page()
+        _instrument_mouse(pg)
         # A stray JS alert/confirm (ads, "already played") blocks EVERY
         # later evaluate call forever - auto-dismiss so a popup can never
         # hang a 6-hour job. Same handler is attached in run_one below.
@@ -4118,9 +4094,10 @@ def run_one(gid):
         _sstate = HERE / "browser_state.json"
         _state_kwargs = {"storage_state": str(_sstate)} if _sstate.exists() else {}
         # Record at native 1080p so the final video is real FHD, not an upscale.
+        _vw, _vh = (1280, 720) if gid == "marveldle" else (1920, 1080)
         ctx = b.new_context(record_video_dir=str(vdir),
-                            record_video_size={"width": 1920, "height": 1080},
-                            viewport={"width": 1920, "height": 1080},
+                            record_video_size={"width": _vw, "height": _vh},
+                            viewport={"width": _vw, "height": _vh},
                             timezone_id=os.environ.get("BROWSER_TZ", "Asia/Kolkata"),
                             locale="en-US",
                             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36")
@@ -4149,13 +4126,22 @@ def run_one(gid):
                 if any(x in u for x in ("doubleclick", "googlesyndication", "adnxs", "pubmatic",
                                         "amazon-adsystem", "google-analytics", "clarity.ms", "ad-delivery",
                                         "hotjar", "sentry.io", "facebook.net",
-                                        "connect.facebook", "tiktok", "amplitude")):
+                                        "connect.facebook", "tiktok", "amplitude",
+                                        "criteo", "onetag-sys", "cootlogix", "copper6",
+                                        "kueez", "rubiconproject", "flashtalking",
+                                        "nextmillmedia", "admatic", "intergient",
+                                        "pageos", "btloader", "prebid", "moatads",
+                                        "scorecardresearch", "quantserve", "taboola",
+                                        "outbrain", "smartadserver", "sharethrough",
+                                        "googletagservices", "adsafeprotected",
+                                        "user-sync", "usync", "setuid")):
                     return route.abort()
             except Exception:
                 pass
             return route.continue_()
         ctx.route("**/*", _route)
         pg = ctx.new_page()
+        _instrument_mouse(pg)
         pg.on("dialog", _auto_dismiss_dialog(gid))
         try:
             pg.on("framenavigated", _log_nav(gid))
@@ -4245,8 +4231,13 @@ def run_one(gid):
                                 evidence += f" (day-lag retry: board={_prev})"
                     except Exception as _e2:
                         _dbg(gid, f"day-lag retry failed: {str(_e2)[:100]}")
-        except Exception as e:
+        except SystemExit as _se:
+            evidence = f"SystemExit in solver: {_se}"
+            _dbg(gid, evidence)
+        except BaseException as e:
+            import traceback as _tb
             evidence = f"exception: {str(e)[:200]}"
+            _dbg(gid, f"CRASH in solve: {_tb.format_exc()[-800:]}")
         try:
             pg.screenshot(path=str(vdir / "shot_win.png"))
         except Exception:

@@ -823,13 +823,24 @@ def polish_gameplay(src, out_path, crf=17):
         base = out_path if (r.returncode == 0 and _QPPath(out_path).exists()
                             and _QPPath(out_path).stat().st_size > 10000) else src
         ox = oy = 0.0
-        scx = scy = 1.0
+        scx, scy = 1920.0 / float(_rw), 1080.0 / float(_rh)
     else:
         base = _card_composite(src, out_path, crf)
         fw, fh = 1792, 1008
         ox, oy = (1920 - fw) / 2.0, (1080 - fh) / 2.0
-        scx, scy = fw / 1920.0, fh / 1080.0
+        scx, scy = fw / float(_rw), fh / float(_rh)
     LAST_POLISH.update(mode=mode, events=len(evs), clips=0, base=base)
+    # auto-detect the raw capture size so cursor coords map correctly for
+    # any viewport (marveldle records 720p to stay under the OOM killer)
+    try:
+        import subprocess as _sp2
+        _r2 = _sp2.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                        "-show_entries", "stream=width,height",
+                        "-of", "csv=p=0", src],
+                       capture_output=True, text=True, timeout=60)
+        _rw, _rh = [int(v) for v in _r2.stdout.strip().split(",")[:2]]
+    except Exception:
+        _rw, _rh = 1920, 1080
     if not evs or base == src and not _QPPath(base).exists():
         return base
     try:

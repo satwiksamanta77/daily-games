@@ -263,7 +263,8 @@ def fetch_nerdle_answers(target=None):
 async def block_ads(route):
     try:
         u = route.request.url
-        if any(x in u for x in ("doubleclick", "googlesyndication", "adnxs", "pubmatic", "criteo", "amazon-adsystem", "googletagmanager", "google-analytics", "clarity.ms", "amxrtb", "trustarc.com", "truste.com", "quantserve.com")):
+        if any(x in u for x in ("doubleclick", "googlesyndication", "adnxs", "pubmatic", "criteo", "amazon-adsystem", "googletagmanager", "google-analytics", "clarity.ms", "amxrtb", "trustarc.com", "truste.com", "quantserve.com", "criteo", "onetag-sys", "cootlogix", "kueez",
+              "rubiconproject", "flashtalking", "prebid", "btloader")):
             return await route.abort()
     except Exception:
         pass
@@ -1076,6 +1077,25 @@ async def main():
         except Exception as e:
             print(f"[watchers] skipped: {e}")
         page = await context.new_page()
+        try:
+            _m = page.mouse
+            for _name in ("move", "down", "up", "click"):
+                _orig = getattr(_m, _name)
+
+                async def _wrap(*a, _o=_orig, _n=_name, **kw):
+                    r = await _o(*a, **kw)
+                    try:
+                        x = a[0] if len(a) > 0 else kw.get("x")
+                        y = a[1] if len(a) > 1 else kw.get("y")
+                        if x is not None and y is not None:
+                            QP.ev_push(x, y, "click" if _n in ("click", "down")
+                                       else "move")
+                    except Exception:
+                        pass
+                    return r
+                setattr(_m, _name, _wrap)
+        except Exception:
+            pass
 
         async def _dismiss(d):
             try:
