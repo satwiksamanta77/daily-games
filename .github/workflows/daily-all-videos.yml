@@ -115,3 +115,27 @@ jobs:
           git add database/ || true
           git diff --cached --quiet || git commit -m "db: ${{ matrix.game }} $(date -u +%F)"
           for i in 1 2 3 4 5; do git pull --rebase 2>/dev/null && git push 2>/dev/null && break || sleep 7; done || true
+
+  bundle:
+    needs: [batch-a, batch-b]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Download every per-game artifact
+        uses: actions/download-artifact@v4
+        with:
+          pattern: video-*
+          path: all-artifacts
+          merge-multiple: false
+      - name: Zip into one pack
+        run: |
+          cd all-artifacts
+          zip -r ../wordsolverx_all_videos.zip .
+          ls -la ../wordsolverx_all_videos.zip
+      - name: Upload single all-games pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: wordsolverx_all_videos
+          path: wordsolverx_all_videos.zip
+          retention-days: 7
+          if-no-files-found: error
