@@ -49,7 +49,7 @@ except Exception as e:
     HAS = False
 
 try:
-    from moviepy.editor import VideoFileClip, ImageClip, concatenate_videoclips, AudioFileClip
+    from moviepy.editor import VideoFileClip, ImageClip, concatenate_videoclips, AudioFileClip, CompositeVideoClip
     import moviepy.audio.fx.all as afx
     HAS_MOVIEPY = True
 except Exception:
@@ -72,6 +72,41 @@ def _count_reload(gid, why):
     _dbg(gid, f"PAGE RELOAD #{_RELOADS[gid]} ({why})")
 
 
+_VIDEO_T0 = None
+_CLICKS = []
+
+
+def _push_click_at(x, y):
+    global _VIDEO_T0
+    if _VIDEO_T0 is None:
+        _VIDEO_T0 = time.time()
+    try:
+        t = max(0.0, time.time() - _VIDEO_T0)
+    except Exception:
+        t = 0.0
+    _CLICKS.append((round(t, 2), int(x), int(y)))
+
+
+def _push_click(page):
+    """Record the canvas point where the user focuses (input/button), so the
+    polished gameplay can show were clicks landed."""
+    try:
+        pt = page.evaluate("""() => {
+          const el = document.activeElement;
+          if (el && el.tagName && el.tagName.toLowerCase() !== 'body') {
+            const r = el.getBoundingClientRect();
+            if (r.width > 4 && r.height > 4) return [r.x + r.width / 2, r.y + r.height / 2];
+          }
+          const vis = Array.from(document.querySelectorAll('input')).find(e => e && e.offsetParent !== null);
+          if (vis) { const r = vis.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; }
+          return null;
+        }""") or []
+        if pt:
+            _push_click_at(pt[0], pt[1])
+    except Exception:
+        pass
+
+
 def _auto_dismiss_dialog(gid):
     def _h(d):
         try:
@@ -84,6 +119,9 @@ def _auto_dismiss_dialog(gid):
 
 def _log_nav(gid):
     """Top-level browser log: every navigation with its URL."""
+    global _VIDEO_T0
+    if _VIDEO_T0 is None:
+        _VIDEO_T0 = time.time()
     def _h(frame):
         try:
             _dbg(gid, f"NAV -> {frame.url}")
@@ -266,9 +304,54 @@ def _polish_gameplay(src, out_path, crf=17):
     except Exception as e:
         print(f"[polish] pillow assets failed: {e}")
         return src
+    wall_mp4 = tmp / "wallpaper.mp4"
+    cursor_p = tmp / "cursor.png"
+    ring_p = tmp / "ring.png"
+    try:
+        import subprocess as _s
+        dur = 600.0
+        try:
+            r2 = _s.run(["ffprobe", "-v", "error", "-show_entries",
+                         "format=duration", "-of", "csv=p=0", src],
+                        capture_output=True, text=True, timeout=60)
+            dur = max(1.0, float((r2.stdout or "600").strip() or 600))
+        except Exception:
+            pass
+        wall = HERE / "wallpapers" / "glassmorphism-3.jpg"
+        ok_wall = False
+        if wall.exists():
+            r1 = _s.run(["ffmpeg", "-y", "-v", "error", "-loop", "1", "-i",
+                         str(wall), "-vf",
+                         "scale=1920:1080:force_original_aspect_ratio=increase,"
+                         "crop=1920:1080,eq=brightness=-0.05:saturation=1.1",
+                         "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+                         "-pix_fmt", "yuv420p", "-r", "24", "-t", str(dur),
+                         str(wall_mp4)], capture_output=True, text=True, timeout=60)
+            ok_wall = r1.returncode == 0 and wall_mp4.exists()
+        if not ok_wall:
+            print(f"[polish] wallpaper failed, using blurred bg fallback")
+            wall_mp4 = tmp / "blurred.mp4"
+            r3 = _s.run(["ffmpeg", "-y", "-v", "error", "-i", src, "-vf",
+                         "scale=1920:1080,gblur=sigma=24,eq=brightness=-0.10:"
+                         "saturation=1.2", "-c:v", "libx264", "-preset", "medium",
+                         "-crf", "20", "-pix_fmt", "yuv420p", "-r", "24",
+                         str(wall_mp4)], capture_output=True, text=True, timeout=1800)
+        arrow = Image.new("RGBA", (40, 52), (0, 0, 0, 0))
+        pa = ImageDraw.Draw(arrow)
+        pa.polygon([(6, 2), (6, 42), (16, 34), (22, 50), (28, 46),
+                    (21, 31), (32, 30)], fill=(255, 255, 255, 255),
+                   outline=(15, 15, 15, 255))
+        arrow.save(cursor_p)
+        ring = Image.new("RGBA", (96, 96), (0, 0, 0, 0))
+        ImageDraw.Draw(ring).ellipse([16, 16, 80, 80], outline=(255, 255, 255, 220), width=6)
+        ring.save(ring_p)
+    except Exception as e:
+        print(f"[polish] assets failed: {e}")
+        wall_mp4 = None
+        cursor_p = None
+        ring_p = None
     filt = (
-        f"[0:v]scale=1920:1080:force_original_aspect_ratio=increase,"
-        f"crop=1920:1080,gblur=sigma=24,eq=brightness=-0.10:saturation=1.2[bg];"
+        f"[4:v]format=yuv420p[bg];"
         f"[0:v]scale={fw}:-2,format=rgba[f];"
         f"[1:v]scale={fw}:-2[fm];"
         f"[f][fm]alphamerge[fg];"
@@ -279,6 +362,8 @@ def _polish_gameplay(src, out_path, crf=17):
         f"[b2][rim]overlay=(W-w)/2:(H-h)/2,format=yuv420p,fps=24[v]")
     cmd = ["ffmpeg", "-y", "-v", "error", "-i", src,
            "-i", str(mask_p), "-i", str(shad_p), "-i", str(rim_p),
+           "-t", str(dur),
+           "-i", str(wall_mp4),
            "-filter_complex", filt, "-map", "[v]", "-map", "0:a?",
            "-c:v", "libx264", "-preset", "medium", "-crf", str(crf),
            "-pix_fmt", "yuv420p", "-r", "24", "-c:a", "aac", out_path]
@@ -286,11 +371,55 @@ def _polish_gameplay(src, out_path, crf=17):
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
         if r.returncode == 0 and Path(out_path).exists() \
                 and Path(out_path).stat().st_size > 10000:
-            return out_path
-        print(f"[polish] ffmpeg said: {(r.stderr or '')[:240]}")
+            base = out_path
+        else:
+            print(f"[polish] ffmpeg said: {(r.stderr or '')[:240]}")
+            return src
     except Exception as e:
         print(f"[polish] re-encode failed: {str(e)[:120]}")
-    return src
+        return src
+    # Click ripples + cursor arrow ON THE POLISHED FRAME, using the click
+    # points recorded during the actual solve (times are relative to first NAV,
+    # close enough to the video start). Positions are translated/scaled from
+    # the raw capture (1920x1080 viewport) into the polished inner frame.
+    if _CLICKS:
+        pts = []
+        _sx = fw / 1920.0
+        _sy = fh / 1080.0
+        _ox = (1920 - fw) / 2.0
+        _oy = (1080 - fh) / 2.0
+        for _t, _x, _y in _CLICKS[:25]:
+            pts.append((max(0.0, _t - 0.15), int(_ox + _x * _sx),
+                        int(_oy + _y * _sy)))
+        try:
+            base_clip = VideoFileClip(str(base))
+            over = [base_clip]
+            for _t, _x, _y in pts:
+                if cursor_p and cursor_p.exists():
+                    dc = (ImageClip(str(cursor_p), transparent=True)
+                          .set_start(_t).set_duration(0.4)
+                          .set_position((_x - 6, _y - 2)))
+                    over.append(dc)
+                if ring_p and ring_p.exists():
+                    rc = (ImageClip(str(ring_p), transparent=True)
+                          .set_start(_t + 0.15).set_duration(0.55)
+                          .set_position((_x - 48, _y - 48)))
+                    over.append(rc)
+            out_cur = str(Path(base).parent / (Path(base).stem + "_cur.mp4"))
+            comp = CompositeVideoClip(over, size=base_clip.size)
+            comp.write_videofile(out_cur, codec="libx264", audio_codec="aac",
+                                 fps=24, verbose=False, logger=None)
+            try:
+                base_clip.close()
+                comp.close()
+            except Exception:
+                pass
+            if Path(out_cur).exists() and Path(out_cur).stat().st_size > 10000:
+                return out_cur
+            print("[polish] cursor overlay produced no output")
+        except Exception as e:
+            print(f"[polish] cursor overlay failed: {str(e)[:120]}")
+    return base
 
 
 def _focus_board(page):
@@ -484,6 +613,7 @@ def _type_into(page, sel, text, base_delay=150):
     except Exception:
         pass
     page.wait_for_timeout(150)
+    _push_click(page)
     return _type_like_a_person(page, text, base_delay=base_delay)
 
 
@@ -868,6 +998,7 @@ def _type_betweenle_word(page, gid, word, used):
     bank word exactly like a human would (never hammer Enter on a dead word).
     Verifies the Enter actually submitted (state changed); otherwise refocuses
     the board and resends once instead of typing into the void."""
+    _push_click_at(960, 620)
     before = _betweenle_state(page)
     _type_like_a_person(page, word, base_delay=170)
     page.wait_for_timeout(300)
@@ -2700,6 +2831,7 @@ def _s_waffle(page, ans, gid):
             bx, by = board[bj]["x"], board[bj]["y"]
             page.mouse.move(ax, ay)
             page.wait_for_timeout(300)
+            _push_click_at(ax, ay)
             page.mouse.down()
             page.mouse.move(bx, by, steps=12)
             page.wait_for_timeout(300)
