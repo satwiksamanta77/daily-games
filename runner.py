@@ -138,6 +138,10 @@ def _log_nav(gid):
 
 def _dbg(gid, msg):
     """Timestamped debug line -> stdout AND videos/{gid}/debug_{date}.log.
+    try:
+        _DBG_FH[gid].flush()
+    except Exception:
+        pass
 
     Every guess, rejection, retry, navigation and signal goes through here so
     a failure can be diagnosed from the log alone without rewatching video.
@@ -3537,6 +3541,7 @@ def _marveldle_browser_solve(page, gid, max_guesses=14):
                 if isinstance(c, dict) and c.get("name")]
     except Exception as e:
         return False, f"no comics pool: {str(e)[:80]}"
+    _dbg(gid, f"browser-solve pool={len(pool)} candidates")
     rnd = _r.Random(f"marveldle:{A.target_date().isoformat()}")
     rnd.shuffle(pool)
     tried = set()
@@ -4177,7 +4182,9 @@ def run_one(gid):
             try:
                 u = route.request.url
                 if any(x in u for x in ("doubleclick", "googlesyndication", "adnxs", "pubmatic",
-                                        "amazon-adsystem", "google-analytics", "clarity.ms", "ad-delivery")):
+                                        "amazon-adsystem", "google-analytics", "clarity.ms", "ad-delivery",
+                                        "hotjar", "sentry.io", "facebook.net",
+                                        "connect.facebook", "tiktok", "amplitude")):
                     return route.abort()
             except Exception:
                 pass

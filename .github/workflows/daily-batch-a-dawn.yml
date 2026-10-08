@@ -55,8 +55,8 @@ jobs:
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ]; then
-            HEADLESS=false xvfb-run -a python runner.py --game "$1" || true;
-          else python runner.py --game "$1" || true; fi; }
+            HEADLESS=false xvfb-run -a python -u runner.py --game "$1" || true;
+          else python -u runner.py --game "$1" || true; fi; }
           if [ -n "${{ inputs.game }}" ]; then RUN "${{ inputs.game }}"; else RUN ${{ matrix.game }}; fi
       - name: Upload video artifact
         if: always()
