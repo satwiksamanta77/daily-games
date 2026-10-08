@@ -4457,6 +4457,8 @@ def run_one(gid):
            "video": str(final) if final else None,
            "probe": _probe_video(final) if final else None,
            "cursor_events": len(QP.ev_all()),
+           "cursor_clips": (QP.LAST_POLISH or {}).get("clips", 0),
+           "frame_mode": (QP.LAST_POLISH or {}).get("mode"),
            "guesses": len(_steps(gid, aval))}
     _pr = _qc["probe"] or {}
     _qc["ok"] = bool(final and str(final).endswith(".mp4") and _pr.get("ok")
@@ -4464,6 +4466,8 @@ def run_one(gid):
     _dbg(gid, f"QC {'PASS' if _qc['ok'] else 'FAIL'}: mp4={_qc['video']} "
               f"size={_pr.get('size_mb')}MB res={_pr.get('width')}x{_pr.get('height')} "
               f"dur={_pr.get('duration_s')}s cursor_events={_qc['cursor_events']} "
+              f"cursor_clips={(QP.LAST_POLISH or {}).get('clips', 0)} "
+              f"frame={(QP.LAST_POLISH or {}).get('mode', '?')} "
               f"solved={solved} guesses={_qc['guesses']}")
     try:
         (vdir / f"qc_{date_key}.json").write_text(

@@ -623,6 +623,7 @@ def drain_consent_clicks(page):
 
 
 _QP_ASSET_CACHE = {}
+LAST_POLISH = {}   # introspection for the QC/debug line
 
 
 def _cursor_assets():
@@ -763,6 +764,7 @@ def polish_gameplay(src, out_path, crf=17):
         fw, fh = 1792, 1008
         ox, oy = (1920 - fw) / 2.0, (1080 - fh) / 2.0
         scx, scy = fw / 1920.0, fh / 1080.0
+    LAST_POLISH.update(mode=mode, events=len(evs), clips=0, base=base)
     if not evs or base == src and not _QPPath(base).exists():
         return base
     try:
@@ -782,6 +784,9 @@ def polish_gameplay(src, out_path, crf=17):
         except Exception:
             pass
         if _QPPath(out_cur).exists() and _QPPath(out_cur).stat().st_size > 10000:
+            LAST_POLISH.update(clips=len(clips), out=out_cur)
+            print(f"[polish] cursor overlay: {len(clips)} clips over "
+                  f"{len(evs)} telemetry events ({mode} frame)")
             return out_cur
     except Exception as e:
         print(f"[polish] cursor overlay failed: {str(e)[:140]}")
