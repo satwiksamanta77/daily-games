@@ -237,22 +237,57 @@ def _polish_gameplay(src, out_path, crf=17):
     """
     import subprocess
     out_path = str(out_path)
-    plain = ("scale=1920:1080:force_original_aspect_ratio=increase,"
-             "crop=1920:1080,setsar=1,fps=24")
-    # Outer rule (dark, 10px) then a 3px accent rule just inside it.
-    border = (plain +
-              ",drawbox=x=0:y=0:w=1920:h=1080:color=0x0B1220@1.0:t=10"
-              ",drawbox=x=10:y=10:w=1900:h=1060:color=0x2ECC71@0.95:t=3"
-              ",drawbox=x=13:y=13:w=1894:h=1054:color=0x1B2A4A@1.0:t=2")
-    cmd = ["ffmpeg", "-y", "-v", "error", "-i", src, "-vf", border,
-           "-c:v", "libx264", "-preset", "medium", "-crf", str(crf),
-           "-pix_fmt", "yuv420p", "-r", "24", out_path]
+    # Recordly-style polish ON THE GAMEPLAY SEGMENT ONLY (intro + slides
+    # untouched): soft blur-up wallpaper behind, the raw capture scaled
+    # down with rounded corners and a soft drop shadow, thin light rim.
+    # Generated once per file with PIL + one ffmpeg composite.
+    from PIL import Image, ImageDraw, ImageFilter
+    import tempfile
+    tmp = Path(tempfile.mkdtemp(prefix="polish_"))
+    fw, fh, radius = 1792, 1008, 44
+    mask_p = tmp / "mask.png"
+    shad_p = tmp / "shadow.png"
+    rim_p = tmp / "rim.png"
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        m = Image.new("RGBA", (fw, fh), (0, 0, 0, 0))
+        ImageDraw.Draw(m).rounded_rectangle(
+            [0, 0, fw - 1, fh - 1], radius=radius, fill=(255, 255, 255, 255))
+        m.save(mask_p)
+        sh = Image.new("RGBA", (fw, fh), (0, 0, 0, 0))
+        ImageDraw.Draw(sh).rounded_rectangle(
+            [4, 4, fw - 5, fh - 5], radius=radius, fill=(0, 0, 0, 110))
+        sh = sh.filter(ImageFilter.GaussianBlur(16))
+        sh.save(shad_p)
+        rim = Image.new("RGBA", (fw, fh), (0, 0, 0, 0))
+        ImageDraw.Draw(rim).rounded_rectangle(
+            [1, 1, fw - 2, fh - 2], radius=radius,
+            outline=(255, 255, 255, 150), width=3)
+        rim.save(rim_p)
+    except Exception as e:
+        print(f"[polish] pillow assets failed: {e}")
+        return src
+    filt = (
+        f"[0:v]scale=1920:1080:force_original_aspect_ratio=increase,"
+        f"crop=1920:1080,gblur=sigma=24,eq=brightness=-0.10:saturation=1.2[bg];"
+        f"[0:v]scale={fw}:-2,format=rgba[f];"
+        f"[1:v]scale={fw}:-2[fm];"
+        f"[f][fm]alphamerge[fg];"
+        f"[2:v]scale={fw}:-2[sh];"
+        f"[3:v]scale={fw}:-2[rim];"
+        f"[bg][sh]overlay=(W-w)/2:(H-h)/2+8:format=auto[b1];"
+        f"[b1][fg]overlay=(W-w)/2:(H-h)/2[b2];"
+        f"[b2][rim]overlay=(W-w)/2:(H-h)/2,format=yuv420p,fps=24[v]")
+    cmd = ["ffmpeg", "-y", "-v", "error", "-i", src,
+           "-i", str(mask_p), "-i", str(shad_p), "-i", str(rim_p),
+           "-filter_complex", filt, "-map", "[v]", "-map", "0:a?",
+           "-c:v", "libx264", "-preset", "medium", "-crf", str(crf),
+           "-pix_fmt", "yuv420p", "-r", "24", "-c:a", "aac", out_path]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
         if r.returncode == 0 and Path(out_path).exists() \
                 and Path(out_path).stat().st_size > 10000:
             return out_path
-        print(f"[polish] ffmpeg said: {(r.stderr or '')[:200]}")
+        print(f"[polish] ffmpeg said: {(r.stderr or '')[:240]}")
     except Exception as e:
         print(f"[polish] re-encode failed: {str(e)[:120]}")
     return src
