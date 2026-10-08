@@ -531,12 +531,23 @@ def _kb(page, text, delay=150):
     _dismiss_notifications(page)
     _dismiss_login_wall(page)
     # Never append to a stale row: clear whatever the field holds first
-    # (batter-up kept the previous guess on camera before this).
+    # (batter-up kept the previous guess on camera before this). BUT only when
+    # a real DOM input is focused: on Flutter/canvas boards (canuckle) the
+    # Ctrl+A keydown is TYPED as a stray 'A' and corrupts every row
+    # (debug showed "Current Guess: AAUDI" for input AUDIO).
     try:
-        page.keyboard.press("Control+a")
-        page.keyboard.press("Delete")
+        _dom_inp = page.evaluate(
+            "() => { const e = document.activeElement; return !!(e && "
+            "(e.tagName === 'INPUT' || e.tagName === 'TEXTAREA' "
+            "|| e.isContentEditable)); }")
     except Exception:
-        pass
+        _dom_inp = False
+    if _dom_inp:
+        try:
+            page.keyboard.press("Control+a")
+            page.keyboard.press("Delete")
+        except Exception:
+            pass
     # Sites with an on-screen keyboard need no page focus at all, so try
     # that path first and avoid clicking anywhere on the page.
     if _type_with_on_screen_keyboard(page, text):
