@@ -948,7 +948,14 @@ def plan_phrase(answer, phrases, max_guesses=5):
                                                     ban=(answer,),
                                                     min_after=min_after)
             if cur is None:
-                cur = answer
+                # NEVER hand over the secret because the picker came back
+                # empty: fall back to a date-seeded unused probe so the video
+                # still shows a real wrong guess. Only the deduction-done
+                # branch (`finish`) may commit the answer early.
+                import random as _r
+                _left = [p for p in pool if p not in used and p != answer]
+                cur = (_r.Random(f"phrazle:{answer}:{turn}").choice(_left)
+                       if _left else answer)
         used.add(cur)
         before = len(pool)
         pat = phrase_pattern(cur, answer)

@@ -85,9 +85,9 @@ def _visible_now():
         try:
             dt = datetime.fromisoformat(fake)
             try:
-                off = int(os.environ.get("TZ_OFFSET_MINUTES", "330"))
+                off = int(os.environ.get("TZ_OFFSET_MINUTES", "540"))
             except ValueError:
-                off = 330
+                off = 540
             return dt - timedelta(minutes=off)
         except ValueError:
             pass
@@ -263,7 +263,7 @@ def fetch_nerdle_answers(target=None):
 async def block_ads(route):
     try:
         u = route.request.url
-        if any(x in u for x in ("doubleclick", "googlesyndication", "adnxs", "pubmatic", "criteo", "amazon-adsystem", "googletagmanager", "google-analytics", "clarity.ms", "amxrtb")):
+        if any(x in u for x in ("doubleclick", "googlesyndication", "adnxs", "pubmatic", "criteo", "amazon-adsystem", "googletagmanager", "google-analytics", "clarity.ms", "amxrtb", "trustarc.com", "truste.com", "quantserve.com")):
             return await route.abort()
     except Exception:
         pass
@@ -482,11 +482,19 @@ async def focus_grid(page):
         box = await g.bounding_box(timeout=3000)
         if box:
             await page.mouse.click(box["x"] + 10, box["y"] + box["height"] - 10)
+            try:
+                QP.ev_push(box["x"] + 10, box["y"] + box["height"] - 10, "click")
+            except Exception:
+                pass
             await page.wait_for_timeout(400)
             return
     except Exception:
         pass
     await page.mouse.click(640, 360)
+    try:
+        QP.ev_push(640, 360, "click")
+    except Exception:
+        pass
     await page.wait_for_timeout(400)
 
 
@@ -599,6 +607,10 @@ CLICK_POWER_JS = """
 
 
 async def type_equation(page, eq, delay=200):
+    try:
+        QP.ev_push(960, 540, "focus")
+    except Exception:
+        pass
     """Type `eq`, entering ²/³ via the board's own power keys.
 
     `keyboard.type` silently DROPS superscripts (Maxi's row then holds one
@@ -1043,8 +1055,8 @@ async def main():
         _state_kwargs = {"storage_state": str(_sstate)} if _sstate.exists() else {}
         context = await browser.new_context(
             record_video_dir=str(video_dir),
-            record_video_size={"width": 1024, "height": 768},
-            viewport={"width": 1024, "height": 768},
+            record_video_size={"width": 1920, "height": 1080},
+            viewport={"width": 1920, "height": 1080},
             timezone_id=tz, locale="en-US",
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
             **_state_kwargs,
@@ -1057,6 +1069,12 @@ async def main():
                 print(f"[fakedate] {fake_iso}")
         except Exception as e:
             print(f"[fakedate] skipped: {e}")
+        try:
+            if QP_AVAILABLE:
+                await context.add_init_script(script=QP.prepurge_js())
+                await context.add_init_script(script=QP.consent_watch_js())
+        except Exception as e:
+            print(f"[watchers] skipped: {e}")
         page = await context.new_page()
 
         async def _dismiss(d):
@@ -1092,10 +1110,25 @@ async def main():
     print(f"[verify] won {len(won_modes)}/{len(NERDLE_MODES)} no-win={weak}")
 
     final = vpath
+    try:
+        if QP_AVAILABLE:
+            (video_dir / "telemetry_nerdle.json").write_text(
+                json.dumps(QP.ev_all(), indent=1), encoding="utf-8")
+    except Exception:
+        pass
     chapters = []
     # Wordle-parity assembly (moviepy) + uniform music
     if final and MOVIEPY_AVAILABLE and QP_AVAILABLE:
         try:
+            try:
+                if QP_AVAILABLE:
+                    _pol = QP.polish_gameplay(
+                        str(final), str(video_dir / "gameplay_1080.mp4"))
+                    if _pol and str(_pol) != str(final):
+                        final = _pol
+                        print(f"[nerdle] gameplay polished -> {_pol}")
+            except Exception as _e:
+                print(f"[nerdle] polish skipped: {str(_e)[:100]}")
             gameplay = VideoFileClip(str(final))
             gd = float(gameplay.duration or 0)
             parts, cursor = [], 0.0

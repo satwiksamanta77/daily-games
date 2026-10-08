@@ -18,7 +18,7 @@ import re
 import shutil
 import sys
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -86,6 +86,10 @@ def _push_click_at(x, y):
     except Exception:
         t = 0.0
     _CLICKS.append((round(t, 2), int(x), int(y)))
+    try:
+        QP.ev_push(x, y, "click")
+    except Exception:
+        pass
 
 
 def _push_click(page):
@@ -262,190 +266,15 @@ ENTER_LABELS = ("ENTER", "Enter", "enter", "SUBMIT", "Submit")
 
 
 def _polish_gameplay(src, out_path, crf=17):
-    """Normalise raw screen capture to full-frame 1920x1080 with a frame.
-
-    Deliberately a plain scale+crop plus a drawn border. An earlier version
-    added a slow Ken Burns push-in (`crop` window shrinking over time) which
-    made the footage drift and drift the board out of frame; it was removed on
-    request. The capture is already recorded at native 1920x1080, so this is
-    just a re-encode that guarantees full-bleed framing with no black bars.
-
-    The border is a soft dark outer rule plus a thin accent inner rule. It
-    gives the flat screen capture a finished, produced look instead of raw
-    desktop footage.
-    """
-    import subprocess
-    out_path = str(out_path)
-    # Recordly-style polish ON THE GAMEPLAY SEGMENT ONLY (intro + slides
-    # untouched): soft blur-up wallpaper behind, the raw capture scaled
-    # down with rounded corners and a soft drop shadow, thin light rim.
-    # Generated once per file with PIL + one ffmpeg composite.
-    from PIL import Image, ImageDraw, ImageFilter
-    import tempfile
-    tmp = Path(tempfile.mkdtemp(prefix="polish_"))
-    fw, fh, radius = 1792, 1008, 44
-    mask_p = tmp / "mask.png"
-    shad_p = tmp / "shadow.png"
-    rim_p = tmp / "rim.png"
+    """Delegate to the shared quordle_parity polish + Recordly-grade cursor
+    overlay (native-size spring-smoothed arrow fed by the input-telemetry
+    bus). Kept as a thin wrapper so every existing call site - including the
+    framed assembler - gets the new cursor for free."""
     try:
-        m = Image.new("RGBA", (fw, fh), (0, 0, 0, 0))
-        ImageDraw.Draw(m).rounded_rectangle(
-            [0, 0, fw - 1, fh - 1], radius=radius, fill=(255, 255, 255, 255))
-        m.save(mask_p)
-        sh = Image.new("RGBA", (fw, fh), (0, 0, 0, 0))
-        ImageDraw.Draw(sh).rounded_rectangle(
-            [4, 4, fw - 5, fh - 5], radius=radius, fill=(0, 0, 0, 110))
-        sh = sh.filter(ImageFilter.GaussianBlur(16))
-        sh.save(shad_p)
-        rim = Image.new("RGBA", (fw, fh), (0, 0, 0, 0))
-        ImageDraw.Draw(rim).rounded_rectangle(
-            [1, 1, fw - 2, fh - 2], radius=radius,
-            outline=(255, 255, 255, 150), width=3)
-        rim.save(rim_p)
+        return QP.polish_gameplay(str(src), str(out_path), crf=crf)
     except Exception as e:
-        print(f"[polish] pillow assets failed: {e}")
-        return src
-    wall_mp4 = tmp / "wallpaper.mp4"
-    cursor_p = tmp / "cursor.png"
-    ring_p = tmp / "ring.png"
-    try:
-        import subprocess as _s
-        dur = 600.0
-        try:
-            r2 = _s.run(["ffprobe", "-v", "error", "-show_entries",
-                         "format=duration", "-of", "csv=p=0", src],
-                        capture_output=True, text=True, timeout=60)
-            dur = max(1.0, float((r2.stdout or "600").strip() or 600))
-        except Exception:
-            pass
-        wall = HERE / "wallpapers" / "glassmorphism-3.jpg"
-        ok_wall = False
-        if wall.exists():
-            r1 = _s.run(["ffmpeg", "-y", "-v", "error", "-loop", "1", "-i",
-                         str(wall), "-vf",
-                         "scale=1920:1080:force_original_aspect_ratio=increase,"
-                         "crop=1920:1080,eq=brightness=-0.05:saturation=1.1",
-                         "-c:v", "libx264", "-preset", "medium", "-crf", "20",
-                         "-pix_fmt", "yuv420p", "-r", "24", "-t", str(dur),
-                         str(wall_mp4)], capture_output=True, text=True, timeout=60)
-            ok_wall = r1.returncode == 0 and wall_mp4.exists()
-        if not ok_wall:
-            print(f"[polish] wallpaper failed, using blurred bg fallback")
-            wall_mp4 = tmp / "blurred.mp4"
-            r3 = _s.run(["ffmpeg", "-y", "-v", "error", "-i", src, "-vf",
-                         "scale=1920:1080,gblur=sigma=24,eq=brightness=-0.10:"
-                         "saturation=1.2", "-c:v", "libx264", "-preset", "medium",
-                         "-crf", "20", "-pix_fmt", "yuv420p", "-r", "24",
-                         str(wall_mp4)], capture_output=True, text=True, timeout=1800)
-        arrow = Image.new("RGBA", (64, 84), (0, 0, 0, 0))
-        pa = ImageDraw.Draw(arrow)
-        pa.polygon([(10, 4), (10, 68), (25, 54), (34, 80), (43, 73),
-                    (34, 47), (52, 46)], fill=(255, 255, 255, 255),
-                   outline=(15, 15, 15, 255))
-        arrow.save(cursor_p)
-        ring = Image.new("RGBA", (96, 96), (0, 0, 0, 0))
-        ImageDraw.Draw(ring).ellipse([10, 10, 86, 86], outline=(255, 255, 255, 220), width=7)
-        ring.save(ring_p)
-    except Exception as e:
-        print(f"[polish] assets failed: {e}")
-        wall_mp4 = None
-        cursor_p = None
-        ring_p = None
-    filt = (
-        f"[4:v]format=yuv420p[bg];"
-        f"[0:v]scale={fw}:-2,format=rgba[f];"
-        f"[1:v]scale={fw}:-2[fm];"
-        f"[f][fm]alphamerge[fg];"
-        f"[2:v]scale={fw}:-2[sh];"
-        f"[3:v]scale={fw}:-2[rim];"
-        f"[bg][sh]overlay=(W-w)/2:(H-h)/2+8:format=auto[b1];"
-        f"[b1][fg]overlay=(W-w)/2:(H-h)/2[b2];"
-        f"[b2][rim]overlay=(W-w)/2:(H-h)/2,format=yuv420p,fps=24[v]")
-    cmd = ["ffmpeg", "-y", "-v", "error", "-i", src,
-           "-i", str(mask_p), "-i", str(shad_p), "-i", str(rim_p),
-           "-t", str(dur),
-           "-i", str(wall_mp4),
-           "-filter_complex", filt, "-map", "[v]", "-map", "0:a?",
-           "-c:v", "libx264", "-preset", "medium", "-crf", str(crf),
-           "-pix_fmt", "yuv420p", "-r", "24", "-c:a", "aac", out_path]
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
-        if r.returncode == 0 and Path(out_path).exists() \
-                and Path(out_path).stat().st_size > 10000:
-            base = out_path
-        else:
-            print(f"[polish] ffmpeg said: {(r.stderr or '')[:240]}")
-            return src
-    except Exception as e:
-        print(f"[polish] re-encode failed: {str(e)[:120]}")
-        return src
-    # Click ripples + cursor arrow ON THE POLISHED FRAME, using the click
-    # points recorded during the actual solve (times are relative to first NAV,
-    # close enough to the video start). Positions are translated/scaled from
-    # the raw capture (1920x1080 viewport) into the polished inner frame.
-    if _CLICKS:
-        events = []
-        _sx = fw / 1920.0
-        _sy = fh / 1080.0
-        _ox = (1920 - fw) / 2.0
-        _oy = (1080 - fh) / 2.0
-        for _t, _x, _y in _CLICKS[:60]:
-            events.append((max(0.0, _t), int(_ox + _x * _sx),
-                           int(_oy + _y * _sy)))
-        events.sort(key=lambda e: e[0])
-        try:
-            base_clip = VideoFileClip(str(base))
-            over = [base_clip]
-
-            def _cpos(t):
-                if not events:
-                    return (0, 0)
-                if t <= events[0][0]:
-                    return (events[0][1], events[0][2])
-                if t >= events[-1][0]:
-                    return (events[-1][1], events[-1][2])
-                for i in range(len(events) - 1):
-                    t0, x0, y0 = events[i]
-                    t1, x1, y1 = events[i + 1]
-                    if t0 <= t < t1:
-                        # hold the current point, then glide to the next over the
-                        # final ~0.35s before it so the arrow actually moves.
-                        move_start = max(t0, t1 - 0.35)
-                        if t <= move_start:
-                            return (x0, y0)
-                        alpha = (t - move_start) / max(0.001, t1 - move_start)
-                        return (x0 + (x1 - x0) * alpha,
-                                y0 + (y1 - y0) * alpha)
-                return (events[-1][1], events[-1][2])
-
-            if cursor_p and cursor_p.exists():
-                dot = (ImageClip(str(cursor_p), transparent=True)
-                       .set_duration(base_clip.duration)
-                       .set_start(0)
-                       .set_position(lambda t: (_cpos(t)[0] - 10,
-                                                _cpos(t)[1] - 4)))
-                over.append(dot)
-            for _t, _x, _y in events[:: max(1, len(events) // 25)]:
-                if ring_p and ring_p.exists():
-                    rc = (ImageClip(str(ring_p), transparent=True)
-                          .set_start(_t).set_duration(0.55)
-                          .set_position((_x - 48, _y - 48)))
-                    over.append(rc)
-            out_cur = str(Path(base).parent / (Path(base).stem + "_cur.mp4"))
-            comp = CompositeVideoClip(over, size=base_clip.size)
-            comp.write_videofile(out_cur, codec="libx264", audio_codec="aac",
-                                 fps=24, verbose=False, logger=None)
-            try:
-                base_clip.close()
-                comp.close()
-            except Exception:
-                pass
-            if Path(out_cur).exists() and Path(out_cur).stat().st_size > 10000:
-                return out_cur
-            print("[polish] cursor overlay produced no output")
-        except Exception as e:
-            print(f"[polish] cursor overlay failed: {str(e)[:120]}")
-    return base
+        print(f"[polish] shared polish failed: {str(e)[:140]}")
+        return str(src)
 
 
 def _focus_board(page):
@@ -544,6 +373,10 @@ def _human_delay(base=150):
 
 
 def _settle(page, base=260):
+    try:
+        QP.drain_consent_clicks(page)
+    except Exception:
+        pass
     """The pause a person leaves after committing a guess.
 
     A human watches the board flip, reads the new colours and thinks before
@@ -574,8 +407,12 @@ def _idle_drift(page, lo=300, hi=900, chance=0.25):
     if random.random() > chance:
         return
     try:
-        page.mouse.move(random.randint(200, 1700), random.randint(200, 900),
-                        steps=random.randint(3, 9))
+        _dx, _dy = random.randint(200, 1700), random.randint(200, 900)
+        page.mouse.move(_dx, _dy, steps=random.randint(3, 9))
+        try:
+            QP.ev_push(_dx, _dy, "move")
+        except Exception:
+            pass
     except Exception:
         pass
     page.wait_for_timeout(random.randint(lo, hi))
@@ -592,9 +429,18 @@ def _human_mouse_to(page, el):
         y = bb["y"] + bb["height"] / 2
         cur = page.mouse  # playwright has no position getter; jump then settle
         for _ in range(6):
-            cur.move(x + random.uniform(-25, 25), y + random.uniform(-18, 18))
+            jx, jy = x + random.uniform(-25, 25), y + random.uniform(-18, 18)
+            cur.move(jx, jy)
+            try:
+                QP.ev_push(jx, jy, "move")
+            except Exception:
+                pass
             page.wait_for_timeout(random.randint(28, 70))
         cur.move(x, y)
+        try:
+            QP.ev_push(x, y, "move")
+        except Exception:
+            pass
         page.wait_for_timeout(160)
     except Exception:
         pass
@@ -683,11 +529,20 @@ def _type_with_on_screen_keyboard(page, text, kb=None):
 def _kb(page, text, delay=150):
     _dismiss_notifications(page)
     _dismiss_login_wall(page)
+    # Never append to a stale row: clear whatever the field holds first
+    # (batter-up kept the previous guess on camera before this).
+    try:
+        page.keyboard.press("Control+a")
+        page.keyboard.press("Delete")
+    except Exception:
+        pass
     # Sites with an on-screen keyboard need no page focus at all, so try
     # that path first and avoid clicking anywhere on the page.
     if _type_with_on_screen_keyboard(page, text):
+        _push_click(page)
         return True
     _focus_board(page)
+    _push_click(page)
     _type_like_a_person(page, text, base_delay=delay)
     page.wait_for_timeout(400)
     _press_enter(page)
@@ -1754,6 +1609,8 @@ def _play_guesses(page, guesses, after_each=None, answer=None):
     """
     for i, g in enumerate(guesses):
         _dismiss_login_wall(page)
+        _dbg(getattr(page, "_qp_gid", "wordle-like"),
+             f"guess {i + 1}/{len(guesses)}: {g!r}")
         # Pause BEFORE typing too: a person glances back at the previous row.
         _idle_drift(page)
         _kb(page, str(g), delay=120)
@@ -2017,14 +1874,20 @@ def _framed_probe_path(answer, max_guesses=2):
     remaining-guess counter still drives the decision to commit.
     """
     a = str(answer).strip()
-    probes, seen = [], {a.lower()}
-    for t in _FRAMED_PROBES:
-        if t.lower() in seen:
-            continue
-        seen.add(t.lower())
-        probes.append(t)
-        if len(probes) >= max_guesses - 1:
-            break
+    import random as _r
+    pool = [t for t in _FRAMED_PROBES if t.lower() != a.lower()]
+    try:  # archived real titles rotate the opener every single day
+        _fd = json.loads((HERE / "frontend_data" / "static" /
+                          "framed_data.json").read_text(encoding="utf-8"))
+        for _m in (_fd.get("modes") or {}).values():
+            for _e in (_m.get("entries") or []):
+                _t = str(_e.get("answer") or "").strip()
+                if _t and _t.lower() != a.lower() and _t not in pool:
+                    pool.append(_t)
+    except Exception:
+        pass
+    rnd = _r.Random(f"framed:{A.target_date().isoformat()}")
+    probes = rnd.sample(pool, min(max_guesses - 1, len(pool))) if pool else []
     out = probes + [a]
     steps = [{"turn": i + 1, "guess": g, "pattern": "", "pool_before": None,
               "pool_after": None} for i, g in enumerate(out)]
@@ -2426,6 +2289,10 @@ def _reset_site_state(page, gid="?"):
 
 def _s_wordle(page, ans, gid):
     _close_modals(page)
+    try:
+        page._qp_gid = gid
+    except Exception:
+        pass
     # A stale saved board is the difference between "guessed and lost" and
     # "never had a chance": drop persisted state before trusting the answer.
     _reset_site_state(page, gid)
@@ -2463,6 +2330,13 @@ def _type_country_guess(page, scope, country):
         except Exception:
             pass
         inp.click(timeout=3000)
+        try:
+            _bb = inp.bounding_box()
+            if _bb:
+                QP.ev_push(_bb["x"] + _bb["width"] / 2,
+                           _bb["y"] + _bb["height"] / 2, "click")
+        except Exception:
+            pass
         page.wait_for_timeout(600)
         try:
             page.keyboard.press("ControlOrMeta+a")
@@ -2473,10 +2347,11 @@ def _type_country_guess(page, scope, country):
         page.wait_for_timeout(2500)
         picked, detail = scope.evaluate("""(want) => {
           const rows = Array.from(document.querySelectorAll(
-            '.react-autosuggest__suggestion, [role=option], [role=listbox] li, ul li, ' +
-            '.dropdown-menu *, .dropdown-item, ngb-typeahead-window *, ' +
-            '[ngbtypeaheadwindow] *, .typeahead-dropdown *'));
+            '.react-autosuggest__suggestion, [role=option], [role=listbox] li, ' +
+            '.dropdown-menu li, .dropdown-item, ngb-typeahead-window li, ' +
+            '.typeahead-dropdown li, ul[class*=suggest i] li, ul[class*=menu i] li'));
           const vis = rows.filter(e => e && e.offsetParent !== null &&
+            !e.closest('nav, footer, header') &&
             (e.innerText || '').trim().length > 0);
           const w = want.trim().toLowerCase();
           let best = vis.find(e => (e.innerText || '').trim().toLowerCase() === w)
@@ -2494,6 +2369,16 @@ def _type_country_guess(page, scope, country):
           return [true, t];
         }""", name)
         page.wait_for_timeout(1000)
+        if picked:
+            # The row must actually have landed in the box: batter-up once
+            # reported ok=True after clicking the nav's "Select Game".
+            try:
+                _v = (inp.input_value() or "").strip().lower()
+                if _v and name.lower() not in _v:
+                    return False, (f"picked row {detail!r} but input "
+                                   f"holds {_v!r}")
+            except Exception:
+                pass
         return bool(picked), str(detail or "")
     except Exception as e:
         return False, f"exception: {str(e)[:110]}"
@@ -2596,35 +2481,59 @@ def _s_countryle(page, ans, gid):
         b0 = (page.evaluate("() => document.body.innerText") or "")[:400]
     except Exception:
         b0 = ""
+    # Wait for the SPA to actually MOUNT: probes showed the body can stay
+    # empty for 20-30 s while ads/config load. The old fixed 6 s wait made the
+    # gate decide on an empty page and the video recorded the welcome deck.
+    try:
+        page.wait_for_selector("button, a, input", timeout=30000)
+        b0 = (page.evaluate("() => document.body.innerText") or "")[:400]
+    except Exception:
+        _dbg(gid, "no mountable UI after 30 s")
     if "MISSION" in b0 or "Welcome to" in b0 or "GUESS" in b0.upper() or len(b0.strip()) < 50:
-        for _tap in range(15):
+        for _tap in range(10):
+            box = None
             try:
-                _n = page.evaluate("""() => {
-                    const btns = Array.from(document.querySelectorAll('button, a')).filter(e => e && e.offsetParent !== null);
+                box = page.evaluate("""() => {
+                    const btns = Array.from(document.querySelectorAll('button, a'))
+                        .filter(e => e && e.offsetParent !== null);
                     for (const b of btns) {
                         const t = (b.innerText || '').trim().toUpperCase();
-                        if (/NEXT|SKIP|PLAY|START|CONTINUE|GO/i.test(t)) {
+                        if (/^(NEXT|SKIP|PLAY|START|CONTINUE|GO|GOT IT)$/.test(t)) {
                             const r = b.getBoundingClientRect();
-                            if (r.width > 0 && r.height > 0) { b.click(); return t; }
+                            if (r.width > 4 && r.height > 4)
+                                return {t: t, x: r.x + r.width / 2,
+                                        y: r.y + r.height / 2};
                         }
                     }
                     return null;
                 }""")
             except Exception:
-                _n = None
-            if _n:
-                _dbg(gid, f"onboarding tap {_n!r}")
-                page.wait_for_timeout(1500)
-            else:
+                box = None
+            if not box:
                 break
+            try:
+                _before = (page.evaluate(
+                    "() => document.body.innerText.slice(0, 200)") or "")
+            except Exception:
+                _before = ""
+            # TRUSTED mouse click: in-page el.click() never advanced this
+            # onboarding (25 s stuck-on-NEXT videos).
+            page.mouse.click(box["x"], box["y"])
+            _push_click_at(box["x"], box["y"])
+            _dbg(gid, f"onboarding trusted tap {box['t']!r}")
+            page.wait_for_timeout(1400)
             try:
                 if page.query_selector("input"):
                     _dbg(gid, "input visible, onboarding done")
                     break
+                _after = (page.evaluate(
+                    "() => document.body.innerText.slice(0, 200)") or "")
+                if _after == _before:
+                    _dbg(gid, "slide unchanged after trusted tap")
             except Exception:
                 pass
         for sel in ("button:has-text('Play')", "a:has-text('Play')",
-                    "div:has-text('Play')", "button:has-text('Start')", "text=Play"):
+                    "button:has-text('Start')", "text=Play"):
             try:
                 el = page.query_selector(sel)
                 if el and el.is_visible():
@@ -2861,10 +2770,27 @@ def _s_waffle(page, ans, gid):
             page.wait_for_timeout(300)
             _push_click_at(ax, ay)
             page.mouse.down()
-            page.mouse.move(bx, by, steps=12)
+            # Human-speed drag: 14 interpolated steps at ~24 ms (the old
+            # steps=12 fired with zero inter-step delay, so tiles flew across
+            # the board in a couple of frames) and every step lands in the
+            # telemetry track so the cursor overlay traces the whole drag.
+            _n_st = 14
+            for _si in range(1, _n_st + 1):
+                _ix = ax + (bx - ax) * _si / _n_st
+                _iy = ay + (by - ay) * _si / _n_st
+                page.mouse.move(_ix, _iy)
+                try:
+                    QP.ev_push(_ix, _iy, "drag")
+                except Exception:
+                    pass
+                page.wait_for_timeout(24)
             page.wait_for_timeout(300)
             page.mouse.up()
-            page.wait_for_timeout(700)
+            try:
+                QP.ev_push(bx, by, "click")
+            except Exception:
+                pass
+            page.wait_for_timeout(900)
         except Exception as e:
             detail = f"ERR drag {str(e)[:80]}"
         swaps += 1
@@ -3664,7 +3590,7 @@ def run_nerdle_external(g, tgt, date_key, today, short):
     vdir.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
     env.setdefault("HEADLESS", "true")
-    env.setdefault("TZ_OFFSET_MINUTES", "330")
+    env.setdefault("TZ_OFFSET_MINUTES", "540")
     env.setdefault("BROWSER_TZ", "Asia/Kolkata")
     print(f"[nerdle] target {date_key} (9 modes, one video)")
     try:
@@ -3764,6 +3690,11 @@ def run_framed_all(gid, g, tgt, date_key, today, short):
                 ctx.add_init_script(script=QP.get_fake_date_init_script(iso))
             except Exception:
                 pass
+        try:
+            ctx.add_init_script(script=QP.prepurge_js())
+            ctx.add_init_script(script=QP.consent_watch_js())
+        except Exception:
+            pass
 
         def _route(route):
             try:
@@ -3835,6 +3766,15 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
                          "mode": m}
                         for i, (k, m, _u) in enumerate(FRAMED_MODES)]
             DP.generate_recap(str(recap_p), g["name"], today)
+            _kind = "colors" if gid in ("colorfle", "colordle") else None
+            _pal = None
+            try:
+                if gid == "colorfle" and isinstance(ans, dict):
+                    _pal = ans.get("colorHexes")
+                elif gid == "colordle" and isinstance(ans, dict) and ans.get("hex"):
+                    _pal = [ans.get("hex")]
+            except Exception:
+                _pal = None
             DP.generate_reveal(str(reveal_p), g["name"], today,
                                ", ".join(f"{m}: {answers.get(k, '?')}"
                                          for k, m, _u in FRAMED_MODES),
@@ -4075,6 +4015,13 @@ def run_one(gid):
                 ctx.add_init_script(script=QP.get_fake_date_init_script(iso))
             except Exception:
                 pass
+        # Pre-navigation storage purge (kills the on-camera reload) and the
+        # continuous consent/tooltip watcher (kills the mid-video CMP banner).
+        try:
+            ctx.add_init_script(script=QP.prepurge_js())
+            ctx.add_init_script(script=QP.consent_watch_js())
+        except Exception:
+            pass
 
         def _route(route):
             try:
@@ -4096,6 +4043,7 @@ def run_one(gid):
         # the site's own answer request is captured on the initial page load.
         _install_live_day_probe(pg)
         solved, evidence = False, "exception before solve"
+        _defer_stale = False
         try:
             global _LAST_BOARD_SHOT; _LAST_BOARD_SHOT = None
         except Exception:
@@ -4103,16 +4051,6 @@ def run_one(gid):
         try:
             pg.goto(g["url"], wait_until="domcontentloaded", timeout=45000)
             pg.wait_for_timeout(6000)
-            # dismiss consent best-effort
-            for sel in ("button:has-text('Accept')", "button:has-text('Got it')",
-                        "button:has-text('OK')", "[aria-label='dismiss']"):
-                try:
-                    el = pg.query_selector(sel)
-                    if el and el.is_visible():
-                        el.click(timeout=2000)
-                        break
-                except Exception:
-                    continue
             _close_modals(pg)
             # The site's own answer request has now been captured, so we know
             # which day the board really is. If that differs from the day the
@@ -4124,17 +4062,38 @@ def run_one(gid):
                     ans = fixed
                     aval = ans.get("answer") or ans.get("name") \
                         or str(ans.get("colors"))
+                if _served and str(_served) != date_key:
+                    from datetime import date as _d2
+                    _sv = _d2(*(int(x) for x in str(_served).split("-")))
+                    if _sv == tgt - timedelta(days=1):
+                        # Server-keyed site has not rolled to the publish day
+                        # yet (US rollover happens hours after 21:00 IST).
+                        # Recording now burns yesterday's board on camera -
+                        # defer to the dawn batch instead of faking it.
+                        _defer_stale = True
+                        evidence = (f"stale-board: site served {_sv} but "
+                                    f"publish day is {tgt}; deferred to dawn")
+                        print(f"[{gid}] {evidence}")
+                    else:
+                        date_key = _sv.isoformat()
+                        today = _sv.strftime("%B %d, %Y")
+                        short = _sv.strftime("%b %d")
+                        print(f"[{gid}] RE-KEYED video to served day "
+                              f"{date_key}")
             except Exception:
                 pass
             aval_s = str(aval)
-            try:
-                # colour games need their full answer dict, not the string
-                if gid in ("colordle", "colorfle"):
-                    solved, evidence = solver(pg, ans)
-                else:
-                    solved, evidence = solver(pg, aval_s, gid)
-            except TypeError:
-                solved, evidence = solver(pg, aval_s)
+            if _defer_stale:
+                solved = False
+            else:
+                try:
+                    # colour games need their full answer dict, not the string
+                    if gid in ("colordle", "colorfle"):
+                        solved, evidence = solver(pg, ans)
+                    else:
+                        solved, evidence = solver(pg, aval_s, gid)
+                except TypeError:
+                    solved, evidence = solver(pg, aval_s)
         except Exception as e:
             evidence = f"exception: {str(e)[:200]}"
         try:
@@ -4153,6 +4112,16 @@ def run_one(gid):
         ctx.close()
         b.close()
 
+    try:
+        (vdir / f"telemetry_{date_key}.json").write_text(
+            json.dumps(QP.ev_all(), indent=1), encoding="utf-8")
+    except Exception:
+        pass
+    if _defer_stale:
+        _report_game(gid, date_key, answer=str(aval), guesses=[],
+                     verify=evidence, video=None, upload="deferred-dawn")
+        return {"game": gid, "solved": False, "video": None,
+                "evidence": evidence}
     print(f"[{gid}] solved={solved} evidence={evidence}")
     final = vpath
     # Quordle-parity assembly:
@@ -4190,7 +4159,7 @@ def run_one(gid):
             else:
                 _hints = S.compute_hints(str(aval))
             DP.generate_hints(str(hints_p), g["name"], today,
-                              _hints, str(aval))
+                              _hints, str(aval), kind=_kind, palette=_pal)
             if gid == "waffle" and _LAST_BOARD_SHOT and Path(_LAST_BOARD_SHOT).exists():
                 _bb = Image.open(_LAST_BOARD_SHOT).convert("RGB")
                 _bg = Image.new("RGB", (1920, 1080), (13, 20, 38))
@@ -4207,7 +4176,8 @@ def run_one(gid):
                 _bg.save(str(reveal_p), "PNG", optimize=True)
                 _dbg(gid, f"reveal slide uses board screenshot {_LAST_BOARD_SHOT}")
             else:
-                DP.generate_reveal(str(reveal_p), g["name"], today, str(aval), steps)
+                DP.generate_reveal(str(reveal_p), g["name"], today, str(aval),
+                                   steps, kind=_kind, palette=_pal)
             DP.generate_facts(str(facts_p), g["name"], today, str(aval), steps)
             DP.generate_teaser(str(teaser_p), g["name"], today, g["slug"])
 

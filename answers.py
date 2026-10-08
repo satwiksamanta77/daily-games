@@ -63,9 +63,17 @@ def target_date():
         except ValueError:
             pass
     try:
-        off = int(os.environ.get("TZ_OFFSET_MINUTES", "330"))
+        off = int(os.environ.get("TZ_OFFSET_MINUTES", "540"))
     except ValueError:
-        off = 330
+        off = 540
+    # ONE rule for every batch (verified against all six crons on 2026-10-09):
+    # UTC+9h == IST+3:30. At the 21:00-IST batch (15:30 UTC) it rolls to the
+    # NEXT calendar day - the board the video publishes for - while every
+    # morning batch (02:30/05:15/06:20/10:30 UTC) stays on the same day. It is
+    # also exactly nerdle_solver's old `+1 if UTC hour >= 15` rule, so runner
+    # and nerdle can never disagree again. The 330 (IST-same-day) default used
+    # between audits made the 9pm batch record a board that is stale by
+    # publish time - do not "fix" this back to 330.
     return (datetime.utcnow() + timedelta(minutes=off)).date()
 
 

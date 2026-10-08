@@ -81,6 +81,42 @@ def _tile_row(d, f, word, pattern, y, size=96, gap=14):
         x += size + gap
 
 
+def _parse_ints(txt):
+    """'[9, 11, 10]' -> [9, 11, 10]; anything else -> None."""
+    import re as _re
+    t = str(txt or "").strip()
+    if not t.startswith("["):
+        return None
+    nums = _re.findall(r"-?\d+", t)
+    return [int(x) for x in nums] if nums else None
+
+
+def _swatch(d, x, y, size, hexcol, label=None):
+    try:
+        h = str(hexcol or "").lstrip('#')
+        rgb = tuple(int(h[i:i + 2], 16) for i in (0, 2, 4)) if len(h) >= 6 \
+            else (70, 80, 100)
+    except Exception:
+        rgb = (70, 80, 100)
+    d.rounded_rectangle([x, y, x + size, y + size], radius=10, fill=rgb,
+                        outline=(230, 235, 245), width=2)
+    if label and hexcol is None:
+        d.text((x + size / 2 - 7, y + size / 2 - 8), str(label),
+               fill=(235, 240, 248))
+
+
+def _swatch_row(d, ints, palette, y, size=112, gap=18):
+    n = len(ints)
+    total = n * size + (n - 1) * gap
+    x = (W - total) // 2
+    for ii in ints:
+        hx = palette[ii] if palette and 0 <= ii < len(palette) else None
+        _swatch(d, x, y, size, hx, label=ii)
+        x += size + gap
+
+
+
+
 def generate_recap(out_path, game, date_str, prev_answer=None):
     """5s opener so the video matches Quordle's structure.
 
@@ -102,7 +138,8 @@ def generate_recap(out_path, game, date_str, prev_answer=None):
     return out_path
 
 
-def generate_hints(out_path, game, date_str, hints, answer):
+def generate_hints(out_path, game, date_str, hints, answer,
+                 kind=None, palette=None):
     """Progressive hint card (Wordle parity)."""
     img, d, f = _base(f"{game} hints", date_str)
     d.text((70, 160), "HINTS", fill=TEXT, font=f["t"])
@@ -122,7 +159,7 @@ def generate_hints(out_path, game, date_str, hints, answer):
     return out_path
 
 
-def _clue_line(pat):
+def _clue_line(pat, kind=None):
     """Turn a G/Y/X feedback pattern into a sentence a viewer can follow.
 
     The raw codes ("GYYXX") and the candidate-pool arithmetic ("pool 6840 ->
@@ -137,6 +174,15 @@ def _clue_line(pat):
     n = len(a)
     greens, yellows = a.count("G"), a.count("Y")
     greys = n - greens - yellows
+    if kind == "colors":
+        bits = []
+        if greens:
+            bits.append(f"{greens} colour{'s' if greens > 1 else ''} exact")
+        if yellows:
+            bits.append(f"{yellows} right colour, wrong slot")
+        if greys:
+            bits.append(f"{greys} not in today's palette")
+        return ", ".join(bits) or "no match"
     bits = []
     if greens:
         bits.append(f"{greens} letter{'s' if greens > 1 else ''} right")
@@ -198,7 +244,8 @@ def _center(d, txt, font, cx, cy):
     d.text((cx - w / 2, cy - (b[3] - b[1]) / 2 - b[1]), t, font=font)
 
 
-def generate_reveal(out_path, game, date_str, answer, steps, pattern=None):
+def generate_reveal(out_path, game, date_str, answer, steps, pattern=None,
+                   kind=None, palette=None):
     """The answer plus a plain-language account of how each guess landed.
 
     The word and its clue used to be stacked inside a 92px card - a 54px word
@@ -211,7 +258,16 @@ def generate_reveal(out_path, game, date_str, answer, steps, pattern=None):
     a = str(answer or "").upper()
     pat = pattern or ("G" * len(a))
     d.text((70, 150), "TODAY'S ANSWER", fill=MUTED, font=f["m"])
-    _tile_row(d, f, a, pat, 240, size=112, gap=18)
+    if kind == "colors":
+        _ints = _parse_ints(a)
+        if _ints:
+            _swatch_row(d, _ints, palette, 240, size=112, gap=18)
+        else:
+            if palette:
+                _swatch(d, 90, 236, 120, palette[0])
+            d.text((250, 275), a, fill=TEXT, font=f["m"])
+    else:
+        _tile_row(d, f, a, pat, 240, size=112, gap=18)
     d.text((70, 412), "HOW EACH GUESS SCORED", fill=GREEN, font=f["m"])
 
     rows = list(steps or [])
@@ -239,6 +295,22 @@ def generate_reveal(out_path, game, date_str, answer, steps, pattern=None):
         # Word and clue are SIBLINGS on one baseline group, never stacked.
         x = 104 + nw + 18
         right_pad = 104
+        ints = _parse_ints(g) if kind == "colors" else None
+        if ints:
+            gx = x
+            for ii in ints[:8]:
+                hx = palette[ii] if palette and 0 <= ii < len(palette) \
+                    else None
+                _swatch(d, gx, top + pad, 46, hx, label=ii)
+                gx += 56
+            clue = _clue_line(s.get("pattern", ""), kind=kind)[:64]
+            cx = gx + 26
+            cw_max = (W - right_pad) - cx
+            if cw_max > 90:
+                cf = _fit_font(d, clue, clue_f, cw_max)
+                d.text((cx, top + pad + (word_h - _text_h(d, clue, cf)) / 2),
+                       clue, fill=MUTED, font=cf)
+            continue
         avail = (W - right_pad) - x
         wf = _fit_font(d, g, word_f, max(120, int(avail * 0.52)))
         d.text((x, top + pad), g, fill=TEXT, font=wf)

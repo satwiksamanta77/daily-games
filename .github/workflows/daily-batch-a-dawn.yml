@@ -1,16 +1,17 @@
-name: Batch B morning - batterup marveldle canuckle
+name: Batch A dawn fix-up (US-rolled boards)
 
+# The 21:00-IST batch targets the NEXT day's board. Client-seeded sites serve
+# it immediately under the fake clock, but server-keyed sites (US rollover)
+# only flip at ~04:00-05:30 UTC. Those runs stale-fail at 21:00 (no DB record
+# is written as solved), and THIS batch picks them up once the real board
+# exists. The no-duplicate guard skips everything the 9pm batch already made.
 on:
   schedule:
-    - cron: '15 5 * * *'
+    - cron: '0 6 * * *'
   workflow_dispatch:
     inputs:
       game:
-        description: 'Game (empty = all morning batch)'
-        required: false
-        default: ''
-      date:
-        description: 'Puzzle date YYYY-MM-DD (empty = auto)'
+        description: 'Single game (empty = all Batch A)'
         required: false
         default: ''
       force:
@@ -23,11 +24,11 @@ jobs:
     permissions:
       contents: write
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        game: [canuckle, batterup]
+        game: [betweenle, colordle, colorfle, framed, searchle, phrazle, phoodle, contexto, semantle, worldle, worgle, countryle, nerdle]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -53,13 +54,12 @@ jobs:
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
-          if [ -n "${{ inputs.date }}" ]; then export FAKE_DATE_ISO="${{ inputs.date }}T00:05:00"; echo "PINNED DATE $FAKE_DATE_ISO"; fi
           if [ -n "${{ inputs.game }}" ]; then python runner.py --game "${{ inputs.game }}" || true; else python runner.py --game ${{ matrix.game }} || true; fi
       - name: Upload video artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: video-${{ matrix.game }}
+          name: dawn-video-${{ matrix.game }}
           path: |
             videos/${{ matrix.game }}/*.mp4
             videos/${{ matrix.game }}/*.log
@@ -71,7 +71,5 @@ jobs:
           git config user.name "video-bot"
           git config user.email "video-bot@users.noreply.github.com"
           git add database/ browser_state.json || true
-          git diff --cached --quiet || git commit -m "db: ${{ matrix.game }} $(date -u +%F)"
+          git diff --cached --quiet || git commit -m "db: ${{ matrix.game }} $(date -u +%F) dawn"
           for i in 1 2 3 4 5; do git pull --rebase 2>/dev/null && git push 2>/dev/null && break || sleep 7; done || true
-
-

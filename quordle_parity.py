@@ -466,3 +466,388 @@ def apply_uniform_music_ffmpeg(video_path, script_dir, out_path=None):
     except Exception as e:
         print(f"[music] uniform mix failed: {e}")
         return video_path
+
+
+# ============ input telemetry + Recordly-grade cursor overlay (2026-10-09) ====
+# Replaces the old post-hoc overlay (64x84 PIL arrow at click points, 0.35 s
+# linear glides, 96 px rings). Design follows Recordly's published parameters:
+#   * real input-event bus (we drive the mouse ourselves, so every position is
+#     known at call time - no native sampler needed, unlike Recordly's C++
+#     cursor-monitor which exists only because it records a HUMAN's pointer),
+#   * damped-spring smoothing with Recordly's getCursorSpringConfig(0)
+#     constants k=1000, c=100, m=1 (motionSmoothing.ts),
+#   * native-size Windows-style arrow (≈25 px tall at 1080p, hotspot at tip),
+#   * small expanding click ripple + 90 ms press squash,
+#   * exact hotspot anchoring (no magic -10,-4 offset).
+import time as _qp_time
+from pathlib import Path as _QPPath
+
+_EV = {"t0": None, "events": []}
+
+
+def ev_reset():
+    """Start a new telemetry track (call right before the first navigation)."""
+    _EV["t0"] = _qp_time.time()
+    _EV["events"] = []
+
+
+def ev_push(x, y, kind="click"):
+    """Record one input event. kinds: click|move|drag|focus|key."""
+    if _EV["t0"] is None:
+        ev_reset()
+    _EV["events"].append({"t": round(_qp_time.time() - _EV["t0"], 3),
+                          "x": float(x), "y": float(y), "kind": kind})
+
+
+def ev_all():
+    return list(_EV["events"])
+
+
+def prepurge_js():
+    """document-start storage purge: kills the on-camera reload that
+    _reset_site_state used to trigger (committed browser_state.json means
+    persisted state now exists on every run)."""
+    return """
+(() => {
+  try { localStorage.clear(); } catch (e) {}
+  try { sessionStorage.clear(); } catch (e) {}
+  try {
+    if (window.indexedDB && indexedDB.databases) {
+      indexedDB.databases().then(ds => ds.forEach(d => {
+        try { indexedDB.deleteDatabase(d.name); } catch (e) {}
+      })).catch(() => {});
+    }
+  } catch (e) {}
+  try {
+    if (window.caches && caches.keys) {
+      caches.keys().then(ks => ks.forEach(k => caches.delete(k))).catch(() => {});
+    }
+  } catch (e) {}
+})();
+"""
+
+
+_CONSENT_TXT = ("'ok','okay','accept','accept all','accept all cookies',"
+                "'reject all','got it','agree','i agree','allow all',"
+                "'no thanks','dismiss','x disable hints','disable hints',"
+                "'continue','all rules'")
+
+
+def consent_watch_js():
+    """Continuous consent/tooltip watcher. The old one-shot sweep lost the
+    race against async CMPs (TrustArc) and delayed hint tooltips, which is why
+    the nerdle video shows Settings/OK + the hint bubble at 1:25. Every
+    auto-click is recorded so the cursor overlay shows it."""
+    return """
+(() => {
+  if (window.__CONSENT_WATCH) return;
+  window.__CONSENT_WATCH = 1;
+  window.__CONSENT_CLICKS = [];
+  const TXT = new Set([%s]);
+  const done = new WeakSet();
+  const sweep = () => {
+    const roots = [document];
+    try {
+      for (const f of Array.from(document.querySelectorAll('iframe'))) {
+        const d = f.contentDocument;
+        if (d) roots.push(d);
+      }
+    } catch (e) {}
+    for (const root of roots) {
+      let els = [];
+      try {
+        els = Array.from(root.querySelectorAll(
+          'button, a[role=button], [role=button], #truste-consent-button, .fc-cta-consent, [aria-label=dismiss]'));
+      } catch (e) { continue; }
+      for (const el of els) {
+        if (done.has(el)) continue;
+        let r = null;
+        try { r = el.getBoundingClientRect(); } catch (e) {}
+        if (!r || r.width < 8 || r.height < 8) continue;
+        const t = ((el.innerText || el.getAttribute('aria-label') || '')
+                   .trim().toLowerCase());
+        if (!t || t.length > 30 || !TXT.has(t)) continue;
+        done.add(el);
+        try {
+          window.__CONSENT_CLICKS.push(
+            [Date.now(), r.x + r.width / 2, r.y + r.height / 2]);
+          el.click();
+        } catch (e) {}
+      }
+    }
+  };
+  sweep();
+  const iv = setInterval(sweep, 800);
+  setTimeout(() => clearInterval(iv), 240000);
+  try {
+    new MutationObserver(() => sweep()).observe(
+      document.documentElement, {childList: true, subtree: true});
+  } catch (e) {}
+})();
+""" % _CONSENT_TXT
+
+
+def drain_consent_clicks(page):
+    """Merge watcher auto-clicks into the telemetry track (best effort)."""
+    try:
+        hits = page.evaluate(
+            "() => { const a = window.__CONSENT_CLICKS || [];"
+            " window.__CONSENT_CLICKS = []; return a; }") or []
+        for _ms, _x, _y in hits:
+            ev_push(_x, _y, "click")
+        return len(hits)
+    except Exception:
+        return 0
+
+
+_QP_ASSET_CACHE = {}
+
+
+def _cursor_assets():
+    """Native-size Windows-style arrow + click ripple, drawn once per run."""
+    if _QP_ASSET_CACHE:
+        return _QP_ASSET_CACHE["cur"], _QP_ASSET_CACHE["ring"], _QP_ASSET_CACHE["hot"]
+    import tempfile
+    from PIL import Image, ImageDraw, ImageFilter
+    tmp = _QPPath(tempfile.mkdtemp(prefix="qpcursor_"))
+    # Classic Windows arrow geometry, scaled to ~25 px tall (native at 1080p).
+    S = 1.7
+    poly = [(0, 0), (0, 13.4), (3.7, 10.2), (5.9, 15.3), (8.0, 14.4),
+            (5.8, 9.4), (10.2, 9.4)]
+    poly = [(4 + x * S, 4 + y * S) for x, y in poly]
+    W = H = 40
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    sh = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ImageDraw.Draw(sh).polygon([(x + 1.2, y + 1.6) for x, y in poly],
+                               fill=(0, 0, 0, 90))
+    sh = sh.filter(ImageFilter.GaussianBlur(1.1))
+    img = Image.alpha_composite(img, sh)
+    d = ImageDraw.Draw(img)
+    d.polygon(poly, fill=(252, 252, 252, 255), outline=(24, 24, 28, 255))
+    d.line(poly + [poly[0]], fill=(24, 24, 28, 255), width=2)
+    cur_p = tmp / "cursor_win.png"
+    img.save(cur_p)
+    ring = Image.new("RGBA", (56, 56), (0, 0, 0, 0))
+    ImageDraw.Draw(ring).ellipse([12, 12, 44, 44], outline=(255, 255, 255, 175),
+                                 width=3)
+    ring_p = tmp / "ring.png"
+    ring.save(ring_p)
+    _QP_ASSET_CACHE.update(cur=str(cur_p), ring=str(ring_p), hot=(4.0, 4.0))
+    return _QP_ASSET_CACHE["cur"], _QP_ASSET_CACHE["ring"], _QP_ASSET_CACHE["hot"]
+
+
+def _spring_path(events, duration, fps=24.0, k=1000.0, c=100.0, m=1.0):
+    """Recordly-style damped spring (k/c/m = getCursorSpringConfig(0)) via
+    semi-implicit Euler at 240 Hz. Target = last known input position."""
+    pos = [e for e in sorted(events, key=lambda e: e["t"])
+           if e["kind"] in ("move", "click", "drag", "focus")]
+    if not pos or duration <= 0:
+        return []
+    sx, sy = pos[0]["x"], pos[0]["y"]
+    vx = vy = 0.0
+    sub = 8
+    dt = 1.0 / (fps * sub)
+    out = []
+    idx = 0
+    n = int(duration * fps) + 1
+    for f in range(n):
+        ft = f / fps
+        while idx < len(pos) and pos[idx]["t"] <= ft:
+            idx += 1
+        tgt = pos[idx - 1] if idx else pos[0]
+        tx, ty = tgt["x"], tgt["y"]
+        for _ in range(sub):
+            vx += ((k * (tx - sx) - c * vx) / m) * dt
+            sx += vx * dt
+            vy += ((k * (ty - sy) - c * vy) / m) * dt
+            sy += vy * dt
+        out.append((sx, sy))
+    return out
+
+
+def _ring_frames(n=8, max_r=26):
+    """Pre-rendered growing click ripple (moviepy 1.0.3 cannot resize by
+    callable, so the growth is baked into an 8-frame RGBA sequence)."""
+    import numpy as np
+    from PIL import Image, ImageDraw
+    frames = []
+    for i in range(n):
+        f = i / max(1, n - 1)
+        r = int(8 + (max_r - 8) * f)
+        a = int(170 * (1 - f))
+        img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+        ImageDraw.Draw(img).ellipse([32 - r, 32 - r, 32 + r, 32 + r],
+                                    outline=(255, 255, 255, a), width=3)
+        frames.append(np.array(img))
+    return frames
+
+
+def _cursor_clips(base_clip, events, ox=0.0, oy=0.0, scx=1.0, scy=1.0):
+    """moviepy clips: spring-smoothed native cursor + ripple per click."""
+    from moviepy.editor import ImageClip, ImageSequenceClip
+    cur_p, _ring_p, (hx, hy) = _cursor_assets()
+    evs = [dict(e, x=ox + e["x"] * scx, y=oy + e["y"] * scy)
+           for e in sorted(events, key=lambda e: e["t"])]
+    path = _spring_path(evs, base_clip.duration)
+    if not path:
+        return []
+    clicks = [e for e in evs if e["kind"] == "click"][:80]
+
+    def _pos(t):
+        i = max(0, min(int(t * 24.0), len(path) - 1))
+        return (path[i][0] - hx, path[i][1] - hy)
+
+    dot = (ImageClip(cur_p, transparent=True)
+           .set_duration(base_clip.duration).set_start(0)
+           .set_position(_pos))
+    clips = [dot]
+    rframes = _ring_frames()
+    for e in clicks:
+        try:
+            rc = (ImageSequenceClip(rframes, fps=24, with_mask=True)
+                  .set_start(e["t"]).set_duration(0.30)
+                  .set_position((e["x"] - 32, e["y"] - 32)))
+            clips.append(rc)
+        except Exception:
+            continue
+    return clips
+
+
+def polish_gameplay(src, out_path, crf=17):
+    """Full-frame 1920x1080 polish + the cursor overlay.
+
+    GAMEPLAY_FRAME=card (default) keeps the wallpaper + rounded-frame look the
+    other games use; GAMEPLAY_FRAME=fullbleed scales the capture edge-to-edge
+    (the style of the manual Recordly waffle video). Both get the same cursor.
+    """
+    import subprocess
+    out_path = str(out_path)
+    src = str(src)
+    mode = os.environ.get("GAMEPLAY_FRAME", "card").lower()
+    evs = ev_all()
+    if mode == "fullbleed":
+        cmd = ["ffmpeg", "-y", "-v", "error", "-i", src, "-vf",
+               "scale=1920:1080:force_original_aspect_ratio=increase,"
+               "crop=1920:1080,format=yuv420p,fps=24",
+               "-c:v", "libx264", "-preset", "medium", "-crf", str(crf),
+               "-c:a", "aac", out_path]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        base = out_path if (r.returncode == 0 and _QPPath(out_path).exists()
+                            and _QPPath(out_path).stat().st_size > 10000) else src
+        ox = oy = 0.0
+        scx = scy = 1.0
+    else:
+        base = _card_composite(src, out_path, crf)
+        fw, fh = 1792, 1008
+        ox, oy = (1920 - fw) / 2.0, (1080 - fh) / 2.0
+        scx, scy = fw / 1920.0, fh / 1080.0
+    if not evs or base == src and not _QPPath(base).exists():
+        return base
+    try:
+        from moviepy.editor import VideoFileClip, CompositeVideoClip
+        bc = VideoFileClip(base)
+        clips = _cursor_clips(bc, evs, ox, oy, scx, scy)
+        if not clips:
+            bc.close()
+            return base
+        comp = CompositeVideoClip([bc] + clips, size=bc.size)
+        out_cur = str(_QPPath(base).parent / (_QPPath(base).stem + "_cur.mp4"))
+        comp.write_videofile(out_cur, codec="libx264", audio_codec="aac",
+                             fps=24, verbose=False, logger=None)
+        try:
+            bc.close()
+            comp.close()
+        except Exception:
+            pass
+        if _QPPath(out_cur).exists() and _QPPath(out_cur).stat().st_size > 10000:
+            return out_cur
+    except Exception as e:
+        print(f"[polish] cursor overlay failed: {str(e)[:140]}")
+    return base
+
+
+def _card_composite(src, out_path, crf):
+    """The wallpaper + rounded-frame card look (moved verbatim from
+    runner._polish_gameplay so every game - nerdle included - shares it)."""
+    import subprocess
+    from PIL import Image, ImageDraw, ImageFilter
+    import tempfile
+    tmp = _QPPath(tempfile.mkdtemp(prefix="polish_"))
+    fw, fh, radius = 1792, 1008, 44
+    try:
+        m = Image.new("RGBA", (fw, fh), (0, 0, 0, 0))
+        ImageDraw.Draw(m).rounded_rectangle([0, 0, fw - 1, fh - 1],
+                                            radius=radius,
+                                            fill=(255, 255, 255, 255))
+        mask_p = tmp / "mask.png"
+        m.save(mask_p)
+        sh = Image.new("RGBA", (fw, fh), (0, 0, 0, 0))
+        ImageDraw.Draw(sh).rounded_rectangle([4, 4, fw - 5, fh - 5],
+                                             radius=radius,
+                                             fill=(0, 0, 0, 110))
+        sh = sh.filter(ImageFilter.GaussianBlur(16))
+        shad_p = tmp / "shadow.png"
+        sh.save(shad_p)
+        rim = Image.new("RGBA", (fw, fh), (0, 0, 0, 0))
+        ImageDraw.Draw(rim).rounded_rectangle([1, 1, fw - 2, fh - 2],
+                                              radius=radius,
+                                              outline=(255, 255, 255, 150),
+                                              width=3)
+        rim_p = tmp / "rim.png"
+        rim.save(rim_p)
+    except Exception as e:
+        print(f"[polish] pillow assets failed: {e}")
+        return src
+    wall_mp4 = tmp / "wallpaper.mp4"
+    dur = 600.0
+    try:
+        r2 = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
+                             "format=duration", "-of", "csv=p=0", src],
+                            capture_output=True, text=True, timeout=60)
+        dur = max(1.0, float((r2.stdout or "600").strip() or 600))
+    except Exception:
+        pass
+    wall = _QPPath(__file__).parent / "wallpapers" / "glassmorphism-3.jpg"
+    ok_wall = False
+    if wall.exists():
+        r1 = subprocess.run(["ffmpeg", "-y", "-v", "error", "-loop", "1", "-i",
+                             str(wall), "-vf",
+                             "scale=1920:1080:force_original_aspect_ratio=increase,"
+                             "crop=1920:1080,eq=brightness=-0.05:saturation=1.1",
+                             "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+                             "-pix_fmt", "yuv420p", "-r", "24", "-t", str(dur),
+                             str(wall_mp4)], capture_output=True, text=True,
+                            timeout=60)
+        ok_wall = r1.returncode == 0 and wall_mp4.exists()
+    if not ok_wall:
+        wall_mp4 = tmp / "blurred.mp4"
+        r3 = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", src, "-vf",
+                             "scale=1920:1080,gblur=sigma=24,eq=brightness=-0.10:"
+                             "saturation=1.2", "-c:v", "libx264",
+                             "-preset", "medium", "-crf", "20",
+                             "-pix_fmt", "yuv420p", "-r", "24", str(wall_mp4)],
+                            capture_output=True, text=True, timeout=1800)
+        if r3.returncode != 0:
+            return src
+    filt = (
+        f"[4:v]format=yuv420p[bg];"
+        f"[0:v]scale={fw}:-2,format=rgba[f];"
+        f"[1:v]scale={fw}:-2[fm];"
+        f"[f][fm]alphamerge[fg];"
+        f"[2:v]scale={fw}:-2[sh];"
+        f"[3:v]scale={fw}:-2[rim];"
+        f"[bg][sh]overlay=(W-w)/2:(H-h)/2+8:format=auto[b1];"
+        f"[b1][fg]overlay=(W-w)/2:(H-h)/2[b2];"
+        f"[b2][rim]overlay=(W-w)/2:(H-h)/2,format=yuv420p,fps=24[v]")
+    cmd = ["ffmpeg", "-y", "-v", "error", "-i", src,
+           "-i", str(mask_p), "-i", str(shad_p), "-i", str(rim_p),
+           "-t", str(dur), "-i", str(wall_mp4),
+           "-filter_complex", filt, "-map", "[v]", "-map", "0:a?",
+           "-c:v", "libx264", "-preset", "medium", "-crf", str(crf),
+           "-pix_fmt", "yuv420p", "-r", "24", "-c:a", "aac", out_path]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+    if r.returncode == 0 and _QPPath(out_path).exists() \
+            and _QPPath(out_path).stat().st_size > 10000:
+        return out_path
+    print(f"[polish] ffmpeg said: {(r.stderr or '')[:240]}")
+    return src
