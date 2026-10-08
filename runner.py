@@ -2265,60 +2265,25 @@ def _align_answer_to_live_day(gid, ans, page=None):
 
 
 def _reset_site_state(page, gid="?"):
-    """Clear anything the site persisted so today's puzzle is what loads.
+    """Fresh-state guarantee WITHOUT an on-camera reload.
 
-    Phoodle (and friends) keep the in-progress board, and sometimes the answer
-    itself, in localStorage/sessionStorage. A saved game from an earlier date
-    therefore survives the fake-date override: the page renders the OLD board
-    while the answer engine returns TODAY's word, so every guess scores as if
-    it were wrong and the run can never win. Purging storage and reloading
-    forces the site to build the board for the date the clock now reports.
-
-    The reload is conditional. It used to fire unconditionally, so a clean
-    first-time visit got a pointless full refresh on camera before any play
-    started. The purge now reports what it actually found and we only reload
-    when there was something to purge.
+    The document-start prepurge init script (added to every context) already
+    wipes localStorage/sessionStorage/indexedDB/caches BEFORE any site script
+    runs, so the board always boots clean. Re-purging in-page here always found
+    storage the site re-created during its own boot and therefore reloaded on
+    camera every single run (the "opens, then refreshes again" opening you
+    kept seeing in canuckle/worgle/phoodle videos). Keep only a diagnostic.
     """
     try:
-        found = page.evaluate("""async () => {
-          let n = 0;
-          try { for (const k in localStorage) { if (Object.prototype.hasOwnProperty.call(localStorage, k)) { n++; } } } catch (e) {}
-          try { for (const k in sessionStorage) { if (Object.prototype.hasOwnProperty.call(sessionStorage, k)) { n++; } } } catch (e) {}
-          // indexedDB/caches are still DELETED below but never counted: their
-          // async purge raced this check and forced a pointless on-camera reload.
-          try {
-            if (window.indexedDB && indexedDB.databases) {
-              const dbs = await indexedDB.databases();
-              for (const d of dbs) {
-                if (!d.name) continue;
-                const r = indexedDB.deleteDatabase(d.name);
-                await new Promise(res => { r.onsuccess = r.onerror = r.onblocked = () => res(); });
-              }
-            }
-          } catch (e) {}
-          try {
-            if (window.caches && caches.keys) {
-              const ks = await caches.keys();
-              await Promise.all(ks.map(k => caches.delete(k)));
-            }
-          } catch (e) {}
-          try { localStorage.clear(); } catch (e) {}
-          try { sessionStorage.clear(); } catch (e) {}
-          return n;
-        }""")
-        n = int(found or 0)
-        if n <= 0:
-            # Nothing was persisted, so the board is already fresh - skip the
-            # extra refresh entirely.
-            print("[reset] no persisted state; skipping reload")
-            return True
-        print(f"[reset] purged {n} persisted entry(ies); reloading")
-        _count_reload(gid, "storage purge")
-        page.reload(wait_until="domcontentloaded")
-        page.wait_for_timeout(4000)
-        return True
+        n = page.evaluate(
+            "() => { let n = 0; try { n += Object.keys(localStorage).length; }"
+            " catch (e) {} try { n += Object.keys(sessionStorage).length; }"
+            " catch (e) {} return n; }")
+        _dbg(gid, f"site state after pre-nav purge: {n} fresh entries "
+                  f"(no reload - prepurge already guaranteed a clean boot)")
     except Exception:
-        return False
+        pass
+    return True
 
 
 def _s_wordle(page, ans, gid):

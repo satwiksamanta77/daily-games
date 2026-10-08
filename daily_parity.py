@@ -1,28 +1,30 @@
-"""Wordle-parity slide + caption generation for the daily-games videos.
+"""Premium slide + caption generation for the daily-games videos.
 
-Quordle's video is recap(5s) + hints(10s) + gameplay + 3x analysis(8s) +
-teaser(5s) with real SRT captions. The daily-games videos were a single
-hints card + a single reveal card. This module builds the same structure.
+v3 (2026-10-09): full visual redesign - layered gradient + radial glow
+background, accent stripe, badge/chip header, glass cards with soft shadows,
+glowing answer row, numbered guess cards, branded footer. Same public API as
+before (runner.py calls generate_recap/hints/reveal/facts/teaser,
+build_captions_srt/title/tags, apply_uniform_music, _fonts).
 """
 import os
 import sys
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 HERE = Path(__file__).parent
-sys.path.insert(0, str(HERE))  # vendored quordle_parity lives beside this file
-sys.path.insert(0, str(HERE / ".." / "quordle-video" / "quor-dle-video"))
+sys.path.insert(0, str(HERE))
 try:
     import quordle_parity as QP
 except Exception:
     QP = None
 
 W, H = 1920, 1080
-BG_TOP, BG_BOT = (13, 20, 38), (30, 45, 80)
-CARD, CARD_BORDER = (23, 34, 58), (52, 68, 100)
+BG_TOP, BG_BOT = (9, 14, 28), (22, 34, 62)
+CARD, CARD_BORDER = (20, 29, 50), (64, 82, 116)
 TEXT, MUTED = (255, 255, 255), (168, 180, 200)
 GREEN, YELLOW, GREY = (46, 204, 113), (255, 205, 0), (120, 128, 140)
+TEAL = (34, 211, 238)
 TILE_G, TILE_Y, TILE_X = (46, 204, 113), (255, 205, 0), (68, 78, 92)
 
 
@@ -32,34 +34,146 @@ def _fonts():
               "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")]
     for b, r in pairs:
         if os.path.exists(b):
-            return {"t": ImageFont.truetype(b, 74),
-                    "b": ImageFont.truetype(b, 42),
-                    "s": ImageFont.truetype(r if os.path.exists(r) else b, 32),
+            reg = r if os.path.exists(r) else b
+            return {"xl": ImageFont.truetype(b, 108),
+                    "t": ImageFont.truetype(b, 74),
                     "m": ImageFont.truetype(b, 54),
+                    "b": ImageFont.truetype(b, 42),
+                    "s": ImageFont.truetype(reg, 32),
+                    "xs": ImageFont.truetype(reg, 26),
                     "tile": ImageFont.truetype(b, 62)}
     d = ImageFont.load_default()
-    return {k: d for k in ("t", "b", "s", "m", "tile")}
+    return {k: d for k in ("xl", "t", "m", "b", "s", "xs", "tile")}
 
 
-def _bg(draw):
+def _gradient_bg():
+    img = Image.new("RGB", (W, H))
+    d = ImageDraw.Draw(img)
     for y in range(H):
         t = y / H
-        draw.line([(0, y), (W, y)],
-                  fill=(int(BG_TOP[0] + (BG_BOT[0] - BG_TOP[0]) * t),
-                        int(BG_TOP[1] + (BG_BOT[1] - BG_TOP[1]) * t),
-                        int(BG_TOP[2] + (BG_BOT[2] - BG_TOP[2]) * t)))
+        d.line([(0, y), (W, y)],
+               fill=(int(BG_TOP[0] + (BG_BOT[0] - BG_TOP[0]) * t),
+                     int(BG_TOP[1] + (BG_BOT[1] - BG_TOP[1]) * t),
+                     int(BG_TOP[2] + (BG_BOT[2] - BG_TOP[2]) * t)))
+    return img.convert("RGBA")
+
+
+def _glows():
+    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    d.ellipse([-320, -420, 900, 620], fill=(46, 204, 113, 34))
+    d.ellipse([1150, 520, 2350, 1500], fill=(34, 211, 238, 26))
+    d.ellipse([700, -260, 1500, 260], fill=(255, 205, 0, 12))
+    return layer.filter(ImageFilter.GaussianBlur(90))
+
+
+def _stripe(img):
+    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    for x in range(14):
+        t = x / 14.0
+        d.line([(x, 0), (x, H)],
+               fill=(int(46 + (34 - 46) * t), int(204 + (211 - 204) * t),
+                     int(113 + (238 - 113) * t), 255))
+    img.alpha_composite(layer)
+
+
+def _chip(d, x, y, text, font, fg, bg, border=None, pad_x=26, pad_y=12):
+    try:
+        tw = d.textlength(text, font=font)
+    except Exception:
+        tw = len(text) * 18
+    th = _text_h(d, text, font)
+    box = [int(x), int(y), int(x + tw + pad_x * 2), int(y + th + pad_y * 2)]
+    rad = max(4, min(th, (box[3] - box[1]) // 2 - 2, (box[2] - box[0]) // 2 - 2))
+    d.rounded_rectangle(box, radius=rad, fill=bg,
+                        outline=border, width=2 if border else 0)
+    d.text((x + pad_x, y + pad_y), text, fill=fg, font=font)
+    return box[2]
+
+
+def _card_shadow(img, box, radius=24):
+    sh = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    ImageDraw.Draw(sh).rounded_rectangle(
+        [box[0] + 6, box[1] + 10, box[2] + 6, box[3] + 12],
+        radius=radius, fill=(0, 0, 0, 110))
+    img.alpha_composite(sh.filter(ImageFilter.GaussianBlur(14)))
+
+
+def _card(img, d, box, radius=24):
+    _card_shadow(img, box, radius)
+    d.rounded_rectangle(box, radius=radius, fill=CARD + (235,),
+                        outline=CARD_BORDER + (255,), width=2)
+    d.line([(box[0] + radius, box[1] + 2), (box[2] - radius, box[1] + 2)],
+           fill=(255, 255, 255, 28), width=2)
 
 
 def _base(kicker, date_str):
-    img = Image.new("RGB", (W, H))
+    img = _gradient_bg()
+    img.alpha_composite(_glows())
+    _stripe(img)
     d = ImageDraw.Draw(img)
-    _bg(d)
     f = _fonts()
-    d.rectangle([0, 0, 14, H], fill=GREEN)
-    d.text((70, 52), kicker.upper(), fill=GREEN, font=f["m"])
+    _chip(d, 70, 56, kicker.upper(), f["xs"], (10, 16, 30),
+          GREEN + (255,), pad_x=22, pad_y=10)
     if date_str:
-        d.text((W - 620, 66), date_str, fill=MUTED, font=f["s"])
+        try:
+            tw = d.textlength(date_str, font=f["s"])
+        except Exception:
+            tw = len(date_str) * 16
+        _chip(d, W - 70 - tw - 52, 56, date_str, f["s"], MUTED,
+              (16, 24, 42, 200), border=CARD_BORDER + (255,))
+    d.ellipse([W - 250, H - 62, W - 236, H - 48], fill=GREEN)
+    d.text((W - 224, H - 70), "wordsolverx daily", fill=(120, 134, 158),
+           font=f["xs"])
     return img, d, f
+
+
+def _text_h(d, txt, font):
+    try:
+        b = d.textbbox((0, 0), str(txt), font=font)
+        return int(b[3] - b[1])
+    except Exception:
+        return int(getattr(font, "size", 32) * 1.25)
+
+
+def _fit_font(d, txt, font, max_w):
+    size = getattr(font, "size", 32)
+    try:
+        if d.textlength(str(txt), font=font) <= max_w:
+            return font
+    except Exception:
+        return font
+    while size > 12:
+        size = int(size * 0.92)
+        try:
+            nf = _clone_font(font, size)
+        except Exception:
+            return font
+        try:
+            if d.textlength(str(txt), font=nf) <= max_w:
+                return nf
+        except Exception:
+            return font
+    return font
+
+
+def _clone_font(font, size):
+    path = getattr(font, "path", None)
+    if path:
+        return ImageFont.truetype(path, size)
+    raise ValueError("font has no path")
+
+
+def _center(d, txt, font, cx, cy):
+    t = str(txt)
+    try:
+        w = d.textlength(t, font=font)
+        b = d.textbbox((0, 0), t, font=font)
+    except Exception:
+        d.text((cx, cy), t, fill=TEXT, font=font)
+        return
+    d.text((cx - w / 2, cy - (b[3] - b[1]) / 2 - b[1]), t, fill=TEXT, font=font)
 
 
 def _tile_row(d, f, word, pattern, y, size=96, gap=14):
@@ -69,7 +183,9 @@ def _tile_row(d, f, word, pattern, y, size=96, gap=14):
     for i, ch in enumerate(word.upper()):
         p = pattern[i] if i < len(pattern) else "X"
         fill = {"G": TILE_G, "Y": TILE_Y}.get(p, TILE_X)
-        d.rounded_rectangle([x, y, x + size, y + size], radius=12, fill=fill)
+        d.rounded_rectangle([x, y, x + size, y + size], radius=16, fill=fill)
+        d.rounded_rectangle([x + 3, y + 3, x + size - 3, y + 10],
+                            radius=6, fill=(255, 255, 255, 70))
         fg = (12, 18, 30) if p in ("G", "Y") else (222, 228, 238)
         t = str(ch)
         try:
@@ -98,8 +214,10 @@ def _swatch(d, x, y, size, hexcol, label=None):
             else (70, 80, 100)
     except Exception:
         rgb = (70, 80, 100)
-    d.rounded_rectangle([x, y, x + size, y + size], radius=10, fill=rgb,
-                        outline=(230, 235, 245), width=2)
+    d.rounded_rectangle([x, y, x + size, y + size], radius=14, fill=rgb,
+                        outline=(230, 235, 245, 255), width=3)
+    d.rounded_rectangle([x + 4, y + 4, x + size - 4, y + 12],
+                        radius=6, fill=(255, 255, 255, 80))
     if label and hexcol is None:
         d.text((x + size / 2 - 7, y + size / 2 - 8), str(label),
                fill=(235, 240, 248))
@@ -115,59 +233,15 @@ def _swatch_row(d, ints, palette, y, size=112, gap=18):
         x += size + gap
 
 
-
-
-def generate_recap(out_path, game, date_str, prev_answer=None):
-    """5s opener so the video matches Quordle's structure.
-
-    NOTE: this is a TODAY intro card, not a yesterday's-answer card. The
-    previous version rendered the literal string "YESTERDAY" as the answer,
-    which told the viewer nothing and leaked no information. It now states
-    the puzzle that is being solved, without giving the answer away.
-    """
-    img, d, f = _base(f"{game} today", date_str)
-    d.text((70, 170), "TODAY'S", fill=MUTED, font=f["m"])
-    d.text((70, 250), game.upper(), fill=TEXT, font=f["t"])
-    d.rounded_rectangle([70, 380, 900, 560], radius=16, fill=CARD,
-                        outline=CARD_BORDER, width=3)
-    d.text((110, 410), "Puzzle date", fill=MUTED, font=f["s"])
-    d.text((110, 460), str(date_str)[:24], fill=YELLOW, font=f["m"])
-    d.text((70, 640), "Full solve, live on the real site", fill=MUTED, font=f["s"])
-    d.text((70, 720), "New puzzle live now", fill=GREEN, font=f["b"])
-    img.save(out_path, "PNG", optimize=True)
-    return out_path
-
-
-def generate_hints(out_path, game, date_str, hints, answer,
-                 kind=None, palette=None):
-    """Progressive hint card (Wordle parity)."""
-    img, d, f = _base(f"{game} hints", date_str)
-    d.text((70, 160), "HINTS", fill=TEXT, font=f["t"])
-    a = str(answer or "").upper()
-    masked = "".join(ch if i == 0 else "_" for i, ch in enumerate(a))
-    d.text((70, 260), f"Answer: {masked}", fill=MUTED, font=f["m"])
-    y = 380
-    for i, h in enumerate(hints[:3], 1):
-        d.rounded_rectangle([70, y, W - 70, y + 110], radius=16, fill=CARD,
-                            outline=CARD_BORDER, width=3)
-        d.text((110, y + 34), f"HINT {i}", fill=YELLOW, font=f["b"])
-        d.text((380, y + 34), str(h)[:48], fill=TEXT, font=f["b"])
-        y += 130
-    d.text((70, H - 110), "Pause & guess before the solve!", fill=YELLOW,
-           font=f["s"])
-    img.save(out_path, "PNG", optimize=True)
-    return out_path
+def _glow_band(img, y, h, color=GREEN, alpha=42):
+    layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    ImageDraw.Draw(layer).rounded_rectangle(
+        [140, y - 18, W - 140, y + h + 18], radius=40, fill=color + (alpha,))
+    img.alpha_composite(layer.filter(ImageFilter.GaussianBlur(26)))
 
 
 def _clue_line(pat, kind=None):
-    """Turn a G/Y/X feedback pattern into a sentence a viewer can follow.
-
-    The raw codes ("GYYXX") and the candidate-pool arithmetic ("pool 6840 ->
-    2184") were internal solver telemetry. They mean nothing to a viewer, made
-    the video look like it was written for engineers, and for colour games
-    there is no letter pattern at all - so the slide was pure noise. Each guess
-    is now described the way a player would say it out loud.
-    """
+    """Turn a G/Y/X feedback pattern into a sentence a viewer can follow."""
     if not pat:
         return ""
     a = str(pat).upper()
@@ -193,112 +267,104 @@ def _clue_line(pat, kind=None):
     return ", ".join(bits) or "no match"
 
 
-def _text_h(d, txt, font):
-    """Rendered height of `txt`, measured rather than guessed."""
-    try:
-        b = d.textbbox((0, 0), str(txt), font=font)
-        return int(b[3] - b[1])
-    except Exception:
-        return int(getattr(font, "size", 32) * 1.25)
+def generate_recap(out_path, game, date_str, prev_answer=None):
+    """Opener card: what today's video is, dated and branded."""
+    img, d, f = _base(f"{game} today", date_str)
+    d.text((70, 190), "TODAY'S", fill=MUTED, font=f["t"])
+    d.text((70, 268), str(game).upper(), fill=TEXT, font=f["xl"])
+    box = [70, 470, 830, 640]
+    _card(img, d, box)
+    d.text((110, 502), "Puzzle date", fill=MUTED, font=f["s"])
+    d.text((110, 548), str(date_str or ""), fill=YELLOW, font=f["m"])
+    d.text((70, 720), "Full solve, live on the real site", fill=MUTED,
+           font=f["b"])
+    d.text((70, 790), "New puzzle live now", fill=GREEN, font=f["b"])
+    x = 70
+    for chip in ("Real guesses", "Live feedback", "No spoilers"):
+        x = _chip(d, x, 880, chip, f["xs"], GREEN, (16, 40, 30, 220),
+                  border=GREEN + (140,)) + 18
+    img.convert("RGB").save(out_path, "PNG", optimize=True)
+    return out_path
 
 
-def _fit_font(d, txt, font, max_w):
-    """Shrink `font` until `txt` fits `max_w`. Never crop text."""
-    size = getattr(font, "size", 32)
-    try:
-        if d.textlength(str(txt), font=font) <= max_w:
-            return font
-    except Exception:
-        return font
-    while size > 12:
-        size = int(size * 0.92)
-        try:
-            nf = _clone_font(font, size)
-        except Exception:
-            return font
-        try:
-            if d.textlength(str(txt), font=nf) <= max_w:
-                return nf
-        except Exception:
-            return font
-    return font
-
-
-def _clone_font(font, size):
-    """Rebuild a TrueType font at a new pixel size (PIL has no resize)."""
-    path = getattr(font, "path", None)
-    if path:
-        return ImageFont.truetype(path, size)
-    raise ValueError("font has no path")
-
-
-def _center(d, txt, font, cx, cy):
-    """Draw `txt` centred on (cx, cy)."""
-    t = str(txt)
-    try:
-        w = d.textlength(t, font=font)
-        b = d.textbbox((0, 0), t, font=font)
-    except Exception:
-        d.text((cx, cy), t, font=font)
-        return
-    d.text((cx - w / 2, cy - (b[3] - b[1]) / 2 - b[1]), t, font=font)
+def generate_hints(out_path, game, date_str, hints, answer,
+                   kind=None, palette=None):
+    """Progressive hint card (Wordle parity), premium layout."""
+    img, d, f = _base(f"{game} hints", date_str)
+    d.text((70, 170), "HINTS", fill=TEXT, font=f["t"])
+    a = str(answer or "").upper()
+    ints = _parse_ints(a) if kind == "colors" else None
+    box = [70, 300, W - 70, 430]
+    _card(img, d, box)
+    d.text((110, 340), "Answer shape:", fill=MUTED, font=f["s"])
+    if ints:
+        gx = 420
+        for _i in ints[:8]:
+            _swatch(d, gx, 336, 58, None, label="?")
+            gx += 74
+    else:
+        masked = "".join(ch if i == 0 else "_" for i, ch in enumerate(a))
+        d.text((420, 336), masked, fill=YELLOW, font=f["m"])
+    y = 470
+    for i, h in enumerate(hints[:3], 1):
+        box = [70, y, W - 70, y + 110]
+        _card(img, d, box)
+        d.ellipse([110, y + 25, 160, y + 75], fill=GREEN)
+        _center(d, str(i), f["b"], 135, y + 50)
+        hf = _fit_font(d, str(h), f["b"], W - 320)
+        d.text((200, y + 34), str(h)[:60], fill=TEXT, font=hf)
+        y += 132
+    d.text((70, H - 150), "Pause & guess before the solve!", fill=YELLOW,
+           font=f["s"])
+    img.convert("RGB").save(out_path, "PNG", optimize=True)
+    return out_path
 
 
 def generate_reveal(out_path, game, date_str, answer, steps, pattern=None,
-                   kind=None, palette=None):
-    """The answer plus a plain-language account of how each guess landed.
-
-    The word and its clue used to be stacked inside a 92px card - a 54px word
-    drawn at y+26 plus a 32px clue at y+62 - so the two lines printed straight
-    through each other. Word and clue now sit side by side inside a card whose
-    height is derived from the measured text, and both are width-fitted, so no
-    row can ever collide or spill past the card.
-    """
+                    kind=None, palette=None):
+    """The answer + a plain-language account of how each guess landed."""
     img, d, f = _base(f"{game} answer", date_str)
     a = str(answer or "").upper()
     pat = pattern or ("G" * len(a))
-    d.text((70, 150), "TODAY'S ANSWER", fill=MUTED, font=f["m"])
-    if kind == "colors":
-        _ints = _parse_ints(a)
-        if _ints:
-            _swatch_row(d, _ints, palette, 240, size=112, gap=18)
-        else:
-            if palette:
-                _swatch(d, 90, 236, 120, palette[0])
-            d.text((250, 275), a, fill=TEXT, font=f["m"])
+    d.text((70, 165), "TODAY'S ANSWER", fill=TEXT, font=f["m"])
+    ints = _parse_ints(a) if kind == "colors" else None
+    if ints:
+        _glow_band(img, 250, 120, color=TEAL)
+        d = ImageDraw.Draw(img)
+        _swatch_row(d, ints, palette, 254, size=112, gap=18)
+    elif kind == "colors" and palette:
+        _glow_band(img, 250, 120, color=TEAL)
+        d = ImageDraw.Draw(img)
+        _swatch(d, 90, 250, 120, palette[0])
+        d.text((250, 288), a, fill=TEXT, font=f["m"])
     else:
-        _tile_row(d, f, a, pat, 240, size=112, gap=18)
-    d.text((70, 412), "HOW EACH GUESS SCORED", fill=GREEN, font=f["m"])
-
+        _glow_band(img, 250, 120)
+        d = ImageDraw.Draw(img)
+        _tile_row(d, f, a, pat, 254, size=112, gap=18)
+    d.text((70, 430), "HOW EACH GUESS SCORED", fill=GREEN, font=f["m"])
     rows = list(steps or [])
-    # Geometry derived from the measured glyph heights, not magic numbers.
-    # EVERY guess is shown (never just the last 4): the card shrinks to fit.
     word_f, clue_f = f["m"], f["s"]
     word_h = _text_h(d, "X", word_f)
-    clue_h = _text_h(d, "X", clue_f)
     pad = 22
-    top = 486
-    bottom_limit = H - 120
+    top = 520
+    bottom_limit = H - 110
     n = max(1, len(rows))
-    card_h = min(120, max(64, (bottom_limit - top - (n - 1) * 12) // n))
+    card_h = min(110, max(62, (bottom_limit - top - (n - 1) * 12) // n))
     gap = 12
     for s in rows:
-        d.rounded_rectangle([70, top, W - 70, top + card_h], radius=14,
-                            fill=CARD)
+        box = [70, top, W - 70, top + card_h]
+        _card(img, d, box, radius=18)
+        d = ImageDraw.Draw(img)
         g = str(s.get("guess", "")).upper()[:20]
-        num = f"{s.get('turn', '?')}."
-        d.text((104, top + pad), num, fill=GREEN, font=clue_f)
-        try:
-            nw = d.textlength(num, font=clue_f)
-        except Exception:
-            nw = 24
-        # Word and clue are SIBLINGS on one baseline group, never stacked.
-        x = 104 + nw + 18
+        d.ellipse([100, top + card_h // 2 - 25, 150, top + card_h // 2 + 25],
+                  fill=(16, 40, 30, 255), outline=GREEN + (200,), width=2)
+        _center(d, str(s.get("turn", "?")), f["s"], 125, top + card_h // 2)
+        x = 178
         right_pad = 104
-        ints = _parse_ints(g) if kind == "colors" else None
-        if ints:
+        gi = _parse_ints(g) if kind == "colors" else None
+        if gi:
             gx = x
-            for ii in ints[:8]:
+            for ii in gi[:8]:
                 hx = palette[ii] if palette and 0 <= ii < len(palette) \
                     else None
                 _swatch(d, gx, top + pad, 46, hx, label=ii)
@@ -310,6 +376,7 @@ def generate_reveal(out_path, game, date_str, answer, steps, pattern=None,
                 cf = _fit_font(d, clue, clue_f, cw_max)
                 d.text((cx, top + pad + (word_h - _text_h(d, clue, cf)) / 2),
                        clue, fill=MUTED, font=cf)
+            top += card_h + gap
             continue
         avail = (W - right_pad) - x
         wf = _fit_font(d, g, word_f, max(120, int(avail * 0.52)))
@@ -327,105 +394,83 @@ def generate_reveal(out_path, game, date_str, answer, steps, pattern=None,
                 d.text((cx, top + pad + (word_h - _text_h(d, clue, cf)) / 2),
                        clue, fill=MUTED, font=cf)
             else:
-                # Not enough room beside it - put the clue under the word but
-                # INSIDE the card, using the measured card height.
                 cf = _fit_font(d, clue, clue_f, (W - 200))
                 d.text((x, top + pad + word_h + 6), clue, fill=MUTED, font=cf)
         top += card_h + gap
-
-    d.text((70, H - 90),
+    d.text((70, H - 92),
            f"Full solve: wordsolverx.com/{game.lower()}-answer-today",
            fill=GREEN, font=f["s"])
-    img.save(out_path, "PNG", optimize=True)
+    img.convert("RGB").save(out_path, "PNG", optimize=True)
     return out_path
 
 
 def generate_mode_card(out_path, game, mode_name, subtitle=""):
-    """A 'NOW PLAYING: <mode>' card shown at the start of each mode chapter.
-
-    Multi-mode videos (Framed's four modes, Nerdle's nine, Quordle's six) run
-    back to back with no visual break, so a viewer landing mid-video has no idea
-    which round they are watching. This card is spliced in before each mode's
-    footage to name it explicitly.
-    """
-    img, d, f = _base(f"{game} mode", "")
-    d.text((70, 150), "NOW PLAYING", fill=MUTED, font=f["m"])
-
-    # Fit the mode name inside the safe area, shrinking until it does.
-    safe_w = W - 200
-    mf = _fit_font(d, str(mode_name).upper(), f["t"], safe_w)
-    mh = _text_h(d, str(mode_name), mf)
-    _center(d, str(mode_name).upper(), mf, W // 2, 330)
-
-    # A rule under the name, sized to the text it belongs to.
-    try:
-        nw = d.textlength(str(mode_name).upper(), font=mf)
-    except Exception:
-        nw = safe_w
-    half = min(int(nw / 2) + 60, safe_w // 2)
-    y = 330 + int(mh / 2) + 40
-    d.rectangle([W // 2 - half, y, W // 2 + half, y + 4], fill=GREEN)
-
+    """A 'NOW PLAYING: <mode>' card shown at the start of each chapter."""
+    img, d, f = _base(f"{game} · mode", "")
+    _glow_band(img, 430, 190)
+    d = ImageDraw.Draw(img)
+    d.text((70, 330), "NOW PLAYING", fill=MUTED, font=f["b"])
+    d.text((70, 400), str(mode_name).upper(), fill=TEXT, font=f["xl"])
     if subtitle:
-        sf = _fit_font(d, str(subtitle), f["m"], safe_w)
-        _center(d, str(subtitle), sf, W // 2, y + 110)
-    img.save(out_path, "PNG", optimize=True)
+        d.text((70, 560), str(subtitle), fill=TEAL, font=f["m"])
+    d.text((70, 700), f"{game} - full solve, live on the real site",
+           fill=MUTED, font=f["s"])
+    img.convert("RGB").save(out_path, "PNG", optimize=True)
     return out_path
 
 
 def generate_facts(out_path, game, date_str, answer, steps):
-    """Third analysis slide: stats about the solve itself.
-
-    "Start pool" was the candidate-count the internal solver started from. It
-    is meaningless to a viewer, so only eyeball-verifiable facts remain.
-    """
-    img, d, f = _base(f"{game} analysis", date_str)
-    a = str(answer or "").upper()
-    d.text((70, 150), "SOLVE BREAKDOWN", fill=TEXT, font=f["t"])
-    rows = [
-        ("Guesses used", str(len(steps or []))),
-        ("Final answer", a),
-        ("Letter count", str(len(a))),
-        ("Vowels", str(sum(1 for c in a if c in "AEIOU"))),
-        ("Unique letters", str(len(set(a)))),
-    ]
-    y = 300
-    for k, v in rows:
-        d.rounded_rectangle([70, y, W - 70, y + 84], radius=14, fill=CARD)
-        d.text((110, y + 26), k, fill=MUTED, font=f["s"])
-        # RIGHT-aligned and width-fitted: Phrazle's 16-character phrase used to
-        # be drawn from a fixed x with a 54px font and ran off the right edge.
-        val = str(v)[:24]
-        vx_right = W - 110
-        try:
-            vw = d.textlength(val, font=f["m"])
-        except Exception:
-            vw = 120
-        vmax = int(vw * 0.55)
-        vf = _fit_font(d, val, f["m"], max(120, vmax))
-        try:
-            vw = d.textlength(val, font=vf)
-        except Exception:
-            vw = 120
-        d.text((vx_right - vw, y + 18), val, fill=YELLOW, font=vf)
-        y += 98
-    img.save(out_path, "PNG", optimize=True)
+    """Solve breakdown: stat cards instead of a wall of text."""
+    img, d, f = _base(f"{game} breakdown", date_str)
+    d.text((70, 165), "SOLVE BREAKDOWN", fill=TEXT, font=f["t"])
+    rows = list(steps or [])
+    ng = len(rows) or 1
+    stats = [(str(ng), "guesses played"),
+             (str(sum(1 for s in rows
+                      if "G" in str(s.get("pattern", "")).upper())),
+              "green rows"),
+             ("1", "final answer")]
+    x = 70
+    for val, lab in stats:
+        box = [x, 300, x + 540, 470]
+        _card(img, d, box)
+        d = ImageDraw.Draw(img)
+        _center(d, val, f["xl"], x + 270, 372)
+        _center(d, lab, f["xs"], x + 270, 440)
+        x += 578
+    y = 520
+    for s in rows[:5]:
+        box = [70, y, W - 70, y + 88]
+        _card(img, d, box, radius=18)
+        d = ImageDraw.Draw(img)
+        g = str(s.get("guess", "")).upper()[:24]
+        clue = _clue_line(s.get("pattern", ""))[:70]
+        d.text((110, y + 26), f"{s.get('turn', '?')}.", fill=GREEN, font=f["b"])
+        gf = _fit_font(d, g, f["b"], 620)
+        d.text((190, y + 26), g, fill=TEXT, font=gf)
+        cf = _fit_font(d, clue, f["s"], W - 900)
+        d.text((860, y + 30), clue, fill=MUTED, font=cf)
+        y += 104
+    img.convert("RGB").save(out_path, "PNG", optimize=True)
     return out_path
 
 
 def generate_teaser(out_path, game, date_str, slug):
-    img, d, f = _base(f"{game} teaser", date_str)
-    d.text((70, 200), "COME BACK", fill=TEXT, font=f["t"])
-    d.text((70, 320), "TOMORROW", fill=GREEN, font=f["t"])
-    d.text((70, 460), "A brand new puzzle.", fill=MUTED, font=f["m"])
-    d.text((70, 560), "Subscribe so you never miss a solve.", fill=MUTED,
-           font=f["b"])
-    d.rounded_rectangle([70, 680, W - 70, 800], radius=14, fill=CARD,
-                          outline=GREEN, width=3)
-    link = f"wordsolverx.com/{slug}"
-    lf = _fit_font(d, link, f["b"], (W - 70) - 110 - 40)
-    d.text((110, 722), link, fill=GREEN, font=lf)
-    img.save(out_path, "PNG", optimize=True)
+    """End-card CTA: tomorrow's puzzle + site link."""
+    img, d, f = _base(f"{game} · tomorrow", date_str)
+    _glow_band(img, 380, 220, color=TEAL, alpha=30)
+    d = ImageDraw.Draw(img)
+    d.text((70, 300), "TOMORROW'S PUZZLE", fill=MUTED, font=f["t"])
+    d.text((70, 400), "DROPS AT MIDNIGHT", fill=TEXT, font=f["xl"])
+    box = [70, 620, W - 70, 760]
+    _card(img, d, box)
+    d = ImageDraw.Draw(img)
+    d.text((110, 662), f"wordsolverx.com/{slug}", fill=GREEN, font=f["m"])
+    x = 70
+    for chip in ("Subscribe", "Daily solve", "Free hints"):
+        x = _chip(d, x, 810, chip, f["xs"], TEXT, (16, 24, 42, 220),
+                  border=TEAL + (160,)) + 18
+    img.convert("RGB").save(out_path, "PNG", optimize=True)
     return out_path
 
 

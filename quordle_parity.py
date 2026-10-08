@@ -659,11 +659,73 @@ def _cursor_assets():
     return _QP_ASSET_CACHE["cur"], _QP_ASSET_CACHE["ring"], _QP_ASSET_CACHE["hot"]
 
 
+def _densify(events, duration):
+    """Sparse input events -> a human-alive pointer track.
+
+    The old overlay only knew click points, so the arrow sat frozen for tens
+    of seconds (your 'cursor is not even moving'). A real recording never
+    holds still: we synthesise what a hand does between the known events -
+    curved glides into every target, sub-pixel fidget while holding, and an
+    ambient drift across long idle gaps. Deterministic per run (date-seeded
+    upstream); the spring then smooths it exactly like Recordly.
+    """
+    import math
+    import random as _r
+    evs = [e for e in sorted(events, key=lambda e: e["t"])
+           if e["kind"] in ("move", "click", "drag", "focus")]
+    if not evs:
+        return []
+    rnd = _r.Random(int(evs[0]["x"] + evs[0]["t"] * 977) & 0xFFFFFFFF)
+    out = [dict(evs[0], kind="move")]
+    for a, b in zip(evs, evs[1:]):
+        gap = b["t"] - a["t"]
+        dx, dy = b["x"] - a["x"], b["y"] - a["y"]
+        dist = math.hypot(dx, dy)
+        # 1) curved glide into b, ending just before b's timestamp
+        if dist > 4:
+            glide = min(0.7, 0.22 + dist / 2200.0)
+            n = max(4, min(16, int(dist / 55)))
+            mx = (a["x"] + b["x"]) / 2 - dy * 0.14
+            my = (a["y"] + b["y"]) / 2 + dx * 0.14
+            t0 = max(a["t"], b["t"] - glide)
+            for i in range(1, n + 1):
+                u = i / (n + 1.0)
+                w = 4 * u * (1 - u)          # quadratic bezier weight
+                out.append({"t": t0 + (b["t"] - t0) * u,
+                            "x": a["x"] + dx * u + (mx - a["x"] - dx / 2) * w,
+                            "y": a["y"] + dy * u + (my - a["y"] - dy / 2) * w,
+                            "kind": "move"})
+        # 2) fidget while holding, and ambient drift over long idle gaps
+        hold = (t0 if dist > 4 else b["t"]) - a["t"]
+        if hold > 1.4:
+            steps = int(hold / 0.45)
+            cx, cy = a["x"], a["y"]
+            for i in range(1, steps + 1):
+                tt = a["t"] + i * (hold / (steps + 1.0))
+                if gap > 5.0 and i == steps // 2:     # one ambient sweep
+                    cx += rnd.uniform(-140, 140)
+                    cy += rnd.uniform(-90, 90)
+                else:
+                    cx += rnd.uniform(-2.5, 2.5)
+                    cy += rnd.uniform(-2.0, 2.0)
+                out.append({"t": tt, "x": cx, "y": cy, "kind": "move"})
+        out.append(b)
+    # tail fidget until the clip ends so the cursor never freezes on screen
+    last = out[-1]
+    tail = duration - last["t"]
+    cx, cy = last["x"], last["y"]
+    for i in range(1, int(tail / 0.5) + 1):
+        cx += rnd.uniform(-2.5, 2.5)
+        cy += rnd.uniform(-2.0, 2.0)
+        out.append({"t": last["t"] + i * 0.5, "x": cx, "y": cy, "kind": "move"})
+    out.sort(key=lambda e: e["t"])
+    return out
+
+
 def _spring_path(events, duration, fps=24.0, k=1000.0, c=100.0, m=1.0):
     """Recordly-style damped spring (k/c/m = getCursorSpringConfig(0)) via
     semi-implicit Euler at 240 Hz. Target = last known input position."""
-    pos = [e for e in sorted(events, key=lambda e: e["t"])
-           if e["kind"] in ("move", "click", "drag", "focus")]
+    pos = _densify(events, duration)
     if not pos or duration <= 0:
         return []
     sx, sy = pos[0]["x"], pos[0]["y"]
@@ -747,7 +809,10 @@ def polish_gameplay(src, out_path, crf=17):
     out_path = str(out_path)
     src = str(src)
     mode = os.environ.get("GAMEPLAY_FRAME", "card").lower()
-    evs = ev_all()
+    if os.environ.get("CURSOR_OVERLAY", "on").lower() in ("off", "0", "false"):
+        evs = []
+    else:
+        evs = ev_all()
     if mode == "fullbleed":
         cmd = ["ffmpeg", "-y", "-v", "error", "-i", src, "-vf",
                "scale=1920:1080:force_original_aspect_ratio=increase,"
