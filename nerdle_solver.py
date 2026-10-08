@@ -1051,7 +1051,7 @@ async def main():
         browser = await p.chromium.launch(headless=HEADLESS)
         tz = os.environ.get("BROWSER_TZ", "Asia/Kolkata")
         print(f"[tz] {tz}")
-        _sstate = HERE / "browser_state.json"
+        _sstate = script_dir / "browser_state.json"
         _state_kwargs = {"storage_state": str(_sstate)} if _sstate.exists() else {}
         context = await browser.new_context(
             record_video_dir=str(video_dir),
@@ -1095,7 +1095,7 @@ async def main():
         total = time.time() - t0
         vpath = await page.video.path()
         try:
-            await context.storage_state(path=str(HERE / "browser_state.json"))
+            await context.storage_state(path=str(script_dir / "browser_state.json"))
             print("[nerdle] browser_state.json saved")
         except Exception as _e:
             print(f"[nerdle] state save failed: {str(_e)[:120]}")

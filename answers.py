@@ -842,7 +842,11 @@ def marveldle(d=None, mode="comics"):
                         "via": "live-first-try"}
             cands = _elim(cands, seed, fb)
             cands = [c for c in cands if c.get("id") not in tried]
-        for c in cands[:20]:
+        # Exhaustive (capped) exact-search: the elimination pass can strand
+        # the real answer outside the first 20 survivors when the API's
+        # feedback columns are sparse - guessing every survivor always finds
+        # the true isExact row (snapshot was stale at 2026-10-04).
+        for c in cands[:400]:
             try:
                 fb = _guess(c["id"])
             except Exception:
@@ -850,7 +854,7 @@ def marveldle(d=None, mode="comics"):
             if fb.get("isExact"):
                 return {"answer": c.get("name"), "id": c.get("id"),
                         "probes": probes, "date": d.isoformat(), "via": "live"}
-        raise ValueError("no exact match in first 20 survivors")
+        raise ValueError(f"no exact match among {min(len(cands), 400)} survivors")
     except SystemExit:
         raise
     except Exception as e:

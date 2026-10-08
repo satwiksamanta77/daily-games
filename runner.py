@@ -612,6 +612,16 @@ def _dismiss_dialogs(page, rounds=4):
 # so the controls are addressed by viewport position. Measured on a 1280x720
 # viewport: the HOW TO PLAY dialog's X sits at ~(849,124) and the dialog is
 # roughly 390..890 px wide. Enter/Space also dismiss these.
+_SHADOW_TILE_COUNT = """() => {
+  const count = (root) => {
+    let n = root.querySelectorAll('.tile').length;
+    for (const e of root.querySelectorAll('*'))
+      if (e.shadowRoot) n += count(e.shadowRoot);
+    return n;
+  };
+  return count(document);
+}"""
+
 CANVAS_DLG_X = (849, 124)
 
 
@@ -1615,6 +1625,14 @@ def _play_guesses(page, guesses, after_each=None, answer=None):
         _idle_drift(page)
         _kb(page, str(g), delay=120)
         _settle(page, base=2600)
+        try:
+            _tail = (page.evaluate(
+                "() => (document.body.innerText || '').slice(-140)") or "")
+            _dbg(getattr(page, "_qp_gid", "wordle-like"),
+                 f"board after guess {i + 1}: "
+                 f"{_tail.replace(chr(10), '|')[:120]!r}")
+        except Exception:
+            pass
         if after_each:
             try:
                 after_each(i, g)
@@ -2250,10 +2268,11 @@ def _reset_site_state(page, gid="?"):
           let n = 0;
           try { for (const k in localStorage) { if (Object.prototype.hasOwnProperty.call(localStorage, k)) { n++; } } } catch (e) {}
           try { for (const k in sessionStorage) { if (Object.prototype.hasOwnProperty.call(sessionStorage, k)) { n++; } } } catch (e) {}
+          // indexedDB/caches are still DELETED below but never counted: their
+          // async purge raced this check and forced a pointless on-camera reload.
           try {
             if (window.indexedDB && indexedDB.databases) {
               const dbs = await indexedDB.databases();
-              n += dbs.length;
               for (const d of dbs) {
                 if (!d.name) continue;
                 const r = indexedDB.deleteDatabase(d.name);
@@ -2264,7 +2283,6 @@ def _reset_site_state(page, gid="?"):
           try {
             if (window.caches && caches.keys) {
               const ks = await caches.keys();
-              n += ks.length;
               await Promise.all(ks.map(k => caches.delete(k)));
             }
           } catch (e) {}
@@ -2293,6 +2311,16 @@ def _s_wordle(page, ans, gid):
         page._qp_gid = gid
     except Exception:
         pass
+    if gid == "canuckle":
+        # Flutter only takes keys when the canvas holds focus: one real click
+        # (which also feeds the cursor track) + semantics tree up front.
+        try:
+            page.mouse.click(960, 620)
+            QP.ev_push(960, 620, "click")
+            page.wait_for_timeout(600)
+            _enable_flutter_semantics(page)
+        except Exception:
+            pass
     # A stale saved board is the difference between "guessed and lost" and
     # "never had a chance": drop persisted state before trusting the answer.
     _reset_site_state(page, gid)
@@ -2349,7 +2377,8 @@ def _type_country_guess(page, scope, country):
           const rows = Array.from(document.querySelectorAll(
             '.react-autosuggest__suggestion, [role=option], [role=listbox] li, ' +
             '.dropdown-menu li, .dropdown-item, ngb-typeahead-window li, ' +
-            '.typeahead-dropdown li, ul[class*=suggest i] li, ul[class*=menu i] li'));
+            '.typeahead-dropdown li, ul[class*=suggest i] li, ul[class*=menu i] li, ' +
+            '.result-box, #result-id, #player-search .result-box'));
           const vis = rows.filter(e => e && e.offsetParent !== null &&
             !e.closest('nav, footer, header') &&
             (e.innerText || '').trim().length > 0);
@@ -2484,11 +2513,20 @@ def _s_countryle(page, ans, gid):
     # Wait for the SPA to actually MOUNT: probes showed the body can stay
     # empty for 20-30 s while ads/config load. The old fixed 6 s wait made the
     # gate decide on an empty page and the video recorded the welcome deck.
+    for _mw in range(15):
+        try:
+            if page.query_selector("input") or page.query_selector(
+                    "button.next, button:has-text('NEXT')"):
+                break
+        except Exception:
+            pass
+        page.wait_for_timeout(5000)
     try:
-        page.wait_for_selector("button, a, input", timeout=30000)
         b0 = (page.evaluate("() => document.body.innerText") or "")[:400]
+        if len(b0.strip()) < 30:
+            _dbg(gid, f"UI still empty after {(_mw + 1) * 5} s (bot-gate?)")
     except Exception:
-        _dbg(gid, "no mountable UI after 30 s")
+        b0 = ""
     if "MISSION" in b0 or "Welcome to" in b0 or "GUESS" in b0.upper() or len(b0.strip()) < 50:
         for _tap in range(10):
             box = None
@@ -2874,6 +2912,17 @@ def _s_worgle(page, ans, gid):
             break
         except Exception:
             continue
+    # The board lives inside <game-app>'s shadow root and can take >10 s to
+    # boot; wait for real tiles (shadow-piercing) before typing anything.
+    for _tw in range(15):
+        try:
+            _nt = page.evaluate(_SHADOW_TILE_COUNT)
+        except Exception:
+            _nt = 0
+        if _nt:
+            break
+        page.wait_for_timeout(2000)
+    _dbg(gid, f"board tiles visible: {_nt} after {(_tw + 1) * 2}s")
     page.wait_for_timeout(800)
     for n, g in enumerate(seq):
         _idle_drift(page)
@@ -2896,9 +2945,17 @@ def _s_worgle(page, ans, gid):
         body = ""
     try:
         win = page.evaluate("""() => {
-          const rows = [...document.querySelectorAll('.row')];
+          const pierce = (root) => {
+            let out = [];
+            for (const e of root.querySelectorAll('*')) {
+              if (e.shadowRoot) out = out.concat(pierce(e.shadowRoot));
+            }
+            return out.concat([...root.querySelectorAll('.row')]);
+          };
+          const rows = pierce(document);
           for (const r of rows) {
-            const tiles = [...r.querySelectorAll('.tile')];
+            const tiles = [...r.querySelectorAll('.tile')].length ? [...r.querySelectorAll('.tile')] :
+                (r.querySelectorAll('*').length ? Array.from(r.querySelectorAll('*')).filter(x => x.shadowRoot).flatMap(x => [...x.shadowRoot.querySelectorAll('.tile')]) : []);
             if (tiles.length && tiles.every(t => {
               const st = (t.dataset && t.dataset.state) || t.getAttribute('data-state') || '';
               return st === 'correct';
@@ -3636,6 +3693,10 @@ def run_nerdle_external(g, tgt, date_key, today, short):
             encoding="utf-8")).get("modes", [])
     except Exception:
         _modes = []
+    _npr = _probe_video(final) if final else {}
+    _dbg("nerdle", f"QC {'PASS' if (final and _npr.get('ok')) else 'FAIL'}: "
+                   f"mp4={final} size={_npr.get('size_mb')}MB "
+                   f"dur={_npr.get('duration_s')}s solved={solved}")
     _report_game("nerdle", date_key, answer="9 modes (see modes)",
                  guesses=[f"{m.get('id')}:{m.get('typed')}" for m in _modes
                           if isinstance(m, dict)],
@@ -4094,6 +4155,31 @@ def run_one(gid):
                         solved, evidence = solver(pg, aval_s, gid)
                 except TypeError:
                     solved, evidence = solver(pg, aval_s)
+                if not solved and not _defer_stale:
+                    # Server-keyed sites can lag a day behind the publish
+                    # date: replay once with yesterday's answer and re-key.
+                    try:
+                        _prev = tgt - timedelta(days=1)
+                        _ans2 = getattr(A, key)(_prev)
+                        _aval2 = (_ans2.get("answer") or _ans2.get("name")
+                                  or str(_ans2.get("colors")))
+                        if str(_aval2) != str(aval):
+                            _dbg(gid, f"no win; retrying with {_prev} answer "
+                                      f"{_aval2!r}")
+                            pg.reload(wait_until="domcontentloaded")
+                            pg.wait_for_timeout(6000)
+                            if gid in ("colordle", "colorfle"):
+                                solved, evidence = solver(pg, _ans2)
+                            else:
+                                solved, evidence = solver(pg, str(_aval2), gid)
+                            if solved:
+                                date_key = _prev.isoformat()
+                                today = _prev.strftime("%B %d, %Y")
+                                short = _prev.strftime("%b %d")
+                                ans, aval = _ans2, _aval2
+                                evidence += f" (day-lag retry: board={_prev})"
+                    except Exception as _e2:
+                        _dbg(gid, f"day-lag retry failed: {str(_e2)[:100]}")
         except Exception as e:
             evidence = f"exception: {str(e)[:200]}"
         try:
@@ -4137,6 +4223,15 @@ def run_one(gid):
             facts_p = vdir / "facts.png"
             teaser_p = vdir / "teaser.png"
             DP.generate_recap(str(recap_p), g["name"], today)
+            _kind = "colors" if gid in ("colorfle", "colordle") else None
+            _pal = None
+            try:
+                if gid == "colorfle" and isinstance(ans, dict):
+                    _pal = ans.get("colorHexes")
+                elif gid == "colordle" and isinstance(ans, dict) and ans.get("hex"):
+                    _pal = [ans.get("hex")]
+            except Exception:
+                _pal = None
             if gid == "waffle":
                 try:
                     _winfo = A.waffle(A.target_date())
@@ -4275,10 +4370,28 @@ def run_one(gid):
         except Exception as e:
             print(f"[{gid}] upload error: {str(e)[:200]}")
             vid = None
+    _qc = {"game": gid, "date": date_key, "solved": bool(solved),
+           "evidence": str(evidence)[:300],
+           "video": str(final) if final else None,
+           "probe": _probe_video(final) if final else None,
+           "cursor_events": len(QP.ev_all()),
+           "guesses": len(_steps(gid, aval))}
+    _pr = _qc["probe"] or {}
+    _qc["ok"] = bool(final and str(final).endswith(".mp4") and _pr.get("ok")
+                     and _pr.get("duration_s", 0) >= 40)
+    _dbg(gid, f"QC {'PASS' if _qc['ok'] else 'FAIL'}: mp4={_qc['video']} "
+              f"size={_pr.get('size_mb')}MB res={_pr.get('width')}x{_pr.get('height')} "
+              f"dur={_pr.get('duration_s')}s cursor_events={_qc['cursor_events']} "
+              f"solved={solved} guesses={_qc['guesses']}")
+    try:
+        (vdir / f"qc_{date_key}.json").write_text(
+            json.dumps(_qc, indent=1), encoding="utf-8")
+    except Exception:
+        pass
     (vdir / "result.json").write_text(json.dumps(
         {"game": gid, "date": date_key, "solved": solved, "evidence": evidence,
          "video": str(final), "guesses": _guesses(gid, aval),
-         "steps": _steps(gid, aval), "chapters": chapters}, indent=1))
+         "steps": _steps(gid, aval), "chapters": chapters, "qc": _qc}, indent=1))
     _db_save(date_key, gid, {"game": gid, "date": date_key, "solved": solved,
                              "evidence": evidence, "video": str(final),
                              "youtube_url": vid if 'vid' in dir() else None})

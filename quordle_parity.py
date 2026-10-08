@@ -509,6 +509,13 @@ def prepurge_js():
     persisted state now exists on every run)."""
     return """
 (() => {
+  // ONE-SHOT per context: clearing on EVERY navigation put wafflegame into a
+  // redirect loop (its email-skip flag lives in localStorage) and wiped
+  // mid-game state on reloads. A cookie flag survives navigations.
+  try {
+    if (document.cookie.indexOf('_qp_purged=1') >= 0) return;
+    document.cookie = '_qp_purged=1;path=/;max-age=3600';
+  } catch (e) {}
   try { localStorage.clear(); } catch (e) {}
   try { sessionStorage.clear(); } catch (e) {}
   try {
@@ -545,6 +552,20 @@ def consent_watch_js():
   window.__CONSENT_CLICKS = [];
   const TXT = new Set([%s]);
   const done = new WeakSet();
+  const inOverlay = (el) => {
+    try {
+      if (el.closest('[class*=consent i],[class*=cookie i],[class*=modal i],' +
+          '[class*=dialog i],[class*=tooltip i],[class*=hint i],[role=dialog],' +
+          '[id*=truste],[class*=fc-]')) return true;
+      let n = el;
+      for (let i = 0; i < 4 && n; i++) {
+        const cs = getComputedStyle(n);
+        if (cs && (cs.position === 'fixed' || cs.position === 'sticky')) return true;
+        n = n.parentElement;
+      }
+    } catch (e) {}
+    return false;
+  };
   const sweep = () => {
     const roots = [document];
     try {
@@ -567,6 +588,7 @@ def consent_watch_js():
         const t = ((el.innerText || el.getAttribute('aria-label') || '')
                    .trim().toLowerCase());
         if (!t || t.length > 30 || !TXT.has(t)) continue;
+        if (!inOverlay(el)) continue;   // never click game buttons
         done.add(el);
         try {
           window.__CONSENT_CLICKS.push(
@@ -578,7 +600,7 @@ def consent_watch_js():
   };
   sweep();
   const iv = setInterval(sweep, 800);
-  setTimeout(() => clearInterval(iv), 240000);
+  setTimeout(() => clearInterval(iv), 20000);
   try {
     new MutationObserver(() => sweep()).observe(
       document.documentElement, {childList: true, subtree: true});
