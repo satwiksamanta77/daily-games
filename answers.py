@@ -721,8 +721,12 @@ def batterup(d=None):
         dd = date(*(int(x) for x in key.split("-"))) + timedelta(days=days)
         return dd.isoformat()
 
-    for back in range(5):
-        key = _shift(d.isoformat(), -back)
+    # The daily player is the archive entry whose game_date == the target day.
+    # File D (published ~01:04 UTC on day D) carries it, and file D+1 still
+    # does. NEVER look back to an earlier day: that silently returned the
+    # PREVIOUS day's player (Jeff McNeil played for a Goldschmidt board).
+    for key in (d.isoformat(),
+                (d + timedelta(days=1)).isoformat()):
         try:
             r = requests.get(f"{_BATTER_CDN}/games_batterup{key}.json",
                              headers=hdr, timeout=30)
@@ -733,15 +737,19 @@ def batterup(d=None):
             if not isinstance(games, list):
                 continue
             entry = next((g for g in games
-                          if isinstance(g, dict) and g.get("game_date") == key),
-                         None)
-            pl = {"player_name": (entry or {}).get("player_name")}
-            if pl["player_name"]:
-                return {"answer": pl["player_name"], "player": entry,
-                        "date": key, "via": "cdn"}
+                          if isinstance(g, dict)
+                          and g.get("game_date") == d.isoformat()), None)
+            if entry and entry.get("player_name"):
+                return {"answer": entry["player_name"], "player": entry,
+                        "date": d.isoformat(), "via": "cdn",
+                        "game_number": entry.get("game_number")}
         except Exception as e:
             print(f"[batterup] cdn {key} failed: {str(e)[:100]}")
             continue
+    # Before ~01:04 UTC on day D the file does not exist yet: that window
+    # belongs to the morning batch - fail loudly, never guess.
+    raise SystemExit(f"batterup: day {d.isoformat()} not published yet "
+                     f"(CDN flips ~01:04 UTC)")
     try:
         snap = json.loads(
             (ZAI / "src/lib/data/batterup-answers.json").read_text("utf-8"))
