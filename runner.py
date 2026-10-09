@@ -182,7 +182,7 @@ GAMES = {
     "globle": {"name": "Globle", "url": "https://globle-game.com/game", "slug": "globle-answer-today"},
     "waffle": {"name": "Waffle", "url": "https://wafflegame.net/daily", "slug": "waffle-answer-today"},
     "worgle": {"name": "Worgle", "url": "https://bronze-age.com/worgle/", "slug": "worgle-answer-today"},
-    "countryle": {"name": "Countryle", "url": "https://countryle.com/", "slug": "countryle-answer-today"},
+    "countryle": {"name": "Countryle", "url": "https://www.countryle.com/", "slug": "countryle-answer-today"},
     "batterup": {"name": "Batterup", "url": "https://batter-up.app",
                  "slug": "batterup-answer-today", "board_lags": True},
     "marveldle": {"name": "Marveldle", "url": "https://marveldle.com", "slug": "marveldle-answer-today"},
@@ -2543,7 +2543,9 @@ def _s_countryle(page, ans, gid):
     fr = None
     try:  # the outer document is an ad shell; the app lives at /index.html
         if "/index.html" not in (page.url or ""):
-            page.goto("https://countryle.com/index.html",
+            # www origin: the app's hidden-api calls are same-origin there
+            # (non-www -> www is a cross-origin hop that CI loses to CORS/CF)
+            page.goto("https://www.countryle.com/index.html",
                       wait_until="domcontentloaded", timeout=30000)
             page.wait_for_timeout(5000)
     except Exception as e:
