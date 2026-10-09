@@ -2655,18 +2655,53 @@ def _s_countryle(page, ans, gid):
                 return False, f"guess {n + 1} pick failed ({detail[:120]})"
             continue
         picked = g
-        try:
-            btn = fr.query_selector("button:has-text('Guess')") or \
-                fr.query_selector("button:has-text('GUESS')")
-            _bt = (btn.inner_text() if btn else None)
-            if btn and btn.is_visible():
-                btn.click(timeout=3000)
-            else:
-                page.keyboard.press("Enter")
-        except Exception:
-            _bt = "enter"
-            page.keyboard.press("Enter")
+        # VERIFIED submit: row count must grow; retry button / Enter / JS-click
+        def _rowcount(f2):
+            try:
+                return f2.evaluate("""() => Array.from(
+                    document.querySelectorAll(
+                      '[class*=attempt i], [class*=guess i], [class*=row i]'))
+                    .filter(e => e.offsetParent !== null &&
+                            (e.innerText || '').trim().length > 2).length""")
+            except Exception:
+                return -1
+        def _live():
+            try:
+                fr.evaluate("() => 1")
+                return fr
+            except Exception:
+                return _countryle_frame(page) or fr
+        _rc0 = _rowcount(_live())
+        for _try in range(3):
+            fr = _live()
+            _bt = None
+            try:
+                btn = fr.query_selector("button:has-text('Guess')") or \
+                    fr.query_selector("button:has-text('GUESS')")
+                if btn and btn.is_visible():
+                    _bt = (btn.inner_text() or "").strip()
+                    btn.click(timeout=3000)
+                elif _try == 1:
+                    _bt = "enter"
+                    page.keyboard.press("Enter")
+                else:
+                    _bt = "js-click"
+                    fr.evaluate("""() => {
+                      const b = Array.from(document.querySelectorAll('button'))
+                        .find(e => /guess/i.test(e.innerText || '') &&
+                              e.offsetParent !== null);
+                      if (b) b.click(); }""")
+            except Exception as _e:
+                _dbg(gid, f"submit try {_try} error: {str(_e)[:70]}")
+            page.wait_for_timeout(2500)
+            fr = _live()
+            _rc1 = _rowcount(fr)
+            _dbg(gid, f"guess {n + 1} {g!r} submit try {_try} via {_bt!r}: "
+                      f"rows {_rc0} -> {_rc1}")
+            if _rc1 > _rc0:
+                break
         _settle(page, base=3000)
+        fr = _live()
         try:
             _rows = fr.evaluate("""() => {
               const rows = Array.from(document.querySelectorAll(
@@ -2676,16 +2711,19 @@ def _s_countryle(page, ans, gid):
               return rows.slice(-3).map(e => (e.innerText || '')
                 .replace(/\n/g, '|').slice(0, 60));
             }""") or []
-            _dbg(gid, f"guess {n + 1} submitted via {_bt!r}; "
-                      f"last rows: {_rows}")
-        except Exception:
-            pass
+            _dbg(gid, f"guess {n + 1} last rows: {_rows}")
+        except Exception as _e:
+            _dbg(gid, f"rows read failed: {str(_e)[:70]}")
     page.wait_for_timeout(2500)
     try:
         body = ((fr.evaluate("() => document.body.innerText") or "")
                 + (page.evaluate("() => document.body.innerText") or ""))
     except Exception:
         body = ""
+    try:  # frame may have gone stale across submits
+        fr.evaluate("() => 1")
+    except Exception:
+        fr = _countryle_frame(page) or fr
     try:  # the Angular app records the win in localStorage historic
         _hist = fr.evaluate("""() => {
           for (const k in localStorage) {
