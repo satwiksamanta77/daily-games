@@ -75,7 +75,6 @@ def _count_reload(gid, why):
 _VIDEO_T0 = None
 _CLICKS = []
 _FOUND_ANSWER = {}
-_MODE_STARTS = {}
 _LAST_BOARD_SHOT = None
 
 
@@ -183,9 +182,8 @@ GAMES = {
     "globle": {"name": "Globle", "url": "https://globle-game.com/game", "slug": "globle-answer-today"},
     "waffle": {"name": "Waffle", "url": "https://wafflegame.net/daily", "slug": "waffle-answer-today"},
     "worgle": {"name": "Worgle", "url": "https://bronze-age.com/worgle/", "slug": "worgle-answer-today"},
-    "countryle": {"name": "Countryle", "url": "https://www.countryle.com/", "slug": "countryle-answer-today"},
-    "batterup": {"name": "Batterup", "url": "https://batter-up.app",
-                 "slug": "batterup-answer-today", "board_lags": True},
+    "countryle": {"name": "Countryle", "url": "https://countryle.com/", "slug": "countryle-answer-today"},
+    "batterup": {"name": "Batterup", "url": "https://batter-up.app", "slug": "batterup-answer-today"},
     "marveldle": {"name": "Marveldle", "url": "https://marveldle.com", "slug": "marveldle-answer-today"},
     # Nerdle: 9 modes solved back-to-back in ONE video (same treatment as
     # framed all_modes). Lives in nerdle_solver.py (async, kept as-is) and is
@@ -1078,14 +1076,11 @@ def solve_colordle(page, ans):
         except Exception as e:
             print(f"[colordle] planner failed, using direct answer: {e}")
 
-    import random as _rnd
     percents = []
     for g in guesses:
         try:
-            _type_into(page, sel, str(g), base_delay=175)
-            page.wait_for_timeout(_rnd.randint(500, 900))
+            _type_into(page, sel, str(g), base_delay=140)
             page.click("button:has-text('Test Color!')")
-            page.wait_for_timeout(_rnd.randint(900, 1400))  # human beat
         except Exception as e:
             return False, f"guess {g!r} failed: {str(e)[:120]}"
         page.wait_for_timeout(3200)
@@ -1187,10 +1182,6 @@ def solve_colorfle(page, ans):
 
     try:
         seq, _ = S.plan_colorfle(colors)
-        import random as _rcf
-        _keep = _rcf.Random(f"colorfle:{A.target_date().isoformat()}").randint(2, 4)
-        if len(seq) > _keep:      # owner rule: 2-4 attempts, never more
-            seq = seq[:_keep - 1] + seq[-1:]
     except Exception as e:
         print(f"[colorfle] planner failed: {e}")
         seq = [colors]
@@ -1673,15 +1664,7 @@ def _play_guesses(page, guesses, after_each=None, answer=None):
              f"guess {i + 1}/{len(guesses)}: {g!r}")
         # Pause BEFORE typing too: a person glances back at the previous row.
         _idle_drift(page)
-        try:
-            QP.ev_push(960, 700, "focus")     # hand rests on the board/field
-        except Exception:
-            pass
         _kb(page, str(g), delay=120)
-        try:
-            QP.ev_push(960, 950, "click")     # ENTER key area of the keyboard
-        except Exception:
-            pass
         _settle(page, base=2600)
         try:
             _tail = (page.evaluate(
@@ -1709,16 +1692,6 @@ def _play_guesses(page, guesses, after_each=None, answer=None):
 def solve_wordle_like(page, ans, guesses=None, opener=None):
     """Wordle-style games (canuckle, phoodle): real deduction sequence."""
     _close_modals(page)
-    if guesses:   # never replay the opener when it IS the answer (canuckle
-        up = [str(g).upper() for g in guesses]   # duplicate-guess bug)
-        a = str(ans).upper()
-        seen, clean = set(), []
-        for g in up[:-1]:
-            if g in seen or g == a:
-                continue
-            seen.add(g)
-            clean.append(g)
-        guesses = clean + [up[-1]]
     if not guesses:
         g5, pool = S.words_generic5()
         opener = opener or _daily_opener(["CRANE", "SLATE", "ADIEU", "TRACE",
@@ -2068,15 +2041,7 @@ def _plan_for(gid, answer):
         if cols:
             p = S.plan_colorfle([int(c) for c in cols])
         else:
-            p = _honest_fallback(a, max_guesses=4)
-        seq, steps = p
-        import random as _rc
-        keep = _rc.Random(f"colorfle:{A.target_date().isoformat()}").randint(2, 4)
-        if len(seq) > keep:          # owner: 2-4 attempts max, never more
-            seq = seq[:keep - 1] + seq[-1:]
-            steps = [dict(st, turn=i + 1)
-                     for i, st in enumerate(steps[:keep - 1] + steps[-1:])]
-            p = (seq, steps)
+            p = _honest_fallback(a, max_guesses=6)
     elif gid in ("semantle", "contexto"):
         # Semantic games score a guess 0-100 with no letter feedback, so the
         # honest plan is a spread of real probes ending on the answer. Both
@@ -2085,19 +2050,6 @@ def _plan_for(gid, answer):
         # puzzle DATE, so the opening is different every day instead of the
         # same six hand-written words in every video.
         p = S.semantic_probe_path(a, gid=gid, width=5, seed=_day_seed(gid))
-        seq, steps = p
-        seen, seq2 = set(), []
-        for g in seq:                     # never type the same word twice
-            if str(g).upper() in seen:
-                continue
-            seen.add(str(g).upper())
-            seq2.append(g)
-        if not seq2 or str(seq2[-1]).upper() != a:
-            seq2.append(a)
-        steps = [{"turn": i + 1, "guess": g, "pattern": "",
-                  "pool_before": None, "pool_after": None}
-                 for i, g in enumerate(seq2)]
-        p = (seq2, steps)
     elif gid.startswith("framed"):
         # Framed is a movie-frame game: the site gives NO letter feedback and no
         # similarity score, so constraint propagation is impossible. The
@@ -2282,7 +2234,6 @@ def _live_day_answer(gid, url=""):
         "searchle": ("searchle",),
         "semantle": ("semantle",),
         "phoodle": ("phoodle",),
-        "phrazle": ("solitaired",),
     }.get(gid, ())
     for host, iso in hosts.items():
         if any(h in host.lower() for h in hints):
@@ -2370,20 +2321,8 @@ def _s_wordle(page, ans, gid):
         # Flutter only takes keys when the canvas holds focus: one real click
         # (which also feeds the cursor track) + semantics tree up front.
         try:
-            _cb = None
-            for _csel in ("flt-glass-pane", "canvas", "flt-glass-pane canvas"):
-                try:
-                    _el = page.query_selector(_csel)
-                    if _el:
-                        _cb = _el.bounding_box()
-                        if _cb:
-                            break
-                except Exception:
-                    continue
-            _cx = _cb["x"] + _cb["width"] / 2 if _cb else 960
-            _cy = _cb["y"] + _cb["height"] / 2 if _cb else 620
-            page.mouse.click(_cx, _cy)
-            QP.ev_push(_cx, _cy, "click")
+            page.mouse.click(960, 620)
+            QP.ev_push(960, 620, "click")
             page.wait_for_timeout(600)
             _enable_flutter_semantics(page)
         except Exception:
@@ -2412,11 +2351,6 @@ def _type_country_guess(page, scope, country):
             "[contenteditable=true], [role=searchbox], [role=combobox] input, "
             "[role=combobox]")
         if not inp:
-            try:  # last resort: any visible input/textarea in scope
-                inp = scope.query_selector("input, textarea")
-            except Exception:
-                inp = None
-        if not inp:
             try:
                 n = scope.evaluate(
                     "() => document.querySelectorAll("
@@ -2430,10 +2364,6 @@ def _type_country_guess(page, scope, country):
         except Exception:
             pass
         inp.click(timeout=3000)
-        try:
-            inp.fill("")        # hard clear: select-all unreliable here
-        except Exception:
-            pass
         try:
             _bb = inp.bounding_box()
             if _bb:
@@ -2494,41 +2424,10 @@ def _s_worldle(page, ans, gid):
     _close_modals(page)
     seq = _guesses(gid, ans)
     a = str(ans or "").strip()
-    # Fetch the LIVE country list IN-PAGE while playing: a drifted vendored
-    # snapshot shifts the seed index and serves the wrong country (the
-    # France-silhouette-vs-Kyrgyzstan video).
-    live = None
-    try:
-        live = page.evaluate(
-            "() => fetch('/common/countries.json')"
-            ".then(r => r.ok ? r.json() : null).catch(() => null)")
-    except Exception:
-        live = None
-    if isinstance(live, list) and live:
-        try:
-            import subprocess as _sp
-            from datetime import date as _d
-            _num = A._days(A.target_date(), _d(2022, 1, 21)) + 1
-            _o = _sp.run(["node", str(HERE / "worldle_answer.js"),
-                          str(_num), str(len(live))],
-                         capture_output=True, text=True, timeout=60)
-            if _o.returncode == 0 and _o.stdout.strip().isdigit():
-                _ls = sorted(live, key=lambda c: str(c.get("code", "")))
-                _cand = str(_ls[int(_o.stdout.strip())].get("name") or "").strip()
-                if _cand and _cand.upper() != a.upper():
-                    _dbg(gid, f"live list says {_cand!r} (engine had {a!r})")
-                    a = _cand
-                    ans = a
-                    _FOUND_ANSWER[gid] = a
-                    _PLANS.pop(gid, None)
-                    seq = _guesses(gid, a)
-        except Exception as _e:
-            _dbg(gid, f"live recompute failed: {str(_e)[:80]}")
     for n, g in enumerate(seq):
         last = (n == len(seq) - 1)
         _idle_drift(page)
         ok, detail = _type_country_guess(page, page, g)
-        _dbg(gid, f"guess {n + 1}/{len(seq)} {g!r}: ok={ok} ({detail[:60]})")
         if not ok:
             return False, f"guess {n + 1} {g!r}: pick failed ({detail})"
         try:
@@ -2549,142 +2448,24 @@ def _s_worldle(page, ans, gid):
             body = ""
         low = body.lower()
         if last and a.lower() in low and any(
-                k in low for k in ("guessed!", "bravo", "0 km", "well done")):
+                k in low for k in ("guesses remaining", "well done",
+                                  "correct", "share", "guessed")):
             return True, f"answer row rendered after guess {n + 1}"
     page.wait_for_timeout(2500)
     try:
         body = (page.evaluate("() => document.body.innerText") or "")
     except Exception:
         body = ""
-    low = body.lower()
-    if a.lower() in low and any(
-            k in low for k in ("guessed!", "bravo", "0 km", "well done")):
-        return True, "answer present with real win markers"
-    # Trilateration fallback: the site's daily pick no longer matches any
-    # offline seed port, so derive TODAY'S country from its own distance
-    # feedback exactly like a human with a ruler would.
-    try:
-        rows = page.evaluate("""() => {
-          const out = [];
-          for (const e of document.querySelectorAll('div, li')) {
-            if (e.offsetParent === null) continue;
-            const t = (e.innerText || '').trim();
-            if (t && t.length < 90 && t.indexOf('km') >= 0) out.push(t);
-            if (out.length >= 8) break;
-          }
-          return out;
-        }""") or []
-        rows = [str(r).replace("\n", "|") for r in rows]
-        import math as _m
-        obs = []
-        for rtxt in rows:
-            dm = re.search(r"([0-9.,]+)\s*km", rtxt)
-            nm = ""
-            for seg in rtxt.replace("|", "\n").split("\n"):  # rows lead
-                seg = seg.strip()            # the name is the first plain
-                if not seg or dm and seg.replace(",", "") == dm.group(1) + "km":
-                    continue
-                if seg.endswith("km") or not all(
-                        c.isalpha() or c in " '-" for c in seg):
-                    continue
-                if len(seg) > 2:
-                    nm = seg
-                    break
-            if dm and nm:
-                obs.append((nm.lower(),
-                            float(dm.group(1).replace(",", ""))))
-        live = page.evaluate(
-            "() => fetch('https://cdn-assets.teuteuf.fr/data/common/"
-            "countries.json').then(r => r.ok ? r.json() : null)"
-            ".catch(() => null)")
-        coords = {}
-        for c in (live or []):
-            if isinstance(c, dict) and c.get("latitude") is not None:
-                coords[str(c.get("name", "")).strip().lower()] = (
-                    float(c["latitude"]), float(c["longitude"]))
-        _dbg(gid, f"trilat rows={len(rows)} obs={obs} live={len(live or [])}")
-        obs = [(n, d) for n, d in obs if n in coords]
-        if len(obs) >= 2 and live:
-            def _hav(p, q):
-                la1, lo1 = _m.radians(p[0]), _m.radians(p[1])
-                la2, lo2 = _m.radians(q[0]), _m.radians(q[1])
-                h = (_m.sin((la2 - la1) / 2) ** 2 +
-                     _m.cos(la1) * _m.cos(la2) * _m.sin((lo2 - lo1) / 2) ** 2)
-                return 6371.0 * 2 * _m.asin(_m.sqrt(h))
-            cands = [n for n, pq in coords.items()
-                     if all(abs(_hav(pq, coords[g]) - d) <= 5.0
-                            for g, d in obs)]
-            _dbg(gid, f"trilateration obs={obs} cands={cands[:4]}")
-            if len(cands) == 1 and cands[0] != a.lower():
-                pick = str(cands[0]).title()
-                ok, detail = _type_country_guess(page, page, pick)
-                if ok:
-                    btn = page.query_selector("button:has-text('Guess')")
-                    if btn and btn.is_visible():
-                        btn.click(timeout=3000)
-                    else:
-                        page.keyboard.press("Enter")
-                    _settle(page, base=3000)
-                    _FOUND_ANSWER[gid] = pick
-                    return True, f"trilaterated {pick!r} from distances"
-    except Exception as e:
-        _dbg(gid, f"trilateration failed: {str(e)[:100]}")
+    if a.lower() in body.lower() and any(
+            k in body.lower() for k in ("well done", "correct",
+                                        "guesses remaining", "share")):
+        return True, "answer present with post-game markers"
     return False, "board did not confirm the answer"
-
-
-def _globle_live_list(page, gid):
-    """The /answer?day=... index is relative to THE LIST THE APP LOADED.
-    Sniff that request from the resource timing buffer, re-fetch it in-page
-    and return the live country list (owner: fetch the date data during play)."""
-    try:
-        urls = page.evaluate("""() => performance.getEntriesByType('resource')
-            .map(e => e.name).filter(u => /countr|gateway|deno|assets/i.test(u))
-            .slice(0, 12)""") or []
-    except Exception:
-        urls = []
-    for u in urls:
-        try:
-            lst = page.evaluate(
-                "(u) => fetch(u).then(r => r.ok ? r.json() : null)"
-                ".catch(() => null)", u)
-        except Exception:
-            lst = None
-        if isinstance(lst, dict):
-            lst = lst.get("countries") or lst.get("data")
-        if isinstance(lst, list) and len(lst) > 100 and lst[0] and                 ("name" in lst[0] or "country" in lst[0]):
-            _dbg(gid, f"globle live list {len(lst)} from {u[:60]}")
-            return lst
-    return None
 
 
 def _s_globle(page, ans, gid):
     """Globle: plain form (type + Enter), canvas board."""
     _close_modals(page)
-    # React shell: the guess input only exists once the app has mounted;
-    # wait for it (one retry reload) instead of failing on a spinner page.
-    for _attempt in range(2):
-        try:
-            page.wait_for_selector("input", timeout=30000)
-            break
-        except Exception:
-            _dbg(gid, f"globle input not mounted (attempt {_attempt + 1})")
-            try:
-                page.reload(wait_until="domcontentloaded")
-                page.wait_for_timeout(5000)
-            except Exception:
-                pass
-    _live = _globle_live_list(page, gid)
-    if _live:
-        try:
-            _fix = A.globle(A.target_date(), countries=_live)
-            _nm = str(_fix.get("answer") or "").strip()
-            if _nm and _nm.upper() != str(ans).upper():
-                _dbg(gid, f"globle live-list answer {_nm!r} (had {ans!r})")
-                ans = _nm
-                _PLANS.pop(gid, None)
-                _FOUND_ANSWER[gid] = _nm
-        except Exception as _e:
-            _dbg(gid, f"globle live recompute failed: {str(_e)[:80]}")
     seq = _guesses(gid, ans)
     a = str(ans or "").strip()
     for n, g in enumerate(seq):
@@ -2726,18 +2507,6 @@ def _s_globle(page, ans, gid):
     if a.lower() in (body + " " + lst).lower():
         return True, "answer present in guess list after final guess"
     return False, "answer not found in guess list"
-    # React shell: wait for the guess input to mount; one retry reload
-    for _attempt in range(2):
-        try:
-            page.wait_for_selector("input", timeout=30000)
-            break
-        except Exception:
-            _dbg(gid, f"globle input not mounted (attempt {_attempt + 1})")
-            try:
-                page.reload(wait_until="domcontentloaded")
-                page.wait_for_timeout(5000)
-            except Exception:
-                pass
 
 
 def _countryle_frame(page):
@@ -2759,44 +2528,28 @@ def _countryle_frame(page):
 
 
 def _s_countryle(page, ans, gid):
-    """Countryle: clear the /welcome deck (it can bounce back once), then
-    play the guess sequence inside the app frame with verified submits."""
+    """Countryle: pass the /welcome gate INSIDE the app iframe, then guess."""
     _close_modals(page)
-    fr = None
-    try:  # www origin: hidden-api is same-origin there (non-www dies to CORS)
-        if "index.html" not in (page.url or ""):
-            page.goto("https://www.countryle.com/index.html",
-                      wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(5000)
-    except Exception as e:
-        _dbg(gid, f"direct index.html nav failed: {str(e)[:80]}")
-    if page.query_selector("input, button"):
-        fr = page
-    else:
-        fr = _countryle_frame(page)
+    fr = _countryle_frame(page)
     if fr is None:
         _dbg(gid, "app iframe never produced UI (bot-gate?)")
         return False, "app iframe empty after 60 s"
     _dbg(gid, f"app frame: {fr.url[:60]}")
-
-    def _live():
-        try:
-            fr.evaluate("() => 1")
-            return fr
-        except Exception:
-            return _countryle_frame(page) or fr
-
-    def _taps():
+    try:
+        b0 = (fr.evaluate("() => document.body.innerText") or "")[:400]
+    except Exception:
+        b0 = ""
+    if "MISSION" in b0 or "Welcome to" in b0 or "GUESS" in b0.upper() \
+            or len(b0.strip()) < 50:
         for _tap in range(10):
             box = None
             try:
                 box = fr.evaluate("""() => {
-                    const btns = Array.from(
-                        document.querySelectorAll('button, a'))
+                    const btns = Array.from(document.querySelectorAll('button, a'))
                         .filter(e => e && e.offsetParent !== null);
                     for (const b of btns) {
                         const t = (b.innerText || '').trim().toUpperCase();
-                        if (/^(NEXT|SKIP|PLAY|START|CONTINUE|GO|GOT IT|PLAY NOW|LET'S GO|BEGIN|GUESS)/.test(t)) {
+                        if (/^(NEXT|SKIP|PLAY|START|CONTINUE|GO|GOT IT)$/.test(t)) {
                             const r = b.getBoundingClientRect();
                             if (r.width > 4 && r.height > 4)
                                 return {t: t, x: r.x + r.width / 2,
@@ -2808,51 +2561,69 @@ def _s_countryle(page, ans, gid):
             except Exception:
                 box = None
             if not box:
-                return
-            page.mouse.click(box["x"], box["y"])
+                break
+            # A leftover loading mask (ad shell) absorbs every click when the
+            # blocked ad scripts never fire their callback: strip it first.
+            try:
+                fr.evaluate("""() => {
+                    for (const m of document.querySelectorAll(
+                            '#loading-mask, .mask, [class*=loading i]'))
+                        m.remove();
+                }""")
+            except Exception:
+                pass
+            try:
+                _before = (fr.evaluate(
+                    "() => document.body.innerText.slice(0, 200)") or "")
+            except Exception:
+                _before = ""
+            page.mouse.click(box["x"], box["y"])   # iframe is full-page: 0,0
             _push_click_at(box["x"], box["y"])
             _dbg(gid, f"onboarding trusted tap {box['t']!r}")
             page.wait_for_timeout(1400)
-            if fr.query_selector("input"):
-                _dbg(gid, "input visible, onboarding done")
-                return
-
-    for _round in range(3):   # the deck can bounce back to /welcome once
-        fr = _live()
-        try:
-            b0 = (fr.evaluate("() => document.body.innerText") or "")[:400]
-        except Exception:
-            b0 = ""
-        if "Welcome to" in b0 or "MISSION" in b0 or len(b0.strip()) < 50:
-            _taps()
-        for _w in range(20):
-            fr = _live()
-            if fr.query_selector("input"):
-                break
-            if "/welcome" in (fr.url or ""):
-                _dbg(gid, f"round {_round}: bounced to /welcome, re-tapping")
-                _taps()
-            page.wait_for_timeout(1000)
-        if fr.query_selector("input"):
-            _dbg(gid, f"round {_round}: game input present")
-            break
-    _fin = fr.query_selector("input") if fr else None
-    if not _fin:
-        try:
-            for _f2 in page.frames:
-                _ni = _f2.evaluate("() => document.querySelectorAll('input').length")
-                _nt = (_f2.evaluate("() => (document.body.innerText||'').slice(0, 90)") or "").replace("\n", "|")
-                _dbg(gid, f"frame {(_f2.url or '')[:60]} inputs={_ni} text={_nt!r}")
-        except Exception as _e:
-            _dbg(gid, f"frame dump failed: {str(_e)[:70]}")
-        return False, "no input inside app iframe"
+            try:
+                if fr.query_selector("input"):
+                    _dbg(gid, "input visible, onboarding done")
+                    break
+                _after = (fr.evaluate(
+                    "() => document.body.innerText.slice(0, 200)") or "")
+                if _after == _before:
+                    _dbg(gid, "slide unchanged after trusted tap")
+            except Exception:
+                pass
     seq = _guesses(gid, ans)
     a = str(ans or "").strip()
     picked = "none"
+    _fin = None
+    for _w in range(20):
+        try:
+            _fin = fr.query_selector("input")
+        except Exception:
+            _fin = None
+        if _fin:
+            break
+        if _w == 6:     # keyboard fallback: some decks advance on Enter/Space
+            for _k in ("Enter", "Space", "ArrowRight"):
+                try:
+                    page.keyboard.press(_k)
+                    page.wait_for_timeout(700)
+                except Exception:
+                    pass
+        if _w == 12:   # last resort: jump the frame straight to the app route
+            try:
+                fr.evaluate("""() => {
+                    if (!document.querySelector('input'))
+                        location.assign('/index.html');
+                }""")
+            except Exception:
+                pass
+            fr = _countryle_frame(page) or fr
+        page.wait_for_timeout(1000)
+    if not _fin:
+        return False, "no input inside app iframe"
     for n, g in enumerate(seq):
         last = (n == len(seq) - 1)
         _idle_drift(page)
-        fr = _live()
         ok, detail = _type_country_guess(page, fr, g)
         _dbg(gid, f"guess {n + 1}/{len(seq)} {g!r}: ok={ok} ({detail[:80]})")
         if not ok:
@@ -2860,97 +2631,25 @@ def _s_countryle(page, ans, gid):
                 return False, f"guess {n + 1} pick failed ({detail[:120]})"
             continue
         picked = g
-
-        def _rowcount(f2):
-            try:
-                return f2.evaluate("""() => Array.from(document.querySelectorAll(
-                    '[class*=attempt i], [class*=guess i], [class*=row i]'))
-                    .filter(e => e.offsetParent !== null &&
-                            (e.innerText || '').trim().length > 2).length""")
-            except Exception:
-                return -1
-        _rc0 = _rowcount(_live())
-        for _try in range(3):
-            fr = _live()
-            _bt = None
-            try:
-                btn = fr.query_selector("button:has-text('Guess')") or \
-                    fr.query_selector("button:has-text('GUESS')")
-                if btn and btn.is_visible():
-                    _bt = (btn.inner_text() or "").strip()
-                    btn.click(timeout=3000)
-                elif _try == 1:
-                    _bt = "enter"
-                    page.keyboard.press("Enter")
-                else:
-                    _bt = "js-click"
-                    fr.evaluate("""() => {
-                      const b = Array.from(document.querySelectorAll('button'))
-                        .find(e => /guess/i.test(e.innerText || '') &&
-                              e.offsetParent !== null);
-                      if (b) b.click(); }""")
-            except Exception as _e:
-                _dbg(gid, f"submit try {_try} error: {str(_e)[:70]}")
-            page.wait_for_timeout(2500)
-            fr = _live()
-            _rc1 = _rowcount(fr)
-            _dbg(gid, f"guess {n + 1} {g!r} submit try {_try} via {_bt!r}: "
-                      f"rows {_rc0} -> {_rc1}")
-            if _rc1 > _rc0:
-                break
-        _settle(page, base=3000)
-        fr = _live()
         try:
-            _h2 = fr.evaluate("""() => {
-              for (const k in localStorage) {
-                if (/historic|game|stat/i.test(k)) {
-                  try { return JSON.stringify(localStorage[k]); } catch (e) {}
-                }
-              }
-              return '';
-            }""") or ""
-            _dbg(gid, f"historic after guess {n + 1}: {_h2[:220]!r}")
-            try:
-                _dlg = fr.evaluate("""() => {
-                  const m = document.querySelector(
-                    'mat-dialog-container, [class*=modal i], [class*=dialog i]');
-                  return m ? (m.innerText || '').replace(/\n/g, '|').slice(0, 120) : '';
-                }""") or ""
-                if _dlg:
-                    _dbg(gid, f"modal after guess {n + 1}: {_dlg!r}")
-            except Exception:
-                pass
-            _h2n = _h2.replace('\\"', '"').replace('\"', '"')
-            if '"complete":true' in _h2n or '"complete": true' in _h2n:
-                return True, f"app historic complete=true after guess {n + 1} ({g!r})"
+            btn = fr.query_selector("button:has-text('Guess')") or \
+                fr.query_selector("button:has-text('GUESS')")
+            if btn and btn.is_visible():
+                btn.click(timeout=3000)
+            else:
+                page.keyboard.press("Enter")
         except Exception:
-            pass
+            page.keyboard.press("Enter")
+        _settle(page, base=3000)
     page.wait_for_timeout(2500)
-    fr = _live()
     try:
         body = ((fr.evaluate("() => document.body.innerText") or "")
                 + (page.evaluate("() => document.body.innerText") or ""))
     except Exception:
         body = ""
-    try:
-        _hist = fr.evaluate("""() => {
-          for (const k in localStorage) {
-            if (/historic|game|stat/i.test(k)) {
-              try { return JSON.stringify(localStorage[k]); } catch (e) {}
-            }
-          }
-          return '';
-        }""") or ""
-    except Exception:
-        _hist = ""
-    _histn = _hist.replace('\\"', '"').replace('\"', '"')
-    if '"complete":true' in _histn or '"complete": true' in _histn:
-        return True, f"app historic complete=true (picked {picked!r})"
     low = body.lower()
     if a.lower() in low and any(k in low for k in (
-            "guessed", "correct", "well done", "statistics", "share",
-            "congratulations", "you got it", "play again", "completed",
-            "next country", "result")):
+            "guessed", "correct", "well done", "statistics", "share")):
         return True, f"answer row rendered (picked {picked!r})"
     return False, f"board did not confirm {a!r} (picked {picked!r})"
 
@@ -3315,7 +3014,7 @@ def _phrazle_clear_row(page, letters):
         page.wait_for_timeout(110)
 
 
-def _phrazle_enter_phrase(page, phrase, groups=None, allow_reject=False):
+def _phrazle_enter_phrase(page, phrase, groups=None):
     """Submit one Phrazle row, verified against the live board shape first.
 
     `_s_phrazle` reads the board's true cell groups with `_phrazle_grid_letters`
@@ -3331,7 +3030,7 @@ def _phrazle_enter_phrase(page, phrase, groups=None, allow_reject=False):
     words = [w for w in str(phrase).upper().split() if w]
     if len(words) < 2 or not all(w.isalpha() for w in words):
         return False, f"phrase {phrase!r} is not a word-separated phrase"
-    if groups and not allow_reject:
+    if groups:
         want_shape = [len(w) for w in words]
         if want_shape != list(groups):
             return False, (f"shape {want_shape} != board {list(groups)}; "
@@ -3352,15 +3051,6 @@ def _phrazle_enter_phrase(page, phrase, groups=None, allow_reject=False):
             page.wait_for_timeout(500)
         _type_like_a_person(page, typed, base_delay=200)
         page.wait_for_timeout(700)
-        if allow_reject:
-            # wrong-shape probe: the site's visible refusal IS the moment we
-            # want on camera; the row is never consumed, so don't verify it
-            try:
-                page.keyboard.press("Enter")
-            except Exception:
-                pass
-            page.wait_for_timeout(1800)
-            return True, "site-rejected wrong-shape probe (expected miss)"
         got = _phrazle_active_row(page, n_cells)
         if got == want:
             page.keyboard.press("Enter")
@@ -3442,33 +3132,37 @@ def _phrazle_won(page):
 
 
 def _phrazle_grid_letters(page):
-    """Live board word-shape, e.g. [5, 5]: per visible .wordhunt-row, walk the
-    .row_block cells and split on .blockSpace spacers (the old .wordBreak
-    wrappers no longer exist in the site's DOM)."""
+    """The live board's per-word cell groups, e.g. [5, 5] or [4, 2, 3, 5].
+
+    Read from the real DOM (confirmed live): every word is wrapped in a
+    `.wordBreak` div holding its `.row_block` letter cells, with a spacer
+    `.wordBreak` containing one `.blockSpace` between words. One `.wordBreak`
+    with N real cells contributes one group of size N, so a 5+5 board reads
+    [5, 5] directly, whether or not letters have been typed.
+    """
     try:
         return page.evaluate("""() => {
           const vis = e => e && e.offsetParent !== null;
           const rows = Array.from(document.querySelectorAll(
-            '.wordhunt-row')).filter(vis);
-          for (const r of rows) {
-            const cells = Array.from(r.querySelectorAll(
-              '.row_block, .blockSpace')).filter(vis);
-            if (!cells.length) continue;
-            const groups = [];
-            let cur = 0;
-            for (const c of cells) {
-              if (c.classList && c.classList.contains('blockSpace')) {
-                if (cur) groups.push(cur);
-                cur = 0;
-              } else cur++;
+            '.wordhunt-row.current-row')).filter(vis);
+          const tgt = rows.length ? rows : Array.from(
+            document.querySelectorAll('.wordhunt-row')).filter(vis);
+          const groups = [];
+          for (const r of tgt) {
+            for (const wb of Array.from(r.querySelectorAll('.wordBreak'))
+                 .filter(vis)) {
+              const n = Array.from(wb.querySelectorAll('.row_block'))
+                .filter(e => vis(e) && !(e.classList &&
+                                e.classList.contains('blockSpace'))).length;
+              if (n > 0) groups.push(n);
             }
-            if (cur) groups.push(cur);
-            if (groups.length) return groups;
+            if (groups.length >= 1) break;
           }
-          return [];
+          return groups;
         }""") or []
     except Exception:
         return []
+
 
 def _phrazle_browser_answer(page, tgt):
     """Let the page pick its own answer, then trust it.
@@ -3501,33 +3195,12 @@ def _phrazle_browser_answer(page, tgt):
 def _s_phrazle(page, ans, gid):
     _close_modals(page)
     _close_generic_howto(page)
-    for _sel in ("button:has-text('Got it')", "button:has-text('OK')",
-                 "[aria-label='close']", "[aria-label='Close']"):
-        try:
-            _el = page.query_selector(_sel)
-            if _el and _el.is_visible():
-                _el.click(timeout=2000)
-                page.wait_for_timeout(700)
-        except Exception:
-            continue
-    try:  # keep the board on camera while typing
-        page.evaluate("""() => {
-          const b = document.querySelector('table, .board, [class*=grid i]');
-          if (b) b.scrollIntoView({block: 'center'});
-        }""")
-    except Exception:
-        pass
     # The page's own arithmetic wins over the host clock, and the board's cell
     # groups are the final arbiter: a phrase that does not fill the visible
     # cells is rejected with "Please use all available spaces".
     pick = _phrazle_browser_answer(page, A.target_date()) or {}
     cand = pick.get("answer")
-    for _gw in range(10):          # grid renders late; shape must be real
-        groups = _phrazle_grid_letters(page)
-        if groups:
-            break
-        page.wait_for_timeout(1500)
-    _dbg(gid, f"board shape groups={groups}")
+    groups = _phrazle_grid_letters(page)
     if groups and cand:
         if [len(w) for w in cand.split()] != groups:
             for alt in A.phrazle_by_shape(A.target_date(), groups):
@@ -3560,32 +3233,15 @@ def _s_phrazle(page, ans, gid):
             same = [p for p in bank
                     if sig(p) == tgt and p not in [x.upper() for x in seq]]
             import random as _r
-            rnd = _r.Random(f"{gid}:{A.target_date().isoformat()}")
-            rnd.shuffle(same)
-            # Rare board shapes can have zero same-shape probes in the bank:
-            # keep at most two wrong-shape probes as honest on-camera misses
-            # (the site rejects them with "use all available spaces").
-            wrong = [p for p in bank if sig(p) != tgt
-                     and p not in [x.upper() for x in seq]]
-            rnd.shuffle(wrong)
+            _r.Random(f"{gid}:{A.target_date().isoformat()}").shuffle(same)
             fixed = [seq[-1]]
-            wrong_used = 0
             for g in seq[:-1]:
-                if sig(g) == tgt:
-                    fixed.append(g)
-                elif same:
-                    fixed.append(same.pop())
-                elif wrong_used < 2 and wrong:
-                    fixed.append("REJECT:" + wrong.pop())
-                    wrong_used += 1
+                fixed.append(g if sig(g) == tgt
+                             else (same.pop() if same else g))
             seq = fixed[::-1]
             print(f"[phrazle] probes re-shaped to {groups}: {seq}")
     for g in seq:
-        allow_reject = str(g).startswith("REJECT:")
-        if allow_reject:
-            g = str(g)[len("REJECT:"):]
-        ok, why = _phrazle_enter_phrase(page, g, groups=groups or None,
-                                        allow_reject=allow_reject)
+        ok, why = _phrazle_enter_phrase(page, g, groups=groups or None)
         if not ok:
             return False, f"guess {g!r} rejected locally: {why}"
     page.wait_for_timeout(2500)
@@ -3711,39 +3367,20 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
             if not last:
                 continue
             return False, f"answer pick failed ({detail})"
-        def _rows():
+        try:
+            btn = page.query_selector(
+                "button:has-text('Guess'), button:has-text('Submit'), "
+                "button:has-text('Go')")
+            if btn and btn.is_visible():
+                btn.click(timeout=3000)
+            else:
+                page.keyboard.press("Enter")
+        except Exception:
             try:
-                return page.evaluate("""() => Array.from(document.querySelectorAll(
-                    '[class*=guess i], [class*=row i], table tr'))
-                    .filter(e => e.offsetParent !== null &&
-                            (e.innerText || '').trim().length > 2).length""")
+                page.keyboard.press("Enter")
             except Exception:
-                return -1
-        _r0 = _rows()
-        for _st in range(3):   # VERIFIED submit: a guess row must appear
-            try:
-                btn = page.query_selector(
-                    "button:has-text('Guess'), button:has-text('Submit'), "
-                    "button:has-text('Go')")
-                if _st == 2 and btn and btn.is_visible():
-                    btn.click(timeout=3000)
-                elif _st == 1:
-                    page.keyboard.press("Enter")
-                elif btn and btn.is_visible():
-                    btn.click(timeout=3000)
-                else:
-                    page.keyboard.press("Enter")
-            except Exception:
-                try:
-                    page.keyboard.press("Enter")
-                except Exception:
-                    pass
-            page.wait_for_timeout(2200)
-            _r1 = _rows()
-            _dbg(gid, f"guess {n + 1} submit try {_st} rows {_r0} -> {_r1}")
-            if _r1 > _r0:
-                break
-        _settle(page, base=2500)
+                pass
+        _settle(page, base=3000)
         try:
             txt = (page.evaluate("() => document.body.innerText") or "")
             cols = page.evaluate(
@@ -3845,55 +3482,21 @@ def _s_marveldle(page, ans, gid):
                     break
             except Exception as e:
                 _dbg(gid, f"{u} failed: {str(e)[:100]}")
-    if not str(ans or "").strip() or str(ans) == "None":
-        ok, ev = _marveldle_browser_solve(page, gid)
-        if ok:
-            _marveldle_next_mode(page, gid)
-        return ok, ev
     probes = []
     try:
         info = A.marveldle(A.target_date())
         probes = [p.get("name") for p in (info.get("probes") or [])
                   if isinstance(p, dict) and p.get("name")]
-    except BaseException as e:
-        print(f"[marveldle] probe info failed: {str(e)[:110]}")
-    ok, ev = solve_attr_game(page, ans, gid, api_probes=probes)
-    if ok:
-        _marveldle_next_mode(page, gid)
-    return ok, ev
-
-
-def _marveldle_next_mode(page, gid, mode="MCU"):
-    """After a comics solve, switch to the MCU board and solve it too (the
-    site ships COMICS / MCU / FANTASTIC GRID; one video covers what we can)."""
-    try:
-        _t0 = _VIDEO_T0 or time.time()
-        clicked = False
-        for sel in (f"a:has-text('{mode}')", f"button:has-text('{mode}')"):
-            try:
-                el = page.query_selector(sel)
-                if el and el.is_visible():
-                    el.click(timeout=3000)
-                    clicked = True
-                    break
-            except Exception:
-                continue
-        if not clicked:
-            page.goto("https://marveldle.com/character/audiovisual/guess",
-                      wait_until="domcontentloaded", timeout=30000)
-        page.wait_for_timeout(4000)
-        _MODE_STARTS.setdefault(gid, []).append(
-            (mode, round(time.time() - _t0, 1)))
-        _dbg(gid, f"switched to {mode} mode")
-        return _marveldle_browser_solve(page, gid,
-                                        pool_file="marveldle-mcu.json")
+    except SystemExit as e:
+        print(f"[marveldle] probe source exited: {e}")
     except Exception as e:
-        _dbg(gid, f"{mode} mode failed: {str(e)[:90]}")
-        return False, f"{mode} mode: {str(e)[:80]}"
+        print(f"[marveldle] probe info failed: {str(e)[:110]}")
+    if not str(ans or "").strip() or str(ans) == "None":
+        return _marveldle_browser_solve(page, gid)
+    return solve_attr_game(page, ans, gid, api_probes=probes)
 
 
-def _marveldle_browser_solve(page, gid, max_guesses=30,
-                             pool_file="marveldle-comics.json"):
+def _marveldle_browser_solve(page, gid, max_guesses=14):
     """Identify today's character IN-PAGE (the public guess API answers
     205-empty): guess date-seeded candidates from the vendored comics pool,
     read the column feedback, stop on an all-Exact win."""
@@ -3901,7 +3504,7 @@ def _marveldle_browser_solve(page, gid, max_guesses=30,
     import random as _r
     try:
         pool = [c for c in _j.loads((HERE / "frontend_data" / "src" / "lib" /
-                                     "data" / pool_file)
+                                     "data" / "marveldle-comics.json")
                                     .read_text(encoding="utf-8"))
                 if isinstance(c, dict) and c.get("name")]
     except Exception as e:
@@ -4199,8 +3802,9 @@ def run_framed_all(gid, g, tgt, date_key, today, short):
             except Exception:
                 pass
         try:
-            ctx.add_init_script(script=QP.selective_purge_js())
+            ctx.add_init_script(script=QP.prepurge_js())
             ctx.add_init_script(script=QP.consent_watch_js())
+            ctx.add_init_script(script=QP.adhide_js())
         except Exception:
             pass
 
@@ -4227,7 +3831,7 @@ def run_framed_all(gid, g, tgt, date_key, today, short):
             pass
         try:
             pg.goto(FRAMED_MODES[0][2], wait_until="domcontentloaded", timeout=45000)
-            pg.wait_for_timeout(3000)
+            pg.wait_for_timeout(6000)
             per_mode, solved_modes = solve_framed_modes(pg, answers)
             try:
                 pg.screenshot(path=str(vdir / "shot_win.png"))
@@ -4300,17 +3904,6 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
             play_src = _polish_gameplay(str(final), vdir / "gameplay_1080.mp4")
             gameplay = VideoFileClip(play_src)
             gd = float(gameplay.duration or 0)
-            # crop the dead page-load intro (owner: "initial too much waiting
-            # to start solving should be cropped, don't crop the main part")
-            _evs = QP.ev_all()
-            _t0 = min([e["t"] for e in _evs], default=None)
-            if _t0 is not None and _t0 > 2.0:
-                _cut = max(0.0, _t0 - 0.8)
-                if gd - _cut > 20:
-                    gameplay = gameplay.subclip(_cut)
-                    gd = float(gameplay.duration or 0)
-                    _dbg(gid, f"intro crop: cut {_cut:.1f}s of page-load dead "
-                              f"time, gameplay now {gd:.1f}s")
 
             # ---- per-mode "NOW PLAYING" cards -------------------------------
             # The session is recorded as ONE continuous clip, so the mode
@@ -4551,22 +4144,9 @@ def run_one(gid):
         # Pre-navigation storage purge (kills the on-camera reload) and the
         # continuous consent/tooltip watcher (kills the mid-video CMP banner).
         try:
-            ctx.add_init_script(script=QP.selective_purge_js())
+            ctx.add_init_script(script=QP.prepurge_js())
             ctx.add_init_script(script=QP.consent_watch_js())
-            if gid == "countryle":
-                # seed the Angular settings store so isFirstLogin() is false
-                # and the app boots straight into the game route (the
-                # /welcome deck otherwise re-triggers on every cold boot)
-                ctx.add_init_script(script="""
-                    try {
-                      localStorage.setItem('countryle_settings', JSON.stringify({
-                        isFirstLogin: false, showUpdateDialog: false,
-                        language: 'en', isDarkMode: false,
-                        isCommaSeparator: false, isFahrenheit: false,
-                        isHighContrast: false
-                      }));
-                    } catch (e) {}
-                """)
+            ctx.add_init_script(script=QP.adhide_js())
         except Exception:
             pass
 
@@ -4600,14 +4180,6 @@ def run_one(gid):
         # Attach the daily-puzzle response probe BEFORE the first navigation, so
         # the site's own answer request is captured on the initial page load.
         _install_live_day_probe(pg)
-        if gid == "countryle":
-            def _cl_resp(resp):
-                try:
-                    if "hidden-api" in (resp.url or ""):
-                        _dbg(gid, f"hidden-api {resp.status} {resp.url[:80]}")
-                except Exception:
-                    pass
-            pg.on("response", _cl_resp)
         solved, evidence = False, "exception before solve"
         _defer_stale = False
         try:
@@ -4616,7 +4188,7 @@ def run_one(gid):
             pass
         try:
             pg.goto(g["url"], wait_until="domcontentloaded", timeout=45000)
-            pg.wait_for_timeout(2500)
+            pg.wait_for_timeout(6000)
             _close_modals(pg)
             # The site's own answer request has now been captured, so we know
             # which day the board really is. If that differs from the day the
@@ -4631,8 +4203,7 @@ def run_one(gid):
                 if _served and str(_served) != date_key:
                     from datetime import date as _d2
                     _sv = _d2(*(int(x) for x in str(_served).split("-")))
-                    if _sv == tgt - timedelta(days=1) and \
-                            not GAMES[gid].get("board_lags"):
+                    if _sv == tgt - timedelta(days=1):
                         # Server-keyed site has not rolled to the publish day
                         # yet (US rollover happens hours after 21:00 IST).
                         # Recording now burns yesterday's board on camera -
@@ -4641,26 +4212,6 @@ def run_one(gid):
                         evidence = (f"stale-board: site served {_sv} but "
                                     f"publish day is {tgt}; deferred to dawn")
                         print(f"[{gid}] {evidence}")
-                    elif GAMES[gid].get("board_lags"):
-                        # batter-up's live board label trails the real calendar
-                        # by one day (site shows label L on real day L+1), so a
-                        # video keyed K can only ever record board K during the
-                        # morning/dawn window of real day K... which is target
-                        # K+1's run seeing served K = tgt-1. Re-key the video to
-                        # the board date so key, answer and on-screen board
-                        # always agree; every other window defers.
-                        if _sv == tgt - timedelta(days=1):
-                            date_key = _sv.isoformat()
-                            today = _sv.strftime("%B %d, %Y")
-                            short = _sv.strftime("%b %d")
-                            print(f"[{gid}] board-lag: board {date_key} is live "
-                                  f"now; video keyed to the board date")
-                        else:
-                            _defer_stale = True
-                            evidence = (f"board-lag: board {tgt - timedelta(days=1)} "
-                                        f"only goes live in the morning window; "
-                                        f"deferred (served {_sv})")
-                            print(f"[{gid}] {evidence}")
                     else:
                         date_key = _sv.isoformat()
                         today = _sv.strftime("%B %d, %Y")
@@ -4681,14 +4232,13 @@ def run_one(gid):
                         solved, evidence = solver(pg, aval_s, gid)
                 except TypeError:
                     solved, evidence = solver(pg, aval_s)
-                if solved and _FOUND_ANSWER.get(gid):
+                if solved and gid == "marveldle" and _FOUND_ANSWER.get(gid):
                     aval = _FOUND_ANSWER[gid]
                     aval_s = str(aval)
                     ans = {"answer": aval, "via": "browser-solve"}
-                if not solved and not _defer_stale and gid != "countryle":
+                if not solved and not _defer_stale:
                     # Server-keyed sites can lag a day behind the publish
                     # date: replay once with yesterday's answer and re-key.
-                    # (countryle's board follows the faked client clock.)
                     try:
                         _prev = tgt - timedelta(days=1)
                         _ans2 = getattr(A, key)(_prev)
@@ -4708,10 +4258,8 @@ def run_one(gid):
                                 today = _prev.strftime("%B %d, %Y")
                                 short = _prev.strftime("%b %d")
                                 ans, aval = _ans2, _aval2
-                                evidence += f" (day-lag retry: board={_prev}, re-keyed)"
-                    except SystemExit as _se2:
-                        _dbg(gid, f"day-lag retry answer unavailable: {_se2}")
-                    except BaseException as _e2:
+                                evidence += f" (day-lag retry: board={_prev})"
+                    except Exception as _e2:
                         _dbg(gid, f"day-lag retry failed: {str(_e2)[:100]}")
         except SystemExit as _se:
             evidence = f"SystemExit in solver: {_se}"
@@ -4810,8 +4358,7 @@ def run_one(gid):
                 _dbg(gid, f"reveal slide uses board screenshot {_LAST_BOARD_SHOT}")
             else:
                 DP.generate_reveal(str(reveal_p), g["name"], today, str(aval),
-                                   [] if gid == "colorfle" else steps,
-                                   kind=_kind, palette=_pal)
+                                   steps, kind=_kind, palette=_pal)
             DP.generate_facts(str(facts_p), g["name"], today, str(aval), steps)
             DP.generate_teaser(str(teaser_p), g["name"], today, g["slug"])
 
@@ -4829,14 +4376,11 @@ def run_one(gid):
             parts, chapters, cur = [], [], 0.0
             for p, secs, title in (
                     (recap_p, 5, f"Today's {g['name']} puzzle"),
-                    (None if gid in ("colorfle", "waffle") else hints_p,
-                     10, "Hints before the solve"),
+                    (hints_p, 10, "Hints before the solve"),
                     (None, gd, f"Full solve ({nguess} guesses)"),
                     (reveal_p, 8, "Answer & deduction path"),
                     (facts_p, 8, "Solve breakdown"),
                     (teaser_p, 5, "Tomorrow's puzzle")):
-                if p is None and title == "Hints before the solve":
-                    continue
                 chapters.append((round(cur, 1), title))
                 parts.append(gameplay if p is None else _still(p, secs))
                 cur += gd if p is None else secs
@@ -4874,10 +4418,6 @@ def run_one(gid):
             clip.write_videofile(out, codec="libx264", audio_codec="aac",
                                  fps=24, verbose=False, logger=None)
             final = out
-            for _mn, _mt in _MODE_STARTS.get(gid, []):
-                chapters.append((round(_mt + 20 + 5 + gd * 0.0, 1),
-                                 f"{_mn} solve"))
-            chapters.sort(key=lambda c: c[0])
             srt = DP.build_captions_srt(chapters, total, today, g["name"],
                                          out_path=vdir / "captions.srt")
         except Exception as e:

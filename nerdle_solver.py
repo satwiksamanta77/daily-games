@@ -795,8 +795,8 @@ async def play_mode(page, mode, script_dir, official=None):
             print(f"[{mode['id']}] zoom {_zoom}")
         except Exception:
             pass
-        for _ in range(2):
-            await page.wait_for_timeout(700)
+        for _ in range(4):
+            await page.wait_for_timeout(1000)
             await sweep_popups(page, tag=f":{mode['id']}")
         # popups block input: intro/about splash (Escape), CMP consent (frames)
         for _ in range(2):
@@ -1072,7 +1072,7 @@ async def main():
             print(f"[fakedate] skipped: {e}")
         try:
             if QP_AVAILABLE:
-                await context.add_init_script(script=QP.selective_purge_js())
+                await context.add_init_script(script=QP.prepurge_js())
                 await context.add_init_script(script=QP.consent_watch_js())
         except Exception as e:
             print(f"[watchers] skipped: {e}")
@@ -1112,18 +1112,6 @@ async def main():
             starts.append(time.time() - t0)
             r = await play_mode(page, m, script_dir, official if isinstance(official, dict) else None)
             results.append((m["id"],) + r)
-        # one retry pass for any mode that did not show a real win (maxi etc.)
-        _weak = [mid for mid, _t, _e, _s in results if _s != "won"]
-        if _weak:
-            print(f"[nerdle] retry pass for {_weak}")
-            for i, m in enumerate(NERDLE_MODES):
-                if m["id"] not in _weak:
-                    continue
-                starts[i] = time.time() - t0
-                r = await play_mode(page, m, script_dir,
-                                    official if isinstance(official, dict) else None)
-                results[i] = (m["id"],) + r
-                print(f"[nerdle] retry {m['id']}: {r[-1]}")
         total = time.time() - t0
         vpath = await page.video.path()
         try:
@@ -1163,15 +1151,6 @@ async def main():
                 print(f"[nerdle] polish skipped: {str(_e)[:100]}")
             gameplay = VideoFileClip(str(final))
             gd = float(gameplay.duration or 0)
-            try:
-                _evs = QP.ev_all()
-                _t0 = min([e["t"] for e in _evs], default=None)
-                if _t0 is not None and _t0 > 2.0 and gd - (_t0 - 0.8) > 20:
-                    gameplay = gameplay.subclip(max(0.0, _t0 - 0.8))
-                    gd = float(gameplay.duration or 0)
-                    print(f"[nerdle] intro crop -> {gd:.1f}s")
-            except Exception:
-                pass
             parts, cursor = [], 0.0
             def _img(p, d):
                 return ImageClip(p).set_duration(d).set_fps(24).resize(width=1920, height=1080)

@@ -2,7 +2,7 @@ name: Batch B gamedle - globle
 
 on:
   schedule:
-    - cron: '30 12 * * *'
+    - cron: '30 10 * * *'
   workflow_dispatch:
     inputs:
       game:
@@ -54,7 +54,7 @@ jobs:
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           if [ -n "${{ inputs.date }}" ]; then export FAKE_DATE_ISO="${{ inputs.date }}T00:05:00"; echo "PINNED DATE $FAKE_DATE_ISO"; fi
-          G="${{ inputs.game }}"; if [ -z "$G" ]; then G="${{ matrix.game }}"; fi; if [ "$G" = "globle" ] || [ "$G" = "countryle" ] || [ "$G" = "worgle" ]; then HEADLESS=false xvfb-run -a python -u runner.py --game "$G" || true; else python -u runner.py --game "$G" || true; fi
+          G="${{ inputs.game }}"; if [ -z "$G" ]; then G="${{ matrix.game }}"; fi; python -u runner.py --game "$G" || true
       - name: Upload video artifact
         if: always()
         uses: actions/upload-artifact@v4

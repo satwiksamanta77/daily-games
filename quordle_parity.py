@@ -503,27 +503,6 @@ def ev_all():
     return list(_EV["events"])
 
 
-def selective_purge_js():
-    """Clear ONLY today's-board state; keep streaks/stats/historic/settings so
-    the committed browser_state.json grows a 2-day, 3-day... streak."""
-    return """
-(() => {
-  try {
-    if (document.cookie.indexOf('_qp_purged=1') >= 0) return;
-    document.cookie = '_qp_purged=1;path=/;max-age=3600';
-  } catch (e) {}
-  const KEEP = /streak|stat|historic|history|settings|prefs|theme|dark|lang|email|cookie|consent|account|user|token|session/i;
-  const KILL = /current|today|board|guess|state|play|progress|attempt|last/i;
-  try {
-    for (const k of Object.keys(localStorage)) {
-      if (KILL.test(k) && !KEEP.test(k)) localStorage.removeItem(k);
-    }
-  } catch (e) {}
-  try { sessionStorage.clear(); } catch (e) {}
-})();
-"""
-
-
 def prepurge_js():
     """document-start storage purge: kills the on-camera reload that
     _reset_site_state used to trigger (committed browser_state.json means
@@ -628,6 +607,33 @@ def consent_watch_js():
   } catch (e) {}
 })();
 """ % _CONSENT_TXT
+
+
+def adhide_js():
+    """Visual cleanup: collapse ad slots / sticky promo bars so blocked ads
+    never leave black holes or banner strips inside the gameplay frame."""
+    return """
+(() => {
+  const css = document.createElement('style');
+  css.textContent = `
+    iframe[src*="intergient"], iframe[src*="pageos"], iframe[src*="doubleclick"],
+    iframe[src*="googlesyndication"], iframe[src*="btloader"], iframe[src*="criteo"],
+    iframe[src*="facebook.com"], iframe[src*="recaptcha"],
+    div[id*="google_ads"], div[id*="div-gpt-ad"], .ad-container, .adsbygoogle,
+    .ads, [class*="ad-slot"], [class*="adspace"], [id*="ad-slot"],
+    [class*="sponsored"], .donate-banner, [class*="banner-ad"] {
+      display: none !important; visibility: hidden !important;
+      width: 0 !important; height: 0 !important;
+    }`;
+  const put = () => { if (!document.head) return;
+    if (!document.querySelector('style[data-qpadhide]')) {
+      css.setAttribute('data-qpadhide', '1');
+      document.head.appendChild(css); } };
+  put();
+  document.addEventListener('DOMContentLoaded', put);
+  setInterval(put, 1500);
+})();
+"""
 
 
 def drain_consent_clicks(page):
@@ -830,15 +836,12 @@ def polish_gameplay(src, out_path, crf=17):
     out_path = str(out_path)
     src = str(src)
     mode = os.environ.get("GAMEPLAY_FRAME", "card").lower()
-    # Cursor overlay is OFF by default (owner decision 2026-10-10): the
-    # synthetic pointer never looked original enough to be worth it.
-    if os.environ.get("CURSOR_OVERLAY", "off").lower() in ("on", "1", "true"):
-        evs = ev_all()
-    else:
+    if os.environ.get("CURSOR_OVERLAY", "on").lower() in ("off", "0", "false"):
         evs = []
-    # auto-detect the raw capture size FIRST so cursor coords map correctly
-    # for any viewport (marveldle records 720p to dodge the OOM killer)
-    _rw, _rh = 1920, 1080
+    else:
+        evs = ev_all()
+    # auto-detect the raw capture size so cursor coords map correctly for
+    # any viewport (marveldle records 720p to stay under the OOM killer)
     try:
         import subprocess as _sp2
         _r2 = _sp2.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -847,7 +850,7 @@ def polish_gameplay(src, out_path, crf=17):
                        capture_output=True, text=True, timeout=60)
         _rw, _rh = [int(v) for v in _r2.stdout.strip().split(",")[:2]]
     except Exception:
-        pass
+        _rw, _rh = 1920, 1080
     if mode == "fullbleed":
         cmd = ["ffmpeg", "-y", "-v", "error", "-i", src, "-vf",
                "scale=1920:1080:force_original_aspect_ratio=increase,"
