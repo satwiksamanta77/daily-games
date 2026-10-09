@@ -2584,7 +2584,8 @@ def _s_worldle(page, ans, gid):
                 seg = seg.strip()            # the name is the first plain
                 if not seg or dm and seg.replace(",", "") == dm.group(1) + "km":
                     continue
-                if seg.endswith("km") or not seg.replace("-", "").isalpha():
+                if seg.endswith("km") or not all(
+                        c.isalpha() or c in " '-" for c in seg):
                     continue
                 if len(seg) > 2:
                     nm = seg
