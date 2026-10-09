@@ -2608,12 +2608,17 @@ def _s_countryle(page, ans, gid):
     a = str(ans or "").strip()
     picked = "none"
     _fin = None
-    for _w in range(20):
+    for _w in range(40):
+        try:  # the PLAY! tap route-changes the SPA: refresh the frame handle
+            fr.evaluate("() => 1")
+        except Exception:
+            fr = _countryle_frame(page) or fr
         try:
             _fin = fr.query_selector("input")
         except Exception:
             _fin = None
         if _fin:
+            _dbg(gid, f"game input visible after {_w + 1}s")
             break
         page.wait_for_timeout(1000)
     if not _fin:
