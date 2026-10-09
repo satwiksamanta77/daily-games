@@ -1078,13 +1078,14 @@ def solve_colordle(page, ans):
         except Exception as e:
             print(f"[colordle] planner failed, using direct answer: {e}")
 
+    import random as _rnd
     percents = []
     for g in guesses:
         try:
             _type_into(page, sel, str(g), base_delay=175)
-            page.wait_for_timeout(random.randint(500, 900))
+            page.wait_for_timeout(_rnd.randint(500, 900))
             page.click("button:has-text('Test Color!')")
-            page.wait_for_timeout(random.randint(900, 1400))  # human beat
+            page.wait_for_timeout(_rnd.randint(900, 1400))  # human beat
         except Exception as e:
             return False, f"guess {g!r} failed: {str(e)[:120]}"
         page.wait_for_timeout(3200)
@@ -1186,6 +1187,10 @@ def solve_colorfle(page, ans):
 
     try:
         seq, _ = S.plan_colorfle(colors)
+        import random as _rcf
+        _keep = _rcf.Random(f"colorfle:{A.target_date().isoformat()}").randint(2, 4)
+        if len(seq) > _keep:      # owner rule: 2-4 attempts, never more
+            seq = seq[:_keep - 1] + seq[-1:]
     except Exception as e:
         print(f"[colorfle] planner failed: {e}")
         seq = [colors]
@@ -2365,8 +2370,20 @@ def _s_wordle(page, ans, gid):
         # Flutter only takes keys when the canvas holds focus: one real click
         # (which also feeds the cursor track) + semantics tree up front.
         try:
-            page.mouse.click(960, 620)
-            QP.ev_push(960, 620, "click")
+            _cb = None
+            for _csel in ("flt-glass-pane", "canvas", "flt-glass-pane canvas"):
+                try:
+                    _el = page.query_selector(_csel)
+                    if _el:
+                        _cb = _el.bounding_box()
+                        if _cb:
+                            break
+                except Exception:
+                    continue
+            _cx = _cb["x"] + _cb["width"] / 2 if _cb else 960
+            _cy = _cb["y"] + _cb["height"] / 2 if _cb else 620
+            page.mouse.click(_cx, _cy)
+            QP.ev_push(_cx, _cy, "click")
             page.wait_for_timeout(600)
             _enable_flutter_semantics(page)
             page.evaluate("() => { document.body.style.zoom = '1.6'; }")
@@ -2401,6 +2418,11 @@ def _type_country_guess(page, scope, country):
             "input[type=search], input[placeholder], textarea, "
             "[contenteditable=true], [role=searchbox], [role=combobox] input, "
             "[role=combobox]")
+        if not inp:
+            try:  # last resort: any visible input/textarea in scope
+                inp = scope.query_selector("input, textarea")
+            except Exception:
+                inp = None
         if not inp:
             try:
                 n = scope.evaluate(
@@ -2544,6 +2566,58 @@ def _s_worldle(page, ans, gid):
     if a.lower() in low and any(
             k in low for k in ("guessed!", "bravo", "0 km", "well done")):
         return True, "answer present with real win markers"
+    # Trilateration fallback: the site's daily pick no longer matches any
+    # offline seed port, so derive TODAY'S country from its own distance
+    # feedback exactly like a human with a ruler would.
+    try:
+        rows = page.evaluate("""() => Array.from(document.querySelectorAll(
+            '[class*=row i], li, div')).filter(e => e.offsetParent !== null &&
+            /km$|km\n/i.test((e.innerText || '').trim().slice(-12)))
+            .map(e => (e.innerText || '').replace(/\n/g, '|').slice(0, 90))
+            .slice(0, 8)""") or []
+        import math as _m
+        obs = []
+        for rtxt in rows:
+            dm = re.search(r"([0-9.,]+)\s*km", rtxt)
+            nm = rtxt.split("|")[0].strip()
+            if dm and nm:
+                obs.append((nm.lower(),
+                            float(dm.group(1).replace(",", ""))))
+        live = page.evaluate(
+            "() => fetch('https://cdn-assets.teuteuf.fr/data/common/"
+            "countries.json').then(r => r.ok ? r.json() : null)"
+            ".catch(() => null)")
+        coords = {}
+        for c in (live or []):
+            if isinstance(c, dict) and c.get("latitude") is not None:
+                coords[str(c.get("name", "")).strip().lower()] = (
+                    float(c["latitude"]), float(c["longitude"]))
+        obs = [(n, d) for n, d in obs if n in coords]
+        if len(obs) >= 2 and live:
+            def _hav(p, q):
+                la1, lo1 = _m.radians(p[0]), _m.radians(p[1])
+                la2, lo2 = _m.radians(q[0]), _m.radians(q[1])
+                h = (_m.sin((la2 - la1) / 2) ** 2 +
+                     _m.cos(la1) * _m.cos(la2) * _m.sin((lo2 - lo1) / 2) ** 2)
+                return 6371.0 * 2 * _m.asin(_m.sqrt(h))
+            cands = [n for n, pq in coords.items()
+                     if all(abs(_hav(pq, coords[g]) - d) <= 5.0
+                            for g, d in obs)]
+            _dbg(gid, f"trilateration obs={obs} cands={cands[:4]}")
+            if len(cands) == 1 and cands[0] != a.lower():
+                pick = str(cands[0]).title()
+                ok, detail = _type_country_guess(page, page, pick)
+                if ok:
+                    btn = page.query_selector("button:has-text('Guess')")
+                    if btn and btn.is_visible():
+                        btn.click(timeout=3000)
+                    else:
+                        page.keyboard.press("Enter")
+                    _settle(page, base=3000)
+                    _FOUND_ANSWER[gid] = pick
+                    return True, f"trilaterated {pick!r} from distances"
+    except Exception as e:
+        _dbg(gid, f"trilateration failed: {str(e)[:100]}")
     return False, "board did not confirm the answer"
 
 
