@@ -54,7 +54,7 @@ jobs:
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
-          RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ]; then
+          RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ] || [ "$1" = "globle" ]; then
             HEADLESS=false xvfb-run -a python -u runner.py --game "$1" || true;
           else python -u runner.py --game "$1" || true; fi; }
           if [ -n "${{ inputs.game }}" ]; then RUN "${{ inputs.game }}"; else RUN ${{ matrix.game }}; fi

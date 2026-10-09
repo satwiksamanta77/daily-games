@@ -45,7 +45,7 @@ jobs:
           FORCE_REGENERATE: ${{ inputs.force }}
         run: |
           if [ -n "${{ inputs.date }}" ]; then export FAKE_DATE_ISO="${{ inputs.date }}T00:05:00"; echo "PINNED DATE $FAKE_DATE_ISO"; fi
-          RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ]; then
+          RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ] || [ "$1" = "globle" ]; then
             HEADLESS=false xvfb-run -a python -u runner.py --game "$1" || true;
           else python -u runner.py --game "$1" || true; fi; }
           RUN ${{ matrix.game }}
@@ -102,7 +102,7 @@ jobs:
           FORCE_REGENERATE: ${{ inputs.force }}
         run: |
           if [ -n "${{ inputs.date }}" ]; then export FAKE_DATE_ISO="${{ inputs.date }}T00:05:00"; echo "PINNED DATE $FAKE_DATE_ISO"; fi
-          RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ]; then
+          RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ] || [ "$1" = "globle" ]; then
             HEADLESS=false xvfb-run -a python -u runner.py --game "$1" || true;
           else python -u runner.py --game "$1" || true; fi; }
           RUN ${{ matrix.game }}

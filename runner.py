@@ -2517,6 +2517,18 @@ def _s_globle(page, ans, gid):
     if a.lower() in (body + " " + lst).lower():
         return True, "answer present in guess list after final guess"
     return False, "answer not found in guess list"
+    # React shell: wait for the guess input to mount; one retry reload
+    for _attempt in range(2):
+        try:
+            page.wait_for_selector("input", timeout=30000)
+            break
+        except Exception:
+            _dbg(gid, f"globle input not mounted (attempt {_attempt + 1})")
+            try:
+                page.reload(wait_until="domcontentloaded")
+                page.wait_for_timeout(5000)
+            except Exception:
+                pass
 
 
 def _countryle_frame(page):
