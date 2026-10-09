@@ -75,6 +75,7 @@ def _count_reload(gid, why):
 _VIDEO_T0 = None
 _CLICKS = []
 _FOUND_ANSWER = {}
+_MODE_STARTS = {}
 _LAST_BOARD_SHOT = None
 
 
@@ -2546,6 +2547,31 @@ def _s_worldle(page, ans, gid):
     return False, "board did not confirm the answer"
 
 
+def _globle_live_list(page, gid):
+    """The /answer?day=... index is relative to THE LIST THE APP LOADED.
+    Sniff that request from the resource timing buffer, re-fetch it in-page
+    and return the live country list (owner: fetch the date data during play)."""
+    try:
+        urls = page.evaluate("""() => performance.getEntriesByType('resource')
+            .map(e => e.name).filter(u => /countr|gateway|deno|assets/i.test(u))
+            .slice(0, 12)""") or []
+    except Exception:
+        urls = []
+    for u in urls:
+        try:
+            lst = page.evaluate(
+                "(u) => fetch(u).then(r => r.ok ? r.json() : null)"
+                ".catch(() => null)", u)
+        except Exception:
+            lst = None
+        if isinstance(lst, dict):
+            lst = lst.get("countries") or lst.get("data")
+        if isinstance(lst, list) and len(lst) > 100 and lst[0] and                 ("name" in lst[0] or "country" in lst[0]):
+            _dbg(gid, f"globle live list {len(lst)} from {u[:60]}")
+            return lst
+    return None
+
+
 def _s_globle(page, ans, gid):
     """Globle: plain form (type + Enter), canvas board."""
     _close_modals(page)
@@ -2562,6 +2588,18 @@ def _s_globle(page, ans, gid):
                 page.wait_for_timeout(5000)
             except Exception:
                 pass
+    _live = _globle_live_list(page, gid)
+    if _live:
+        try:
+            _fix = A.globle(A.target_date(), countries=_live)
+            _nm = str(_fix.get("answer") or "").strip()
+            if _nm and _nm.upper() != str(ans).upper():
+                _dbg(gid, f"globle live-list answer {_nm!r} (had {ans!r})")
+                ans = _nm
+                _PLANS.pop(gid, None)
+                _FOUND_ANSWER[gid] = _nm
+        except Exception as _e:
+            _dbg(gid, f"globle live recompute failed: {str(_e)[:80]}")
     seq = _guesses(gid, ans)
     a = str(ans or "").strip()
     for n, g in enumerate(seq):
@@ -3696,7 +3734,10 @@ def _s_marveldle(page, ans, gid):
             except Exception as e:
                 _dbg(gid, f"{u} failed: {str(e)[:100]}")
     if not str(ans or "").strip() or str(ans) == "None":
-        return _marveldle_browser_solve(page, gid)
+        ok, ev = _marveldle_browser_solve(page, gid)
+        if ok:
+            _marveldle_next_mode(page, gid)
+        return ok, ev
     probes = []
     try:
         info = A.marveldle(A.target_date())
@@ -3704,10 +3745,43 @@ def _s_marveldle(page, ans, gid):
                   if isinstance(p, dict) and p.get("name")]
     except BaseException as e:
         print(f"[marveldle] probe info failed: {str(e)[:110]}")
-    return solve_attr_game(page, ans, gid, api_probes=probes)
+    ok, ev = solve_attr_game(page, ans, gid, api_probes=probes)
+    if ok:
+        _marveldle_next_mode(page, gid)
+    return ok, ev
 
 
-def _marveldle_browser_solve(page, gid, max_guesses=14):
+def _marveldle_next_mode(page, gid, mode="MCU"):
+    """After a comics solve, switch to the MCU board and solve it too (the
+    site ships COMICS / MCU / FANTASTIC GRID; one video covers what we can)."""
+    try:
+        _t0 = _VIDEO_T0 or time.time()
+        clicked = False
+        for sel in (f"a:has-text('{mode}')", f"button:has-text('{mode}')"):
+            try:
+                el = page.query_selector(sel)
+                if el and el.is_visible():
+                    el.click(timeout=3000)
+                    clicked = True
+                    break
+            except Exception:
+                continue
+        if not clicked:
+            page.goto("https://marveldle.com/character/audiovisual/guess",
+                      wait_until="domcontentloaded", timeout=30000)
+        page.wait_for_timeout(4000)
+        _MODE_STARTS.setdefault(gid, []).append(
+            (mode, round(time.time() - _t0, 1)))
+        _dbg(gid, f"switched to {mode} mode")
+        return _marveldle_browser_solve(page, gid,
+                                        pool_file="marveldle-mcu.json")
+    except Exception as e:
+        _dbg(gid, f"{mode} mode failed: {str(e)[:90]}")
+        return False, f"{mode} mode: {str(e)[:80]}"
+
+
+def _marveldle_browser_solve(page, gid, max_guesses=14,
+                             pool_file="marveldle-comics.json"):
     """Identify today's character IN-PAGE (the public guess API answers
     205-empty): guess date-seeded candidates from the vendored comics pool,
     read the column feedback, stop on an all-Exact win."""
@@ -3715,7 +3789,7 @@ def _marveldle_browser_solve(page, gid, max_guesses=14):
     import random as _r
     try:
         pool = [c for c in _j.loads((HERE / "frontend_data" / "src" / "lib" /
-                                     "data" / "marveldle-comics.json")
+                                     "data" / pool_file)
                                     .read_text(encoding="utf-8"))
                 if isinstance(c, dict) and c.get("name")]
     except Exception as e:
@@ -4041,7 +4115,7 @@ def run_framed_all(gid, g, tgt, date_key, today, short):
             pass
         try:
             pg.goto(FRAMED_MODES[0][2], wait_until="domcontentloaded", timeout=45000)
-            pg.wait_for_timeout(6000)
+            pg.wait_for_timeout(3000)
             per_mode, solved_modes = solve_framed_modes(pg, answers)
             try:
                 pg.screenshot(path=str(vdir / "shot_win.png"))
@@ -4688,6 +4762,10 @@ def run_one(gid):
             clip.write_videofile(out, codec="libx264", audio_codec="aac",
                                  fps=24, verbose=False, logger=None)
             final = out
+            for _mn, _mt in _MODE_STARTS.get(gid, []):
+                chapters.append((round(_mt + 20 + 5 + gd * 0.0, 1),
+                                 f"{_mn} solve"))
+            chapters.sort(key=lambda c: c[0])
             srt = DP.build_captions_srt(chapters, total, today, g["name"],
                                          out_path=vdir / "captions.srt")
         except Exception as e:

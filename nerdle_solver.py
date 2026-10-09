@@ -795,8 +795,8 @@ async def play_mode(page, mode, script_dir, official=None):
             print(f"[{mode['id']}] zoom {_zoom}")
         except Exception:
             pass
-        for _ in range(4):
-            await page.wait_for_timeout(1000)
+        for _ in range(2):
+            await page.wait_for_timeout(700)
             await sweep_popups(page, tag=f":{mode['id']}")
         # popups block input: intro/about splash (Escape), CMP consent (frames)
         for _ in range(2):

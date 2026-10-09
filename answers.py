@@ -662,7 +662,7 @@ def countryle(d=None):
 
 
 # ---------- globle ----------
-def globle(d=None):
+def globle(d=None, countries=None):
     """Globle: /answer?day=... returns an AES-passphrase country index.
 
     The site refuses future-dated days (404), so if the target day is ahead
@@ -672,7 +672,7 @@ def globle(d=None):
     import requests
     d = d or target_date()
     key = d.isoformat()
-    countries = json.loads(
+    countries = countries or json.loads(
         (ZAI / "src/lib/data/globle-countries.json").read_text("utf-8"))
     K = "ee53e68c3074206a002bf01333b047d5"
 
