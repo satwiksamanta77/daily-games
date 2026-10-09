@@ -4379,7 +4379,9 @@ def run_one(gid):
                                 short = _prev.strftime("%b %d")
                                 ans, aval = _ans2, _aval2
                                 evidence += f" (day-lag retry: board={_prev}, re-keyed)"
-                    except Exception as _e2:
+                    except SystemExit as _se2:
+                        _dbg(gid, f"day-lag retry answer unavailable: {_se2}")
+                    except BaseException as _e2:
                         _dbg(gid, f"day-lag retry failed: {str(_e2)[:100]}")
         except SystemExit as _se:
             evidence = f"SystemExit in solver: {_se}"
