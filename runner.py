@@ -4333,11 +4333,25 @@ def run_one(gid):
                                     f"publish day is {tgt}; deferred to dawn")
                         print(f"[{gid}] {evidence}")
                     elif GAMES[gid].get("board_lags"):
-                        # batter-up's live board trails its CDN/publish date by
-                        # one day by design: play the board viewers SEE, keep
-                        # the publish-day label, and say so in the debug log.
-                        print(f"[{gid}] board-lag: playing served board "
-                              f"{_sv} under publish key {date_key}")
+                        # batter-up's live board label trails the real calendar
+                        # by one day (site shows label L on real day L+1), so a
+                        # video keyed K can only ever record board K during the
+                        # morning/dawn window of real day K... which is target
+                        # K+1's run seeing served K = tgt-1. Re-key the video to
+                        # the board date so key, answer and on-screen board
+                        # always agree; every other window defers.
+                        if _sv == tgt - timedelta(days=1):
+                            date_key = _sv.isoformat()
+                            today = _sv.strftime("%B %d, %Y")
+                            short = _sv.strftime("%b %d")
+                            print(f"[{gid}] board-lag: board {date_key} is live "
+                                  f"now; video keyed to the board date")
+                        else:
+                            _defer_stale = True
+                            evidence = (f"board-lag: board {tgt - timedelta(days=1)} "
+                                        f"only goes live in the morning window; "
+                                        f"deferred (served {_sv})")
+                            print(f"[{gid}] {evidence}")
                     else:
                         date_key = _sv.isoformat()
                         today = _sv.strftime("%B %d, %Y")
