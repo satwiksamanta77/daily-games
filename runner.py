@@ -2699,7 +2699,8 @@ def _s_countryle(page, ans, gid):
                     _dbg(gid, f"modal after guess {n + 1}: {_dlg!r}")
             except Exception:
                 pass
-            if '"complete":true' in _h2 or '"complete": true' in _h2:
+            _h2n = _h2.replace('\\"', '"').replace('\"', '"')
+            if '"complete":true' in _h2n or '"complete": true' in _h2n:
                 return True, f"app historic complete=true after guess {n + 1} ({g!r})"
         except Exception:
             pass
@@ -2721,7 +2722,8 @@ def _s_countryle(page, ans, gid):
         }""") or ""
     except Exception:
         _hist = ""
-    if '"complete":true' in _hist or '"complete": true' in _hist:
+    _histn = _hist.replace('\\"', '"').replace('\"', '"')
+    if '"complete":true' in _histn or '"complete": true' in _histn:
         return True, f"app historic complete=true (picked {picked!r})"
     low = body.lower()
     if a.lower() in low and any(k in low for k in (
