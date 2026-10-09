@@ -2549,7 +2549,7 @@ def _s_countryle(page, ans, gid):
                         .filter(e => e && e.offsetParent !== null);
                     for (const b of btns) {
                         const t = (b.innerText || '').trim().toUpperCase();
-                        if (/^(NEXT|SKIP|PLAY|START|CONTINUE|GO|GOT IT)$/.test(t)) {
+                        if (/^(NEXT|SKIP|PLAY|START|CONTINUE|GO|GOT IT|PLAY NOW|LET'S GO|BEGIN|GUESS)/.test(t)) {
                             const r = b.getBoundingClientRect();
                             if (r.width > 4 && r.height > 4)
                                 return {t: t, x: r.x + r.width / 2,
@@ -2564,7 +2564,7 @@ def _s_countryle(page, ans, gid):
                 break
             try:
                 _before = (fr.evaluate(
-                    "() => document.body.innerText.slice(0, 200)") or "")
+                    "() => document.body.innerText") or "")
             except Exception:
                 _before = ""
             page.mouse.click(box["x"], box["y"])   # iframe is full-page: 0,0
@@ -2576,9 +2576,11 @@ def _s_countryle(page, ans, gid):
                     _dbg(gid, "input visible, onboarding done")
                     break
                 _after = (fr.evaluate(
-                    "() => document.body.innerText.slice(0, 200)") or "")
+                    "() => document.body.innerText") or "")
                 if _after == _before:
                     _dbg(gid, "slide unchanged after trusted tap")
+                else:
+                    _dbg(gid, f"slide advanced ({len(_before)}->{len(_after)} chars)")
             except Exception:
                 pass
     seq = _guesses(gid, ans)
@@ -2593,6 +2595,33 @@ def _s_countryle(page, ans, gid):
         if _fin:
             break
         page.wait_for_timeout(1000)
+    if not _fin:
+        # last resort: tap any remaining CTA in the frame and wait longer
+        for _extra in range(6):
+            try:
+                _bx = fr.evaluate("""() => {
+                    const b = Array.from(document.querySelectorAll('button, a'))
+                        .filter(e => e.offsetParent !== null &&
+                                 /PLAY|START|GUESS|BEGIN|CONTINUE|SKIP/i.test(
+                                   (e.innerText||'').trim())).pop();
+                    if (!b) return null;
+                    const r = b.getBoundingClientRect();
+                    return {x: r.x + r.width/2, y: r.y + r.height/2,
+                            t: (b.innerText||'').trim()};
+                }""")
+            except Exception:
+                _bx = None
+            if _bx:
+                page.mouse.click(_bx["x"], _bx["y"])
+                _push_click_at(_bx["x"], _bx["y"])
+                _dbg(gid, f"extra CTA tap {_bx['t']!r}")
+            page.wait_for_timeout(4000)
+            try:
+                _fin = fr.query_selector("input")
+            except Exception:
+                _fin = None
+            if _fin:
+                break
     if not _fin:
         return False, "no input inside app iframe"
     for n, g in enumerate(seq):

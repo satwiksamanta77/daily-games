@@ -1112,6 +1112,18 @@ async def main():
             starts.append(time.time() - t0)
             r = await play_mode(page, m, script_dir, official if isinstance(official, dict) else None)
             results.append((m["id"],) + r)
+        # one retry pass for any mode that did not show a real win (maxi etc.)
+        _weak = [mid for mid, _t, _e, _s in results if _s != "won"]
+        if _weak:
+            print(f"[nerdle] retry pass for {_weak}")
+            for i, m in enumerate(NERDLE_MODES):
+                if m["id"] not in _weak:
+                    continue
+                starts[i] = time.time() - t0
+                r = await play_mode(page, m, script_dir,
+                                    official if isinstance(official, dict) else None)
+                results[i] = (m["id"],) + r
+                print(f"[nerdle] retry {m['id']}: {r[-1]}")
         total = time.time() - t0
         vpath = await page.video.path()
         try:

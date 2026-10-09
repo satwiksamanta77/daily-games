@@ -813,6 +813,18 @@ def polish_gameplay(src, out_path, crf=17):
         evs = []
     else:
         evs = ev_all()
+    # auto-detect the raw capture size FIRST so cursor coords map correctly
+    # for any viewport (marveldle records 720p to dodge the OOM killer)
+    _rw, _rh = 1920, 1080
+    try:
+        import subprocess as _sp2
+        _r2 = _sp2.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                        "-show_entries", "stream=width,height",
+                        "-of", "csv=p=0", src],
+                       capture_output=True, text=True, timeout=60)
+        _rw, _rh = [int(v) for v in _r2.stdout.strip().split(",")[:2]]
+    except Exception:
+        pass
     if mode == "fullbleed":
         cmd = ["ffmpeg", "-y", "-v", "error", "-i", src, "-vf",
                "scale=1920:1080:force_original_aspect_ratio=increase,"
@@ -830,17 +842,6 @@ def polish_gameplay(src, out_path, crf=17):
         ox, oy = (1920 - fw) / 2.0, (1080 - fh) / 2.0
         scx, scy = fw / float(_rw), fh / float(_rh)
     LAST_POLISH.update(mode=mode, events=len(evs), clips=0, base=base)
-    # auto-detect the raw capture size so cursor coords map correctly for
-    # any viewport (marveldle records 720p to stay under the OOM killer)
-    try:
-        import subprocess as _sp2
-        _r2 = _sp2.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
-                        "-show_entries", "stream=width,height",
-                        "-of", "csv=p=0", src],
-                       capture_output=True, text=True, timeout=60)
-        _rw, _rh = [int(v) for v in _r2.stdout.strip().split(",")[:2]]
-    except Exception:
-        _rw, _rh = 1920, 1080
     if not evs or base == src and not _QPPath(base).exists():
         return base
     try:
