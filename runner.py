@@ -2570,11 +2570,17 @@ def _s_worldle(page, ans, gid):
     # offline seed port, so derive TODAY'S country from its own distance
     # feedback exactly like a human with a ruler would.
     try:
-        rows = page.evaluate("""() => Array.from(document.querySelectorAll(
-            '[class*=row i], li, div')).filter(e => e.offsetParent !== null &&
-            /km$|km\n/i.test((e.innerText || '').trim().slice(-12)))
-            .map(e => (e.innerText || '').replace(/\n/g, '|').slice(0, 90))
-            .slice(0, 8)""") or []
+        rows = page.evaluate("""() => {
+          const out = [];
+          for (const e of document.querySelectorAll('div, li')) {
+            if (e.offsetParent === null) continue;
+            const t = (e.innerText || '').trim();
+            if (t && t.length < 90 && t.toLowerCase().includes('km')
+                && t.split('\n').length <= 4) out.push(t.replace(/\n/g, '|'));
+            if (out.length >= 8) break;
+          }
+          return out;
+        }""") or []
         import math as _m
         obs = []
         for rtxt in rows:
@@ -3506,7 +3512,11 @@ def _s_phrazle(page, ans, gid):
     # cells is rejected with "Please use all available spaces".
     pick = _phrazle_browser_answer(page, A.target_date()) or {}
     cand = pick.get("answer")
-    groups = _phrazle_grid_letters(page)
+    for _gw in range(10):          # grid renders late; shape must be real
+        groups = _phrazle_grid_letters(page)
+        if groups:
+            break
+        page.wait_for_timeout(1500)
     if groups and cand:
         if [len(w) for w in cand.split()] != groups:
             for alt in A.phrazle_by_shape(A.target_date(), groups):
@@ -3854,7 +3864,7 @@ def _marveldle_next_mode(page, gid, mode="MCU"):
         return False, f"{mode} mode: {str(e)[:80]}"
 
 
-def _marveldle_browser_solve(page, gid, max_guesses=14,
+def _marveldle_browser_solve(page, gid, max_guesses=30,
                              pool_file="marveldle-comics.json"):
     """Identify today's character IN-PAGE (the public guess API answers
     205-empty): guess date-seeded candidates from the vendored comics pool,
