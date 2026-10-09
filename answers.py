@@ -571,8 +571,18 @@ def worldle(d=None):
     number = _days(d, date(2022, 1, 21)) + 1
     known = {"2026-02-25": "WS", "2026-02-26": "SM", "2026-02-27": "BN",
              "2026-02-28": "BG", "2026-03-01": "GR", "2026-03-02": "MG"}
-    countries = json.loads(
-        (ZAI / "src/lib/data/worldle/countries.json").read_text("utf-8"))
+    try:  # LIVE list at answer time: a drifted vendored snapshot shifts the
+        # seed index and hands us the wrong country (France vs Kyrgyzstan)
+        import requests as _rq
+        _r = _rq.get("https://worldle.teuteuf.fr/common/countries.json",
+                     headers={"User-Agent": "WordSolverX Video"}, timeout=20)
+        countries = _r.json() if _r.ok else None
+        if not isinstance(countries, list) or not countries:
+            raise ValueError("bad live list")
+    except Exception as _e:
+        print(f"[worldle] live list failed ({str(_e)[:60]}); vendored")
+        countries = json.loads(
+            (ZAI / "src/lib/data/worldle/countries.json").read_text("utf-8"))
     code = known.get(d.isoformat())
     idx = None
     if not code:

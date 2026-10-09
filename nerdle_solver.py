@@ -1072,7 +1072,7 @@ async def main():
             print(f"[fakedate] skipped: {e}")
         try:
             if QP_AVAILABLE:
-                await context.add_init_script(script=QP.prepurge_js())
+                await context.add_init_script(script=QP.selective_purge_js())
                 await context.add_init_script(script=QP.consent_watch_js())
         except Exception as e:
             print(f"[watchers] skipped: {e}")
@@ -1163,6 +1163,15 @@ async def main():
                 print(f"[nerdle] polish skipped: {str(_e)[:100]}")
             gameplay = VideoFileClip(str(final))
             gd = float(gameplay.duration or 0)
+            try:
+                _evs = QP.ev_all()
+                _t0 = min([e["t"] for e in _evs], default=None)
+                if _t0 is not None and _t0 > 2.0 and gd - (_t0 - 0.8) > 20:
+                    gameplay = gameplay.subclip(max(0.0, _t0 - 0.8))
+                    gd = float(gameplay.duration or 0)
+                    print(f"[nerdle] intro crop -> {gd:.1f}s")
+            except Exception:
+                pass
             parts, cursor = [], 0.0
             def _img(p, d):
                 return ImageClip(p).set_duration(d).set_fps(24).resize(width=1920, height=1080)

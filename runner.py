@@ -1080,8 +1080,10 @@ def solve_colordle(page, ans):
     percents = []
     for g in guesses:
         try:
-            _type_into(page, sel, str(g), base_delay=140)
+            _type_into(page, sel, str(g), base_delay=175)
+            page.wait_for_timeout(random.randint(500, 900))
             page.click("button:has-text('Test Color!')")
+            page.wait_for_timeout(random.randint(900, 1400))  # human beat
         except Exception as e:
             return False, f"guess {g!r} failed: {str(e)[:120]}"
         page.wait_for_timeout(3200)
@@ -1701,6 +1703,16 @@ def _play_guesses(page, guesses, after_each=None, answer=None):
 def solve_wordle_like(page, ans, guesses=None, opener=None):
     """Wordle-style games (canuckle, phoodle): real deduction sequence."""
     _close_modals(page)
+    if guesses:   # never replay the opener when it IS the answer (canuckle
+        up = [str(g).upper() for g in guesses]   # duplicate-guess bug)
+        a = str(ans).upper()
+        seen, clean = set(), []
+        for g in up[:-1]:
+            if g in seen or g == a:
+                continue
+            seen.add(g)
+            clean.append(g)
+        guesses = clean + [up[-1]]
     if not guesses:
         g5, pool = S.words_generic5()
         opener = opener or _daily_opener(["CRANE", "SLATE", "ADIEU", "TRACE",
@@ -2050,7 +2062,15 @@ def _plan_for(gid, answer):
         if cols:
             p = S.plan_colorfle([int(c) for c in cols])
         else:
-            p = _honest_fallback(a, max_guesses=6)
+            p = _honest_fallback(a, max_guesses=4)
+        seq, steps = p
+        import random as _rc
+        keep = _rc.Random(f"colorfle:{A.target_date().isoformat()}").randint(2, 4)
+        if len(seq) > keep:          # owner: 2-4 attempts max, never more
+            seq = seq[:keep - 1] + seq[-1:]
+            steps = [dict(st, turn=i + 1)
+                     for i, st in enumerate(steps[:keep - 1] + steps[-1:])]
+            p = (seq, steps)
     elif gid in ("semantle", "contexto"):
         # Semantic games score a guess 0-100 with no letter feedback, so the
         # honest plan is a spread of real probes ending on the answer. Both
@@ -2059,6 +2079,19 @@ def _plan_for(gid, answer):
         # puzzle DATE, so the opening is different every day instead of the
         # same six hand-written words in every video.
         p = S.semantic_probe_path(a, gid=gid, width=5, seed=_day_seed(gid))
+        seq, steps = p
+        seen, seq2 = set(), []
+        for g in seq:                     # never type the same word twice
+            if str(g).upper() in seen:
+                continue
+            seen.add(str(g).upper())
+            seq2.append(g)
+        if not seq2 or str(seq2[-1]).upper() != a:
+            seq2.append(a)
+        steps = [{"turn": i + 1, "guess": g, "pattern": "",
+                  "pool_before": None, "pool_after": None}
+                 for i, g in enumerate(seq2)]
+        p = (seq2, steps)
     elif gid.startswith("framed"):
         # Framed is a movie-frame game: the site gives NO letter feedback and no
         # similarity score, so constraint propagation is impossible. The
@@ -2335,6 +2368,13 @@ def _s_wordle(page, ans, gid):
             QP.ev_push(960, 620, "click")
             page.wait_for_timeout(600)
             _enable_flutter_semantics(page)
+            page.evaluate("() => { document.body.style.zoom = '1.6'; }")
+            for _w in range(15):     # wait out LOADING PUZZLE dead time
+                if page.evaluate(
+                        "() => document.querySelectorAll("
+                        "'flt-semantics[aria-label]').length") > 3:
+                    break
+                page.wait_for_timeout(2000)
         except Exception:
             pass
     # A stale saved board is the difference between "guessed and lost" and
@@ -2374,6 +2414,10 @@ def _type_country_guess(page, scope, country):
         except Exception:
             pass
         inp.click(timeout=3000)
+        try:
+            inp.fill("")        # hard clear: select-all unreliable here
+        except Exception:
+            pass
         try:
             _bb = inp.bounding_box()
             if _bb:
@@ -2434,6 +2478,36 @@ def _s_worldle(page, ans, gid):
     _close_modals(page)
     seq = _guesses(gid, ans)
     a = str(ans or "").strip()
+    # Fetch the LIVE country list IN-PAGE while playing: a drifted vendored
+    # snapshot shifts the seed index and serves the wrong country (the
+    # France-silhouette-vs-Kyrgyzstan video).
+    live = None
+    try:
+        live = page.evaluate(
+            "() => fetch('/common/countries.json')"
+            ".then(r => r.ok ? r.json() : null).catch(() => null)")
+    except Exception:
+        live = None
+    if isinstance(live, list) and live:
+        try:
+            import subprocess as _sp
+            from datetime import date as _d
+            _num = A._days(A.target_date(), _d(2022, 1, 21)) + 1
+            _o = _sp.run(["node", str(HERE / "worldle_answer.js"),
+                          str(_num), str(len(live))],
+                         capture_output=True, text=True, timeout=60)
+            if _o.returncode == 0 and _o.stdout.strip().isdigit():
+                _ls = sorted(live, key=lambda c: str(c.get("code", "")))
+                _cand = str(_ls[int(_o.stdout.strip())].get("name") or "").strip()
+                if _cand and _cand.upper() != a.upper():
+                    _dbg(gid, f"live list says {_cand!r} (engine had {a!r})")
+                    a = _cand
+                    ans = a
+                    _FOUND_ANSWER[gid] = a
+                    _PLANS.pop(gid, None)
+                    seq = _guesses(gid, a)
+        except Exception as _e:
+            _dbg(gid, f"live recompute failed: {str(_e)[:80]}")
     for n, g in enumerate(seq):
         last = (n == len(seq) - 1)
         _idle_drift(page)
@@ -2458,18 +2532,17 @@ def _s_worldle(page, ans, gid):
             body = ""
         low = body.lower()
         if last and a.lower() in low and any(
-                k in low for k in ("guesses remaining", "well done",
-                                  "correct", "share", "guessed")):
+                k in low for k in ("guessed!", "bravo", "0 km", "well done")):
             return True, f"answer row rendered after guess {n + 1}"
     page.wait_for_timeout(2500)
     try:
         body = (page.evaluate("() => document.body.innerText") or "")
     except Exception:
         body = ""
-    if a.lower() in body.lower() and any(
-            k in body.lower() for k in ("well done", "correct",
-                                        "guesses remaining", "share")):
-        return True, "answer present with post-game markers"
+    low = body.lower()
+    if a.lower() in low and any(
+            k in low for k in ("guessed!", "bravo", "0 km", "well done")):
+        return True, "answer present with real win markers"
     return False, "board did not confirm the answer"
 
 
@@ -3300,6 +3373,22 @@ def _phrazle_browser_answer(page, tgt):
 def _s_phrazle(page, ans, gid):
     _close_modals(page)
     _close_generic_howto(page)
+    for _sel in ("button:has-text('Got it')", "button:has-text('OK')",
+                 "[aria-label='close']", "[aria-label='Close']"):
+        try:
+            _el = page.query_selector(_sel)
+            if _el and _el.is_visible():
+                _el.click(timeout=2000)
+                page.wait_for_timeout(700)
+        except Exception:
+            continue
+    try:  # keep the board on camera while typing
+        page.evaluate("""() => {
+          const b = document.querySelector('table, .board, [class*=grid i]');
+          if (b) b.scrollIntoView({block: 'center'});
+        }""")
+    except Exception:
+        pass
     # The page's own arithmetic wins over the host clock, and the board's cell
     # groups are the final arbiter: a phrase that does not fill the visible
     # cells is rejected with "Please use all available spaces".
@@ -3472,20 +3561,39 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
             if not last:
                 continue
             return False, f"answer pick failed ({detail})"
-        try:
-            btn = page.query_selector(
-                "button:has-text('Guess'), button:has-text('Submit'), "
-                "button:has-text('Go')")
-            if btn and btn.is_visible():
-                btn.click(timeout=3000)
-            else:
-                page.keyboard.press("Enter")
-        except Exception:
+        def _rows():
             try:
-                page.keyboard.press("Enter")
+                return page.evaluate("""() => Array.from(document.querySelectorAll(
+                    '[class*=guess i], [class*=row i], table tr'))
+                    .filter(e => e.offsetParent !== null &&
+                            (e.innerText || '').trim().length > 2).length""")
             except Exception:
-                pass
-        _settle(page, base=3000)
+                return -1
+        _r0 = _rows()
+        for _st in range(3):   # VERIFIED submit: a guess row must appear
+            try:
+                btn = page.query_selector(
+                    "button:has-text('Guess'), button:has-text('Submit'), "
+                    "button:has-text('Go')")
+                if _st == 2 and btn and btn.is_visible():
+                    btn.click(timeout=3000)
+                elif _st == 1:
+                    page.keyboard.press("Enter")
+                elif btn and btn.is_visible():
+                    btn.click(timeout=3000)
+                else:
+                    page.keyboard.press("Enter")
+            except Exception:
+                try:
+                    page.keyboard.press("Enter")
+                except Exception:
+                    pass
+            page.wait_for_timeout(2200)
+            _r1 = _rows()
+            _dbg(gid, f"guess {n + 1} submit try {_st} rows {_r0} -> {_r1}")
+            if _r1 > _r0:
+                break
+        _settle(page, base=2500)
         try:
             txt = (page.evaluate("() => document.body.innerText") or "")
             cols = page.evaluate(
@@ -3905,7 +4013,7 @@ def run_framed_all(gid, g, tgt, date_key, today, short):
             except Exception:
                 pass
         try:
-            ctx.add_init_script(script=QP.prepurge_js())
+            ctx.add_init_script(script=QP.selective_purge_js())
             ctx.add_init_script(script=QP.consent_watch_js())
         except Exception:
             pass
@@ -4006,6 +4114,17 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
             play_src = _polish_gameplay(str(final), vdir / "gameplay_1080.mp4")
             gameplay = VideoFileClip(play_src)
             gd = float(gameplay.duration or 0)
+            # crop the dead page-load intro (owner: "initial too much waiting
+            # to start solving should be cropped, don't crop the main part")
+            _evs = QP.ev_all()
+            _t0 = min([e["t"] for e in _evs], default=None)
+            if _t0 is not None and _t0 > 2.0:
+                _cut = max(0.0, _t0 - 0.8)
+                if gd - _cut > 20:
+                    gameplay = gameplay.subclip(_cut)
+                    gd = float(gameplay.duration or 0)
+                    _dbg(gid, f"intro crop: cut {_cut:.1f}s of page-load dead "
+                              f"time, gameplay now {gd:.1f}s")
 
             # ---- per-mode "NOW PLAYING" cards -------------------------------
             # The session is recorded as ONE continuous clip, so the mode
@@ -4246,7 +4365,7 @@ def run_one(gid):
         # Pre-navigation storage purge (kills the on-camera reload) and the
         # continuous consent/tooltip watcher (kills the mid-video CMP banner).
         try:
-            ctx.add_init_script(script=QP.prepurge_js())
+            ctx.add_init_script(script=QP.selective_purge_js())
             ctx.add_init_script(script=QP.consent_watch_js())
             if gid == "countryle":
                 # seed the Angular settings store so isFirstLogin() is false
@@ -4311,7 +4430,7 @@ def run_one(gid):
             pass
         try:
             pg.goto(g["url"], wait_until="domcontentloaded", timeout=45000)
-            pg.wait_for_timeout(6000)
+            pg.wait_for_timeout(2500)
             _close_modals(pg)
             # The site's own answer request has now been captured, so we know
             # which day the board really is. If that differs from the day the
@@ -4376,7 +4495,7 @@ def run_one(gid):
                         solved, evidence = solver(pg, aval_s, gid)
                 except TypeError:
                     solved, evidence = solver(pg, aval_s)
-                if solved and gid == "marveldle" and _FOUND_ANSWER.get(gid):
+                if solved and _FOUND_ANSWER.get(gid):
                     aval = _FOUND_ANSWER[gid]
                     aval_s = str(aval)
                     ans = {"answer": aval, "via": "browser-solve"}
@@ -4505,7 +4624,8 @@ def run_one(gid):
                 _dbg(gid, f"reveal slide uses board screenshot {_LAST_BOARD_SHOT}")
             else:
                 DP.generate_reveal(str(reveal_p), g["name"], today, str(aval),
-                                   steps, kind=_kind, palette=_pal)
+                                   [] if gid == "colorfle" else steps,
+                                   kind=_kind, palette=_pal)
             DP.generate_facts(str(facts_p), g["name"], today, str(aval), steps)
             DP.generate_teaser(str(teaser_p), g["name"], today, g["slug"])
 
@@ -4523,11 +4643,14 @@ def run_one(gid):
             parts, chapters, cur = [], [], 0.0
             for p, secs, title in (
                     (recap_p, 5, f"Today's {g['name']} puzzle"),
-                    (hints_p, 10, "Hints before the solve"),
+                    (None if gid in ("colorfle", "waffle") else hints_p,
+                     10, "Hints before the solve"),
                     (None, gd, f"Full solve ({nguess} guesses)"),
                     (reveal_p, 8, "Answer & deduction path"),
                     (facts_p, 8, "Solve breakdown"),
                     (teaser_p, 5, "Tomorrow's puzzle")):
+                if p is None and title == "Hints before the solve":
+                    continue
                 chapters.append((round(cur, 1), title))
                 parts.append(gameplay if p is None else _still(p, secs))
                 cur += gd if p is None else secs

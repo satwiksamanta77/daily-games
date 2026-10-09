@@ -503,6 +503,27 @@ def ev_all():
     return list(_EV["events"])
 
 
+def selective_purge_js():
+    """Clear ONLY today's-board state; keep streaks/stats/historic/settings so
+    the committed browser_state.json grows a 2-day, 3-day... streak."""
+    return """
+(() => {
+  try {
+    if (document.cookie.indexOf('_qp_purged=1') >= 0) return;
+    document.cookie = '_qp_purged=1;path=/;max-age=3600';
+  } catch (e) {}
+  const KEEP = /streak|stat|historic|history|settings|prefs|theme|dark|lang|email|cookie|consent|account|user|token|session/i;
+  const KILL = /current|today|board|guess|state|play|progress|attempt|last/i;
+  try {
+    for (const k of Object.keys(localStorage)) {
+      if (KILL.test(k) && !KEEP.test(k)) localStorage.removeItem(k);
+    }
+  } catch (e) {}
+  try { sessionStorage.clear(); } catch (e) {}
+})();
+"""
+
+
 def prepurge_js():
     """document-start storage purge: kills the on-camera reload that
     _reset_site_state used to trigger (committed browser_state.json means
@@ -809,10 +830,12 @@ def polish_gameplay(src, out_path, crf=17):
     out_path = str(out_path)
     src = str(src)
     mode = os.environ.get("GAMEPLAY_FRAME", "card").lower()
-    if os.environ.get("CURSOR_OVERLAY", "on").lower() in ("off", "0", "false"):
-        evs = []
-    else:
+    # Cursor overlay is OFF by default (owner decision 2026-10-10): the
+    # synthetic pointer never looked original enough to be worth it.
+    if os.environ.get("CURSOR_OVERLAY", "off").lower() in ("on", "1", "true"):
         evs = ev_all()
+    else:
+        evs = []
     # auto-detect the raw capture size FIRST so cursor coords map correctly
     # for any viewport (marveldle records 720p to dodge the OOM killer)
     _rw, _rh = 1920, 1080

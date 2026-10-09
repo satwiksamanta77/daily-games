@@ -177,7 +177,9 @@ def _center(d, txt, font, cx, cy):
 
 
 def _tile_row(d, f, word, pattern, y, size=96, gap=14):
-    n = len(word)
+    n = max(1, len(word))
+    if n * size + (n - 1) * gap > W - 160:   # long answers: shrink to fit
+        size = max(34, (W - 160 - (n - 1) * gap) // n)
     total = n * size + (n - 1) * gap
     x = (W - total) // 2
     for i, ch in enumerate(word.upper()):
