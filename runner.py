@@ -2568,12 +2568,12 @@ def _s_worldle(page, ans, gid):
           for (const e of document.querySelectorAll('div, li')) {
             if (e.offsetParent === null) continue;
             const t = (e.innerText || '').trim();
-            if (t && t.length < 90 && t.toLowerCase().includes('km')
-                && t.split('\n').length <= 4) out.push(t.replace(/\n/g, '|'));
+            if (t && t.length < 90 && t.indexOf('km') >= 0) out.push(t);
             if (out.length >= 8) break;
           }
           return out;
         }""") or []
+        rows = [str(r).replace("\n", "|") for r in rows]
         import math as _m
         obs = []
         for rtxt in rows:
@@ -3421,37 +3421,33 @@ def _phrazle_won(page):
 
 
 def _phrazle_grid_letters(page):
-    """The live board's per-word cell groups, e.g. [5, 5] or [4, 2, 3, 5].
-
-    Read from the real DOM (confirmed live): every word is wrapped in a
-    `.wordBreak` div holding its `.row_block` letter cells, with a spacer
-    `.wordBreak` containing one `.blockSpace` between words. One `.wordBreak`
-    with N real cells contributes one group of size N, so a 5+5 board reads
-    [5, 5] directly, whether or not letters have been typed.
-    """
+    """Live board word-shape, e.g. [5, 5]: per visible .wordhunt-row, walk the
+    .row_block cells and split on .blockSpace spacers (the old .wordBreak
+    wrappers no longer exist in the site's DOM)."""
     try:
         return page.evaluate("""() => {
           const vis = e => e && e.offsetParent !== null;
           const rows = Array.from(document.querySelectorAll(
-            '.wordhunt-row.current-row')).filter(vis);
-          const tgt = rows.length ? rows : Array.from(
-            document.querySelectorAll('.wordhunt-row')).filter(vis);
-          const groups = [];
-          for (const r of tgt) {
-            for (const wb of Array.from(r.querySelectorAll('.wordBreak'))
-                 .filter(vis)) {
-              const n = Array.from(wb.querySelectorAll('.row_block'))
-                .filter(e => vis(e) && !(e.classList &&
-                                e.classList.contains('blockSpace'))).length;
-              if (n > 0) groups.push(n);
+            '.wordhunt-row')).filter(vis);
+          for (const r of rows) {
+            const cells = Array.from(r.querySelectorAll(
+              '.row_block, .blockSpace')).filter(vis);
+            if (!cells.length) continue;
+            const groups = [];
+            let cur = 0;
+            for (const c of cells) {
+              if (c.classList && c.classList.contains('blockSpace')) {
+                if (cur) groups.push(cur);
+                cur = 0;
+              } else cur++;
             }
-            if (groups.length >= 1) break;
+            if (cur) groups.push(cur);
+            if (groups.length) return groups;
           }
-          return groups;
+          return [];
         }""") or []
     except Exception:
         return []
-
 
 def _phrazle_browser_answer(page, tgt):
     """Let the page pick its own answer, then trust it.
@@ -3510,6 +3506,7 @@ def _s_phrazle(page, ans, gid):
         if groups:
             break
         page.wait_for_timeout(1500)
+    _dbg(gid, f"board shape groups={groups}")
     if groups and cand:
         if [len(w) for w in cand.split()] != groups:
             for alt in A.phrazle_by_shape(A.target_date(), groups):
