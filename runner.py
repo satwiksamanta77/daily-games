@@ -2243,6 +2243,7 @@ def _live_day_answer(gid, url=""):
         "searchle": ("searchle",),
         "semantle": ("semantle",),
         "phoodle": ("phoodle",),
+        "phrazle": ("solitaired",),
     }.get(gid, ())
     for host, iso in hosts.items():
         if any(h in host.lower() for h in hints):
@@ -2672,8 +2673,22 @@ def _s_countryle(page, ans, gid):
         body = ""
     low = body.lower()
     if a.lower() in low and any(k in low for k in (
-            "guessed", "correct", "well done", "statistics", "share")):
+            "guessed", "correct", "well done", "statistics", "share",
+            "congratulations", "you got it", "play again", "completed",
+            "next country", "result")):
         return True, f"answer row rendered (picked {picked!r})"
+    try:  # class-based win: the answer row painted all-green/correct
+        cls_win = fr.evaluate("""(ans) => {
+          const rows = Array.from(document.querySelectorAll(
+            '[class*=row i], li, tr')).filter(e => e.offsetParent !== null);
+          return rows.some(r => (r.innerText || '').toLowerCase()
+              .includes(ans.toLowerCase()) &&
+            /correct|success|green|right/.test((r.className || '').toString()));
+        }""", a)
+    except Exception:
+        cls_win = False
+    if cls_win:
+        return True, f"answer row all-green (picked {picked!r})"
     return False, f"board did not confirm {a!r} (picked {picked!r})"
 
 
@@ -3505,15 +3520,15 @@ def _s_marveldle(page, ans, gid):
                     break
             except Exception as e:
                 _dbg(gid, f"{u} failed: {str(e)[:100]}")
+    if not str(ans or "").strip() or str(ans) == "None":
+        return _marveldle_browser_solve(page, gid)
     probes = []
     try:
         info = A.marveldle(A.target_date())
         probes = [p.get("name") for p in (info.get("probes") or [])
                   if isinstance(p, dict) and p.get("name")]
-    except Exception as e:
+    except BaseException as e:
         print(f"[marveldle] probe info failed: {str(e)[:110]}")
-    if not str(ans or "").strip() or str(ans) == "None":
-        return _marveldle_browser_solve(page, gid)
     return solve_attr_game(page, ans, gid, api_probes=probes)
 
 
@@ -4284,7 +4299,7 @@ def run_one(gid):
                                 today = _prev.strftime("%B %d, %Y")
                                 short = _prev.strftime("%b %d")
                                 ans, aval = _ans2, _aval2
-                                evidence += f" (day-lag retry: board={_prev})"
+                                evidence += f" (day-lag retry: board={_prev}, re-keyed)"
                     except Exception as _e2:
                         _dbg(gid, f"day-lag retry failed: {str(_e2)[:100]}")
         except SystemExit as _se:
