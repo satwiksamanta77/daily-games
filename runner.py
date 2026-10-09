@@ -183,7 +183,8 @@ GAMES = {
     "waffle": {"name": "Waffle", "url": "https://wafflegame.net/daily", "slug": "waffle-answer-today"},
     "worgle": {"name": "Worgle", "url": "https://bronze-age.com/worgle/", "slug": "worgle-answer-today"},
     "countryle": {"name": "Countryle", "url": "https://countryle.com/", "slug": "countryle-answer-today"},
-    "batterup": {"name": "Batterup", "url": "https://batter-up.app", "slug": "batterup-answer-today"},
+    "batterup": {"name": "Batterup", "url": "https://batter-up.app",
+                 "slug": "batterup-answer-today", "board_lags": True},
     "marveldle": {"name": "Marveldle", "url": "https://marveldle.com", "slug": "marveldle-answer-today"},
     # Nerdle: 9 modes solved back-to-back in ONE video (same treatment as
     # framed all_modes). Lives in nerdle_solver.py (async, kept as-is) and is
@@ -1664,7 +1665,15 @@ def _play_guesses(page, guesses, after_each=None, answer=None):
              f"guess {i + 1}/{len(guesses)}: {g!r}")
         # Pause BEFORE typing too: a person glances back at the previous row.
         _idle_drift(page)
+        try:
+            QP.ev_push(960, 700, "focus")     # hand rests on the board/field
+        except Exception:
+            pass
         _kb(page, str(g), delay=120)
+        try:
+            QP.ev_push(960, 950, "click")     # ENTER key area of the keyboard
+        except Exception:
+            pass
         _settle(page, base=2600)
         try:
             _tail = (page.evaluate(
@@ -2530,7 +2539,18 @@ def _countryle_frame(page):
 def _s_countryle(page, ans, gid):
     """Countryle: pass the /welcome gate INSIDE the app iframe, then guess."""
     _close_modals(page)
-    fr = _countryle_frame(page)
+    fr = None
+    try:  # the outer document is an ad shell; the app lives at /index.html
+        if "/index.html" not in (page.url or ""):
+            page.goto("https://countryle.com/index.html",
+                      wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(5000)
+    except Exception as e:
+        _dbg(gid, f"direct index.html nav failed: {str(e)[:80]}")
+    if page.query_selector("input, button"):
+        fr = page
+    else:
+        fr = _countryle_frame(page)
     if fr is None:
         _dbg(gid, "app iframe never produced UI (bot-gate?)")
         return False, "app iframe empty after 60 s"
@@ -4202,7 +4222,8 @@ def run_one(gid):
                 if _served and str(_served) != date_key:
                     from datetime import date as _d2
                     _sv = _d2(*(int(x) for x in str(_served).split("-")))
-                    if _sv == tgt - timedelta(days=1):
+                    if _sv == tgt - timedelta(days=1) and \
+                            not GAMES[gid].get("board_lags"):
                         # Server-keyed site has not rolled to the publish day
                         # yet (US rollover happens hours after 21:00 IST).
                         # Recording now burns yesterday's board on camera -
@@ -4211,6 +4232,12 @@ def run_one(gid):
                         evidence = (f"stale-board: site served {_sv} but "
                                     f"publish day is {tgt}; deferred to dawn")
                         print(f"[{gid}] {evidence}")
+                    elif GAMES[gid].get("board_lags"):
+                        # batter-up's live board trails its CDN/publish date by
+                        # one day by design: play the board viewers SEE, keep
+                        # the publish-day label, and say so in the debug log.
+                        print(f"[{gid}] board-lag: playing served board "
+                              f"{_sv} under publish key {date_key}")
                     else:
                         date_key = _sv.isoformat()
                         today = _sv.strftime("%B %d, %Y")
