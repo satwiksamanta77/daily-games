@@ -4210,6 +4210,20 @@ def run_one(gid):
         try:
             ctx.add_init_script(script=QP.prepurge_js())
             ctx.add_init_script(script=QP.consent_watch_js())
+            if gid == "countryle":
+                # seed the Angular settings store so isFirstLogin() is false
+                # and the app boots straight into the game route (the
+                # /welcome deck otherwise re-triggers on every cold boot)
+                ctx.add_init_script(script="""
+                    try {
+                      localStorage.setItem('countryle_settings', JSON.stringify({
+                        isFirstLogin: false, showUpdateDialog: false,
+                        language: 'en', isDarkMode: false,
+                        isCommaSeparator: false, isFahrenheit: false,
+                        isHighContrast: false
+                      }));
+                    } catch (e) {}
+                """)
         except Exception:
             pass
 
