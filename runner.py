@@ -2649,6 +2649,18 @@ def _s_countryle(page, ans, gid):
             if _fin:
                 break
     if not _fin:
+        # full forensic dump: every frame, its inputs, and the hidden-api
+        # response status that gates the game route
+        try:
+            for _f2 in page.frames:
+                _u = (_f2.url or "")[:70]
+                _ni = _f2.evaluate(
+                    "() => document.querySelectorAll('input').length")
+                _nt = (_f2.evaluate("() => (document.body.innerText||'')"
+                                    ".slice(0, 90)") or "").replace("\n", "|")
+                _dbg(gid, f"frame {_u} inputs={_ni} text={_nt!r}")
+        except Exception as _e:
+            _dbg(gid, f"frame dump failed: {str(_e)[:70]}")
         return False, "no input inside app iframe"
     for n, g in enumerate(seq):
         last = (n == len(seq) - 1)
@@ -4304,6 +4316,14 @@ def run_one(gid):
         # Attach the daily-puzzle response probe BEFORE the first navigation, so
         # the site's own answer request is captured on the initial page load.
         _install_live_day_probe(pg)
+        if gid == "countryle":
+            def _cl_resp(resp):
+                try:
+                    if "hidden-api" in (resp.url or ""):
+                        _dbg(gid, f"hidden-api {resp.status} {resp.url[:80]}")
+                except Exception:
+                    pass
+            pg.on("response", _cl_resp)
         solved, evidence = False, "exception before solve"
         _defer_stale = False
         try:
