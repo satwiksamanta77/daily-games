@@ -2538,13 +2538,12 @@ def _countryle_frame(page):
 
 
 def _s_countryle(page, ans, gid):
-    """Countryle: pass the /welcome gate INSIDE the app iframe, then guess."""
+    """Countryle: clear the /welcome deck (it can bounce back once), then
+    play the guess sequence inside the app frame with verified submits."""
     _close_modals(page)
     fr = None
-    try:  # the outer document is an ad shell; the app lives at /index.html
-        if "/index.html" not in (page.url or ""):
-            # www origin: the app's hidden-api calls are same-origin there
-            # (non-www -> www is a cross-origin hop that CI loses to CORS/CF)
+    try:  # www origin: hidden-api is same-origin there (non-www dies to CORS)
+        if "index.html" not in (page.url or ""):
             page.goto("https://www.countryle.com/index.html",
                       wait_until="domcontentloaded", timeout=30000)
             page.wait_for_timeout(5000)
@@ -2558,17 +2557,21 @@ def _s_countryle(page, ans, gid):
         _dbg(gid, "app iframe never produced UI (bot-gate?)")
         return False, "app iframe empty after 60 s"
     _dbg(gid, f"app frame: {fr.url[:60]}")
-    try:
-        b0 = (fr.evaluate("() => document.body.innerText") or "")[:400]
-    except Exception:
-        b0 = ""
-    if "MISSION" in b0 or "Welcome to" in b0 or "GUESS" in b0.upper() \
-            or len(b0.strip()) < 50:
+
+    def _live():
+        try:
+            fr.evaluate("() => 1")
+            return fr
+        except Exception:
+            return _countryle_frame(page) or fr
+
+    def _taps():
         for _tap in range(10):
             box = None
             try:
                 box = fr.evaluate("""() => {
-                    const btns = Array.from(document.querySelectorAll('button, a'))
+                    const btns = Array.from(
+                        document.querySelectorAll('button, a'))
                         .filter(e => e && e.offsetParent !== null);
                     for (const b of btns) {
                         const t = (b.innerText || '').trim().toUpperCase();
@@ -2584,93 +2587,51 @@ def _s_countryle(page, ans, gid):
             except Exception:
                 box = None
             if not box:
-                break
-            try:
-                _before = (fr.evaluate(
-                    "() => document.body.innerText") or "")
-            except Exception:
-                _before = ""
-            page.mouse.click(box["x"], box["y"])   # iframe is full-page: 0,0
+                return
+            page.mouse.click(box["x"], box["y"])
             _push_click_at(box["x"], box["y"])
             _dbg(gid, f"onboarding trusted tap {box['t']!r}")
             page.wait_for_timeout(1400)
-            try:
-                if fr.query_selector("input"):
-                    _dbg(gid, "input visible, onboarding done")
-                    break
-                _after = (fr.evaluate(
-                    "() => document.body.innerText") or "")
-                if _after == _before:
-                    _dbg(gid, "slide unchanged after trusted tap")
-                else:
-                    _dbg(gid, f"slide advanced ({len(_before)}->{len(_after)} chars)")
-            except Exception:
-                pass
-    seq = _guesses(gid, ans)
-    a = str(ans or "").strip()
-    picked = "none"
-    _fin = None
-    for _w in range(40):
-        try:  # the PLAY! tap route-changes the SPA: refresh the frame handle
-            fr.evaluate("() => 1")
-        except Exception:
-            fr = _countryle_frame(page) or fr
+            if fr.query_selector("input"):
+                _dbg(gid, "input visible, onboarding done")
+                return
+
+    for _round in range(3):   # the deck can bounce back to /welcome once
+        fr = _live()
         try:
-            _fin = fr.query_selector("input")
+            b0 = (fr.evaluate("() => document.body.innerText") or "")[:400]
         except Exception:
-            _fin = None
-        if _fin:
-            _dbg(gid, f"game input visible after {_w + 1}s")
-            break
-        page.wait_for_timeout(1000)
-    if not _fin:
-        # last resort: tap any remaining CTA in the frame and wait longer
-        for _extra in range(6):
-            try:
-                _bx = fr.evaluate("""() => {
-                    const b = Array.from(document.querySelectorAll('button, a'))
-                        .filter(e => e.offsetParent !== null &&
-                                 /PLAY|START|GUESS|BEGIN|CONTINUE|SKIP/i.test(
-                                   (e.innerText||'').trim())).pop();
-                    if (!b) return null;
-                    const r = b.getBoundingClientRect();
-                    return {x: r.x + r.width/2, y: r.y + r.height/2,
-                            t: (b.innerText||'').trim()};
-                }""")
-            except Exception:
-                _bx = None
-            if _bx:
-                page.mouse.click(_bx["x"], _bx["y"])
-                _push_click_at(_bx["x"], _bx["y"])
-                _dbg(gid, f"extra CTA tap {_bx['t']!r}")
-            page.wait_for_timeout(4000)
-            try:
-                _fin = fr.query_selector("input")
-            except Exception:
-                _fin = None
-            if _fin:
+            b0 = ""
+        if "Welcome to" in b0 or "MISSION" in b0 or len(b0.strip()) < 50:
+            _taps()
+        for _w in range(20):
+            fr = _live()
+            if fr.query_selector("input"):
                 break
+            if "/welcome" in (fr.url or ""):
+                _dbg(gid, f"round {_round}: bounced to /welcome, re-tapping")
+                _taps()
+            page.wait_for_timeout(1000)
+        if fr.query_selector("input"):
+            _dbg(gid, f"round {_round}: game input present")
+            break
+    _fin = fr.query_selector("input") if fr else None
     if not _fin:
-        # full forensic dump: every frame, its inputs, and the hidden-api
-        # response status that gates the game route
         try:
             for _f2 in page.frames:
-                _u = (_f2.url or "")[:70]
-                _ni = _f2.evaluate(
-                    "() => document.querySelectorAll('input').length")
-                _nt = (_f2.evaluate("() => (document.body.innerText||'')"
-                                    ".slice(0, 90)") or "").replace("\n", "|")
-                _dbg(gid, f"frame {_u} inputs={_ni} text={_nt!r}")
+                _ni = _f2.evaluate("() => document.querySelectorAll('input').length")
+                _nt = (_f2.evaluate("() => (document.body.innerText||'').slice(0, 90)") or "").replace("\n", "|")
+                _dbg(gid, f"frame {(_f2.url or '')[:60]} inputs={_ni} text={_nt!r}")
         except Exception as _e:
             _dbg(gid, f"frame dump failed: {str(_e)[:70]}")
         return False, "no input inside app iframe"
+    seq = _guesses(gid, ans)
+    a = str(ans or "").strip()
+    picked = "none"
     for n, g in enumerate(seq):
         last = (n == len(seq) - 1)
         _idle_drift(page)
-        try:  # SPA route changes can stale the frame handle between guesses
-            fr.evaluate("() => 1")
-        except Exception:
-            fr = _countryle_frame(page) or fr
+        fr = _live()
         ok, detail = _type_country_guess(page, fr, g)
         _dbg(gid, f"guess {n + 1}/{len(seq)} {g!r}: ok={ok} ({detail[:80]})")
         if not ok:
@@ -2678,22 +2639,15 @@ def _s_countryle(page, ans, gid):
                 return False, f"guess {n + 1} pick failed ({detail[:120]})"
             continue
         picked = g
-        # VERIFIED submit: row count must grow; retry button / Enter / JS-click
+
         def _rowcount(f2):
             try:
-                return f2.evaluate("""() => Array.from(
-                    document.querySelectorAll(
-                      '[class*=attempt i], [class*=guess i], [class*=row i]'))
+                return f2.evaluate("""() => Array.from(document.querySelectorAll(
+                    '[class*=attempt i], [class*=guess i], [class*=row i]'))
                     .filter(e => e.offsetParent !== null &&
                             (e.innerText || '').trim().length > 2).length""")
             except Exception:
                 return -1
-        def _live():
-            try:
-                fr.evaluate("() => 1")
-                return fr
-            except Exception:
-                return _countryle_frame(page) or fr
         _rc0 = _rowcount(_live())
         for _try in range(3):
             fr = _live()
@@ -2725,7 +2679,7 @@ def _s_countryle(page, ans, gid):
                 break
         _settle(page, base=3000)
         fr = _live()
-        try:  # early win exit straight from the app's own historic flag
+        try:
             _h2 = fr.evaluate("""() => {
               for (const k in localStorage) {
                 if (/historic|game|stat/i.test(k)) {
@@ -2735,38 +2689,21 @@ def _s_countryle(page, ans, gid):
               return '';
             }""") or ""
             if '"complete":true' in _h2 or '"complete": true' in _h2:
-                return True, f"app historic complete=true after guess " \
-                             f"{n + 1} ({g!r})"
+                return True, f"app historic complete=true after guess {n + 1} ({g!r})"
         except Exception:
             pass
-        try:
-            _rows = fr.evaluate("""() => {
-              const rows = Array.from(document.querySelectorAll(
-                '[class*=attempt i], [class*=row i], li, tr'))
-                .filter(e => e.offsetParent !== null &&
-                        (e.innerText || '').trim().length > 2);
-              return rows.slice(-3).map(e => (e.innerText || '')
-                .replace(/\n/g, '|').slice(0, 60));
-            }""") or []
-            _dbg(gid, f"guess {n + 1} last rows: {_rows}")
-        except Exception as _e:
-            _dbg(gid, f"rows read failed: {str(_e)[:70]}")
     page.wait_for_timeout(2500)
+    fr = _live()
     try:
         body = ((fr.evaluate("() => document.body.innerText") or "")
                 + (page.evaluate("() => document.body.innerText") or ""))
     except Exception:
         body = ""
-    try:  # frame may have gone stale across submits
-        fr.evaluate("() => 1")
-    except Exception:
-        fr = _countryle_frame(page) or fr
-    try:  # the Angular app records the win in localStorage historic
+    try:
         _hist = fr.evaluate("""() => {
           for (const k in localStorage) {
             if (/historic|game|stat/i.test(k)) {
-              try { return JSON.stringify(localStorage[k]).slice(0, 400); }
-              catch (e) {}
+              try { return JSON.stringify(localStorage[k]); } catch (e) {}
             }
           }
           return '';
@@ -2781,18 +2718,6 @@ def _s_countryle(page, ans, gid):
             "congratulations", "you got it", "play again", "completed",
             "next country", "result")):
         return True, f"answer row rendered (picked {picked!r})"
-    try:  # class-based win: the answer row painted all-green/correct
-        cls_win = fr.evaluate("""(ans) => {
-          const rows = Array.from(document.querySelectorAll(
-            '[class*=row i], li, tr')).filter(e => e.offsetParent !== null);
-          return rows.some(r => (r.innerText || '').toLowerCase()
-              .includes(ans.toLowerCase()) &&
-            /correct|success|green|right/.test((r.className || '').toString()));
-        }""", a)
-    except Exception:
-        cls_win = False
-    if cls_win:
-        return True, f"answer row all-green (picked {picked!r})"
     return False, f"board did not confirm {a!r} (picked {picked!r})"
 
 
