@@ -3342,6 +3342,15 @@ def _phrazle_enter_phrase(page, phrase, groups=None, allow_reject=False):
             page.wait_for_timeout(500)
         _type_like_a_person(page, typed, base_delay=200)
         page.wait_for_timeout(700)
+        if allow_reject:
+            # wrong-shape probe: the site's visible refusal IS the moment we
+            # want on camera; the row is never consumed, so don't verify it
+            try:
+                page.keyboard.press("Enter")
+            except Exception:
+                pass
+            page.wait_for_timeout(1800)
+            return True, "site-rejected wrong-shape probe (expected miss)"
         got = _phrazle_active_row(page, n_cells)
         if got == want:
             page.keyboard.press("Enter")
