@@ -2688,6 +2688,17 @@ def _s_countryle(page, ans, gid):
               }
               return '';
             }""") or ""
+            _dbg(gid, f"historic after guess {n + 1}: {_h2[:220]!r}")
+            try:
+                _dlg = fr.evaluate("""() => {
+                  const m = document.querySelector(
+                    'mat-dialog-container, [class*=modal i], [class*=dialog i]');
+                  return m ? (m.innerText || '').replace(/\n/g, '|').slice(0, 120) : '';
+                }""") or ""
+                if _dlg:
+                    _dbg(gid, f"modal after guess {n + 1}: {_dlg!r}")
+            except Exception:
+                pass
             if '"complete":true' in _h2 or '"complete": true' in _h2:
                 return True, f"app historic complete=true after guess {n + 1} ({g!r})"
         except Exception:
