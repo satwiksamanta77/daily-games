@@ -583,7 +583,17 @@ def _kb(page, text, delay=150):
         _push_click(page)
         return True
     _focus_board(page)
+    _n0 = len(QP.ev_all())
     _push_click(page)
+    if len(QP.ev_all()) == _n0:
+        try:
+            _ib = page.query_selector("input, textarea, [contenteditable=true]")
+            _bb = (_ib.bounding_box() if _ib else None) or \
+                {"x": 660, "y": 340, "width": 600, "height": 400}
+            QP.ev_push(_bb["x"] + _bb["width"] / 2,
+                       _bb["y"] + _bb["height"] / 2, "focus")
+        except Exception:
+            pass
     _type_like_a_person(page, text, base_delay=delay)
     page.wait_for_timeout(400)
     _press_enter(page)
@@ -3240,9 +3250,12 @@ def _s_phrazle(page, ans, gid):
                              else (same.pop() if same else g))
             seq = fixed[::-1]
             print(f"[phrazle] probes re-shaped to {groups}: {seq}")
-    for g in seq:
+    for gi, g in enumerate(seq):
         ok, why = _phrazle_enter_phrase(page, g, groups=groups or None)
         if not ok:
+            if gi < len(seq) - 1:
+                _dbg(gid, f"probe {g!r} rejected by site ({why[:60]}); skipping")
+                continue
             return False, f"guess {g!r} rejected locally: {why}"
     page.wait_for_timeout(2500)
     if not _phrazle_won(page):
@@ -3461,13 +3474,19 @@ def _s_marveldle(page, ans, gid):
                     break
             except Exception:
                 pass
-    try:
-        n = page.evaluate(
-            "() => document.querySelectorAll("
-            "'input,textarea,[contenteditable=true]').length")
-    except Exception:
-        n = "?"
-    _dbg(gid, f"after menu: url={page.url} inputs={n}")
+    n = 0
+    for _iw in range(10):
+        try:
+            n = page.evaluate(
+                "() => document.querySelectorAll("
+                "'input,textarea,[contenteditable=true]').length")
+        except Exception:
+            n = 0
+        if n:
+            break
+        page.wait_for_timeout(2000)
+    _dbg(gid, f"after menu: url={page.url} inputs={n} "
+              f"(waited {(_iw + 1) * 2}s)")
     if not n:
         for u in ("https://marveldle.com/game", "https://marveldle.com/play",
                   "https://marveldle.com/classic", "https://marveldle.com/comics"):
