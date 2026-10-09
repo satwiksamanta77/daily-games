@@ -2337,6 +2337,28 @@ def _s_wordle(page, ans, gid):
             _enable_flutter_semantics(page)
         except Exception:
             pass
+        # The focus click can (re)open HOW TO PLAY: never let a dialog ride
+        # along on camera for the first minute of the video.
+        for _dg in range(3):
+            try:
+                _how = page.query_selector(
+                    "text=HOW TO PLAY") or page.query_selector(
+                    "[class*=modal i]:has-text('HOW TO PLAY')")
+                if not _how or not _how.is_visible():
+                    break
+                _x = (page.query_selector("[aria-label*=close i]")
+                      or page.query_selector("button:has-text('✕')")
+                      or page.query_selector("button:has-text('×')")
+                      or page.query_selector(
+                          "[class*=modal i] button[class*=close i]"))
+                if _x and _x.is_visible():
+                    _x.click(timeout=2000)
+                    QP.ev_push(960, 240, "click")
+                else:
+                    page.keyboard.press("Escape")
+                page.wait_for_timeout(700)
+            except Exception:
+                break
     # A stale saved board is the difference between "guessed and lost" and
     # "never had a chance": drop persisted state before trusting the answer.
     _reset_site_state(page, gid)
