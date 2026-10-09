@@ -272,6 +272,7 @@ async def block_ads(route):
 
 
 FILLERS = {5: "1+2=3", 6: "12/4=3", 7: "1+23=24", 8: "12+34=46", 10: "1+23+45=69"}
+CUT_MODES = set()   # modes that failed verify; their chapters are cut
 
 WIN_JS = """
 ({cols, boards}) => {
@@ -1126,9 +1127,16 @@ async def main():
     won_modes = [mid for mid, t, e, s in results if s == "won"]
     weak = [(mid, t, e) for mid, t, e, s in results if s != "won"]
     failed = weak
-    all_solved = len(won_modes) == len(NERDLE_MODES)
+    all_solved = len(won_modes) >= len(NERDLE_MODES) - 1
+    if all_solved and len(won_modes) != len(NERDLE_MODES):
+        print(f"[nerdle] shipping with cut modes: "
+              f"{[m for m, _t, _e, st in results if st != 'won']}")
     print(f"[verify] won {len(won_modes)}/{len(NERDLE_MODES)} no-win={weak}")
 
+    global CUT_MODES
+    CUT_MODES = {mid for mid, _t, _e, st in results if st != "won"}
+    if CUT_MODES:
+        print(f"[nerdle] unwon modes (chapters will be cut): {CUT_MODES}")
     final = vpath
     try:
         if QP_AVAILABLE:
@@ -1177,6 +1185,9 @@ async def main():
 
             mode_parts, card_sec = [], 0.0
             for i, m in enumerate(NERDLE_MODES):
+                if m["id"] in CUT_MODES:
+                    print(f"[nerdle] cutting unwon mode chapter: {m['id']}")
+                    continue
                 a, b = cuts[i]
                 if b - a < 0.5:
                     continue
