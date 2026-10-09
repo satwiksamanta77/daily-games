@@ -2587,6 +2587,22 @@ def _s_countryle(page, ans, gid):
                     "() => document.body.innerText.slice(0, 200)") or "")
             except Exception:
                 _before = ""
+            # An invisible overlay (re-rendered ad/mask layer) was absorbing
+            # every tap: probe the point and evict whatever is not the button.
+            try:
+                _int = fr.evaluate("""(pt) => {
+                    const el = document.elementFromPoint(pt.x, pt.y);
+                    if (!el) return null;
+                    if (el.closest('button, a')) return null;
+                    const desc = el.tagName + '#' + (el.id || '') + '.' +
+                        ((el.className || '').toString().slice(0, 60));
+                    el.remove();
+                    return desc;
+                }""", box)
+                if _int:
+                    _dbg(gid, f"evicted interceptor {_int!r} over NEXT")
+            except Exception:
+                pass
             _tapped = False
             try:  # element-level click first: it verifies actionability and
                 # reports whatever overlay intercepts the tap
