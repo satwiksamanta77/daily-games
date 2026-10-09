@@ -3303,7 +3303,7 @@ def _phrazle_clear_row(page, letters):
         page.wait_for_timeout(110)
 
 
-def _phrazle_enter_phrase(page, phrase, groups=None):
+def _phrazle_enter_phrase(page, phrase, groups=None, allow_reject=False):
     """Submit one Phrazle row, verified against the live board shape first.
 
     `_s_phrazle` reads the board's true cell groups with `_phrazle_grid_letters`
@@ -3319,7 +3319,7 @@ def _phrazle_enter_phrase(page, phrase, groups=None):
     words = [w for w in str(phrase).upper().split() if w]
     if len(words) < 2 or not all(w.isalpha() for w in words):
         return False, f"phrase {phrase!r} is not a word-separated phrase"
-    if groups:
+    if groups and not allow_reject:
         want_shape = [len(w) for w in words]
         if want_shape != list(groups):
             return False, (f"shape {want_shape} != board {list(groups)}; "
@@ -3539,15 +3539,32 @@ def _s_phrazle(page, ans, gid):
             same = [p for p in bank
                     if sig(p) == tgt and p not in [x.upper() for x in seq]]
             import random as _r
-            _r.Random(f"{gid}:{A.target_date().isoformat()}").shuffle(same)
+            rnd = _r.Random(f"{gid}:{A.target_date().isoformat()}")
+            rnd.shuffle(same)
+            # Rare board shapes can have zero same-shape probes in the bank:
+            # keep at most two wrong-shape probes as honest on-camera misses
+            # (the site rejects them with "use all available spaces").
+            wrong = [p for p in bank if sig(p) != tgt
+                     and p not in [x.upper() for x in seq]]
+            rnd.shuffle(wrong)
             fixed = [seq[-1]]
+            wrong_used = 0
             for g in seq[:-1]:
-                fixed.append(g if sig(g) == tgt
-                             else (same.pop() if same else g))
+                if sig(g) == tgt:
+                    fixed.append(g)
+                elif same:
+                    fixed.append(same.pop())
+                elif wrong_used < 2 and wrong:
+                    fixed.append("REJECT:" + wrong.pop())
+                    wrong_used += 1
             seq = fixed[::-1]
             print(f"[phrazle] probes re-shaped to {groups}: {seq}")
     for g in seq:
-        ok, why = _phrazle_enter_phrase(page, g, groups=groups or None)
+        allow_reject = str(g).startswith("REJECT:")
+        if allow_reject:
+            g = str(g)[len("REJECT:"):]
+        ok, why = _phrazle_enter_phrase(page, g, groups=groups or None,
+                                        allow_reject=allow_reject)
         if not ok:
             return False, f"guess {g!r} rejected locally: {why}"
     page.wait_for_timeout(2500)
