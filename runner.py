@@ -2580,7 +2580,7 @@ def _s_worldle(page, ans, gid):
         for rtxt in rows:
             dm = re.search(r"([0-9.,]+)\s*km", rtxt)
             nm = ""
-            for seg in rtxt.split("|"):      # rows start with the distance;
+            for seg in rtxt.replace("|", "\n").split("\n"):  # rows lead
                 seg = seg.strip()            # the name is the first plain
                 if not seg or dm and seg.replace(",", "") == dm.group(1) + "km":
                     continue
