@@ -2579,7 +2579,16 @@ def _s_worldle(page, ans, gid):
         obs = []
         for rtxt in rows:
             dm = re.search(r"([0-9.,]+)\s*km", rtxt)
-            nm = rtxt.split("|")[0].strip()
+            nm = ""
+            for seg in rtxt.split("|"):      # rows start with the distance;
+                seg = seg.strip()            # the name is the first plain
+                if not seg or dm and seg.replace(",", "") == dm.group(1) + "km":
+                    continue
+                if seg.endswith("km") or not seg.replace("-", "").isalpha():
+                    continue
+                if len(seg) > 2:
+                    nm = seg
+                    break
             if dm and nm:
                 obs.append((nm.lower(),
                             float(dm.group(1).replace(",", ""))))
