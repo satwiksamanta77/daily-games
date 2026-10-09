@@ -2476,6 +2476,19 @@ def _s_worldle(page, ans, gid):
 def _s_globle(page, ans, gid):
     """Globle: plain form (type + Enter), canvas board."""
     _close_modals(page)
+    # React shell: the guess input only exists once the app has mounted;
+    # wait for it (one retry reload) instead of failing on a spinner page.
+    for _attempt in range(2):
+        try:
+            page.wait_for_selector("input", timeout=30000)
+            break
+        except Exception:
+            _dbg(gid, f"globle input not mounted (attempt {_attempt + 1})")
+            try:
+                page.reload(wait_until="domcontentloaded")
+                page.wait_for_timeout(5000)
+            except Exception:
+                pass
     seq = _guesses(gid, ans)
     a = str(ans or "").strip()
     for n, g in enumerate(seq):
