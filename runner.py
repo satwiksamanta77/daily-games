@@ -2587,9 +2587,23 @@ def _s_countryle(page, ans, gid):
                     "() => document.body.innerText.slice(0, 200)") or "")
             except Exception:
                 _before = ""
-            page.mouse.click(box["x"], box["y"])   # iframe is full-page: 0,0
+            _tapped = False
+            try:  # element-level click first: it verifies actionability and
+                # reports whatever overlay intercepts the tap
+                _el = fr.query_selector(
+                    f"button:text-is('{box['t'].title()}'), "
+                    f"a:text-is('{box['t'].title()}')") or \
+                    fr.query_selector("button.next, .next, [class*=next i]")
+                if _el:
+                    _el.click(timeout=2500)
+                    _tapped = True
+            except Exception as _ce:
+                _dbg(gid, f"element click intercepted: {str(_ce)[:110]}")
+            if not _tapped:
+                page.mouse.click(box["x"], box["y"])  # iframe full-page: 0,0
             _push_click_at(box["x"], box["y"])
-            _dbg(gid, f"onboarding trusted tap {box['t']!r}")
+            _dbg(gid, f"onboarding trusted tap {box['t']!r} "
+                      f"via={'element' if _tapped else 'coords'}")
             page.wait_for_timeout(1400)
             try:
                 if fr.query_selector("input"):
