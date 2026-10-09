@@ -2386,13 +2386,6 @@ def _s_wordle(page, ans, gid):
             QP.ev_push(_cx, _cy, "click")
             page.wait_for_timeout(600)
             _enable_flutter_semantics(page)
-            page.evaluate("() => { document.body.style.zoom = '1.6'; }")
-            for _w in range(15):     # wait out LOADING PUZZLE dead time
-                if page.evaluate(
-                        "() => document.querySelectorAll("
-                        "'flt-semantics[aria-label]').length") > 3:
-                    break
-                page.wait_for_timeout(2000)
         except Exception:
             pass
     # A stale saved board is the difference between "guessed and lost" and
