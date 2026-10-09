@@ -2658,19 +2658,48 @@ def _s_countryle(page, ans, gid):
         try:
             btn = fr.query_selector("button:has-text('Guess')") or \
                 fr.query_selector("button:has-text('GUESS')")
+            _bt = (btn.inner_text() if btn else None)
             if btn and btn.is_visible():
                 btn.click(timeout=3000)
             else:
                 page.keyboard.press("Enter")
         except Exception:
+            _bt = "enter"
             page.keyboard.press("Enter")
         _settle(page, base=3000)
+        try:
+            _rows = fr.evaluate("""() => {
+              const rows = Array.from(document.querySelectorAll(
+                '[class*=attempt i], [class*=row i], li, tr'))
+                .filter(e => e.offsetParent !== null &&
+                        (e.innerText || '').trim().length > 2);
+              return rows.slice(-3).map(e => (e.innerText || '')
+                .replace(/\n/g, '|').slice(0, 60));
+            }""") or []
+            _dbg(gid, f"guess {n + 1} submitted via {_bt!r}; "
+                      f"last rows: {_rows}")
+        except Exception:
+            pass
     page.wait_for_timeout(2500)
     try:
         body = ((fr.evaluate("() => document.body.innerText") or "")
                 + (page.evaluate("() => document.body.innerText") or ""))
     except Exception:
         body = ""
+    try:  # the Angular app records the win in localStorage historic
+        _hist = fr.evaluate("""() => {
+          for (const k in localStorage) {
+            if (/historic|game|stat/i.test(k)) {
+              try { return JSON.stringify(localStorage[k]).slice(0, 400); }
+              catch (e) {}
+            }
+          }
+          return '';
+        }""") or ""
+    except Exception:
+        _hist = ""
+    if '"complete":true' in _hist or '"complete": true' in _hist:
+        return True, f"app historic complete=true (picked {picked!r})"
     low = body.lower()
     if a.lower() in low and any(k in low for k in (
             "guessed", "correct", "well done", "statistics", "share",
