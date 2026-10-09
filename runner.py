@@ -2528,6 +2528,7 @@ def _s_worldle(page, ans, gid):
         last = (n == len(seq) - 1)
         _idle_drift(page)
         ok, detail = _type_country_guess(page, page, g)
+        _dbg(gid, f"guess {n + 1}/{len(seq)} {g!r}: ok={ok} ({detail[:60]})")
         if not ok:
             return False, f"guess {n + 1} {g!r}: pick failed ({detail})"
         try:
@@ -2591,6 +2592,7 @@ def _s_worldle(page, ans, gid):
             if isinstance(c, dict) and c.get("latitude") is not None:
                 coords[str(c.get("name", "")).strip().lower()] = (
                     float(c["latitude"]), float(c["longitude"]))
+        _dbg(gid, f"trilat rows={len(rows)} obs={obs} live={len(live or [])}")
         obs = [(n, d) for n, d in obs if n in coords]
         if len(obs) >= 2 and live:
             def _hav(p, q):
