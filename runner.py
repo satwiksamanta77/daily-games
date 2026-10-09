@@ -2648,6 +2648,10 @@ def _s_countryle(page, ans, gid):
     for n, g in enumerate(seq):
         last = (n == len(seq) - 1)
         _idle_drift(page)
+        try:  # SPA route changes can stale the frame handle between guesses
+            fr.evaluate("() => 1")
+        except Exception:
+            fr = _countryle_frame(page) or fr
         ok, detail = _type_country_guess(page, fr, g)
         _dbg(gid, f"guess {n + 1}/{len(seq)} {g!r}: ok={ok} ({detail[:80]})")
         if not ok:
@@ -2702,6 +2706,20 @@ def _s_countryle(page, ans, gid):
                 break
         _settle(page, base=3000)
         fr = _live()
+        try:  # early win exit straight from the app's own historic flag
+            _h2 = fr.evaluate("""() => {
+              for (const k in localStorage) {
+                if (/historic|game|stat/i.test(k)) {
+                  try { return JSON.stringify(localStorage[k]); } catch (e) {}
+                }
+              }
+              return '';
+            }""") or ""
+            if '"complete":true' in _h2 or '"complete": true' in _h2:
+                return True, f"app historic complete=true after guess " \
+                             f"{n + 1} ({g!r})"
+        except Exception:
+            pass
         try:
             _rows = fr.evaluate("""() => {
               const rows = Array.from(document.querySelectorAll(
@@ -4344,9 +4362,10 @@ def run_one(gid):
                     aval = _FOUND_ANSWER[gid]
                     aval_s = str(aval)
                     ans = {"answer": aval, "via": "browser-solve"}
-                if not solved and not _defer_stale:
+                if not solved and not _defer_stale and gid != "countryle":
                     # Server-keyed sites can lag a day behind the publish
                     # date: replay once with yesterday's answer and re-key.
+                    # (countryle's board follows the faked client clock.)
                     try:
                         _prev = tgt - timedelta(days=1)
                         _ans2 = getattr(A, key)(_prev)
