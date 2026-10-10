@@ -21,6 +21,7 @@ on:
 
 jobs:
   generate:
+    if: ${{ github.event.inputs.game == '' || github.event.inputs.game == matrix.game }}
     permissions:
       contents: write
     runs-on: ubuntu-latest

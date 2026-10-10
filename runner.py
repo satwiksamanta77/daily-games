@@ -2219,6 +2219,18 @@ def _install_live_day_probe(page):
             url = resp.url or ""
             m = re.search(r"(\d{4}-\d{2}-\d{2})", url)
             if not m:
+                # countryle's hidden-api keys the board by DD/MM/YYYY (server
+                # date, not the faked client clock) - read that too or the
+                # served-day align can never see a mismatch for this game.
+                m2 = re.search(r"date=(\d{2})%2F(\d{2})%2F(\d{4})", url)
+                if not m2:
+                    m2 = re.search(r"date=(\d{2})/(\d{2})/(\d{4})", url)
+                if m2:
+                    iso = f"{m2.group(3)}-{m2.group(2)}-{m2.group(1)}"
+                    host = url.split("/")[2] if "//" in url else ""
+                    seen = _LIVE_DAY.setdefault("hosts", {})
+                    if host not in seen:
+                        seen[host] = iso
                 return
             iso = m.group(1)
             host = url.split("/")[2] if "//" in url else url
@@ -2245,6 +2257,7 @@ def _live_day_answer(gid, url=""):
         "searchle": ("searchle",),
         "semantle": ("semantle",),
         "phoodle": ("phoodle",),
+        "countryle": ("countryle",),
     }.get(gid, ())
     for host, iso in hosts.items():
         if any(h in host.lower() for h in hints):
