@@ -2550,7 +2550,8 @@ def _countryle_frame(page):
     """The playable app lives in a full-page iframe (rm-app-frame ->
     /index.html); the outer document is an ad shell with an empty body - which
     is why every mount check (all versions) reported 'UI still empty'."""
-    for _ in range(20):
+    welcome = None
+    for _ in range(40):                      # 120 s: headed+ads boot is slow
         for fr in page.frames:
             try:
                 u = (fr.url or "")
@@ -2558,10 +2559,14 @@ def _countryle_frame(page):
                     continue
                 if fr.query_selector("input") or fr.query_selector("button"):
                     return fr
+                if ("welcome" in u or "index.html" in u) and welcome is None:
+                    welcome = fr
             except Exception:
                 continue
+        if welcome is not None and _ > 20:
+            return welcome
         page.wait_for_timeout(3000)
-    return None
+    return welcome
 
 
 def _s_countryle(page, ans, gid):
@@ -4282,6 +4287,25 @@ def run_one(gid):
         # Attach the daily-puzzle response probe BEFORE the first navigation, so
         # the site's own answer request is captured on the initial page load.
         _install_live_day_probe(pg)
+
+        def _log_fail(resp):
+            try:
+                if resp.status >= 400:
+                    _dbg(gid, f"HTTP {resp.status} {resp.url[:110]}")
+            except Exception:
+                pass
+
+        def _log_reqfail(req):
+            try:
+                _dbg(gid, f"REQFAIL {req.failure or '?'} {req.url[:110]}")
+            except Exception:
+                pass
+
+        try:
+            pg.on("response", _log_fail)
+            pg.on("requestfailed", _log_reqfail)
+        except Exception:
+            pass
         solved, evidence = False, "exception before solve"
         _defer_stale = False
         try:
