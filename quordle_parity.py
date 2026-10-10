@@ -621,10 +621,43 @@ def adhide_js():
     iframe[src*="facebook.com"], iframe[src*="recaptcha"],
     div[id*="google_ads"], div[id*="div-gpt-ad"], .ad-container, .adsbygoogle,
     .ads, [class*="ad-slot"], [class*="adspace"], [id*="ad-slot"],
-    [class*="sponsored"], .donate-banner, [class*="banner-ad"] {
+    [class*="sponsored"], .donate-banner, [class*="banner-ad"],
+    ins, [id*="rail" i], [class*="rail" i], [id*="admantle" i],
+    [class*="admantle" i], [id*="trendi" i], [class*="pubexchange"],
+    [class*="outbrain"], [id*="google_ads_iframe"], [class*="banner" i] {
       display: none !important; visibility: hidden !important;
       width: 0 !important; height: 0 !important;
     }`;
+  // hide every THIRD-PARTY iframe (ad slots, sync pixels, promo strips) and
+  // collapse its wrapper so no black holes / banner strips ride in frame.
+  // same-origin iframes (countryle's app frame etc.) are never touched.
+  const kill3p = () => {
+    try {
+      for (const f of Array.from(document.querySelectorAll('iframe'))) {
+        let u = '';
+        try { u = f.src || ''; } catch (e) {}
+        if (!u || u.startsWith('about:') || u.startsWith('data:')) continue;
+        let host = '';
+        try { host = new URL(u, location.href).host; } catch (e) { continue; }
+        if (host === location.host) continue;
+        f.style.setProperty('display', 'none', 'important');
+        let p = f.parentElement;
+        for (let i = 0; i < 2 && p && p !== document.body; i++) {
+          const kids = Array.from(p.children).filter(c => {
+            const r = c.getBoundingClientRect();
+            return r.width > 4 && r.height > 4 &&
+                   getComputedStyle(c).display !== 'none';
+          });
+          if (kids.length === 0) {
+            p.style.setProperty('display', 'none', 'important');
+            p = p.parentElement;
+          } else break;
+        }
+      }
+    } catch (e) {}
+  };
+  setInterval(kill3p, 1200);
+  document.addEventListener('DOMContentLoaded', kill3p);
   const put = () => { if (!document.head) return;
     if (!document.querySelector('style[data-qpadhide]')) {
       css.setAttribute('data-qpadhide', '1');

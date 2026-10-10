@@ -615,12 +615,39 @@ def countryle(d=None):
         # frontend formatCountryleApiDate destructures [year, month, day]
         # and re-emits DD/MM/YYYY - not the ISO order.
         yy, mm, dd = key.split("-")
-        r = requests.get(
-            "https://www.countryle.com/hidden-api/get-daily-country-valid.php",
-            params={"date": f"{dd}/{mm}/{yy}"},
-            headers={"User-Agent": "WordSolverX Video",
-                     "accept": "application/json"}, timeout=20)
-        j = r.json() if r.ok else None
+        url = ("https://www.countryle.com/hidden-api/"
+               f"get-daily-country-valid.php?date={dd}%2F{mm}%2F{yy}")
+        j = None
+        # CI egress to countryle.com is intermittently blocked/403: try
+        # direct (two UAs) then two CORS mirrors of the SAME upstream JSON.
+        for fetch in (
+            lambda: requests.get(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                              "Chrome/120 Safari/537.36",
+                "accept": "application/json"}, timeout=20),
+            lambda: requests.get(url, headers={
+                "User-Agent": "WordSolverX Video",
+                "accept": "application/json"}, timeout=20),
+            lambda: requests.get(
+                "https://api.allorigins.win/get?url="
+                + requests.utils.quote(url, safe=""), timeout=25),
+            lambda: requests.get(
+                "https://corsproxy.io/?url="
+                + requests.utils.quote(url, safe=""), timeout=25),
+        ):
+            try:
+                r = fetch()
+                if not r.ok:
+                    continue
+                cand = r.json()
+                if isinstance(cand, dict) and "contents" in cand:
+                    cand = json.loads(cand["contents"])
+                if isinstance(cand, dict) and ("country" in cand
+                                               or "number" in cand):
+                    j = cand
+                    break
+            except Exception:
+                continue
         if isinstance(j, dict):
             raw = j.get("country", j.get("id", j))
             if isinstance(raw, (int, float)) or (
