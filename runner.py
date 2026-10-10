@@ -4288,10 +4288,24 @@ def run_one(gid):
         # the site's own answer request is captured on the initial page load.
         _install_live_day_probe(pg)
 
+        _unpublished = {"flag": False}
+
         def _log_fail(resp):
             try:
                 if resp.status >= 400:
                     _dbg(gid, f"HTTP {resp.status} {resp.url[:110]}")
+                if resp.status == 404:
+                    u = resp.url
+                    host_ok = False
+                    try:
+                        host_ok = (u.split("//")[1].split("/")[0]
+                                   == (g["url"].split("//")[1].split("/")[0]))
+                    except Exception:
+                        pass
+                    if host_ok and any(k in u.lower() for k in
+                                       ("day=", "answer", "daily", "puzzle",
+                                        "game")):
+                        _unpublished["flag"] = True
             except Exception:
                 pass
 
@@ -4369,6 +4383,14 @@ def run_one(gid):
                     aval = _FOUND_ANSWER[gid]
                     aval_s = str(aval)
                     ans = {"answer": aval, "via": "browser-solve"}
+                if not solved and _unpublished["flag"]:
+                    # The site's own puzzle endpoint 404s for the target day:
+                    # the board is not published yet (globle/batterup class).
+                    # No retry can win - defer to the game's own cron window.
+                    _defer_stale = True
+                    evidence = (f"unpublished-board: site 404s for "
+                                f"{date_key}; deferred to its cron window")
+                    _dbg(gid, evidence)
                 if not solved and not _defer_stale:
                     # Server-keyed sites can lag a day behind the publish
                     # date: replay once with yesterday's answer and re-key.
