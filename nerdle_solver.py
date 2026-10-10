@@ -261,10 +261,12 @@ def fetch_nerdle_answers(target=None):
 
 
 async def block_ads(route):
+    # pixels only - ad libraries stay (boot gates); visuals hidden by adhide
     try:
         u = route.request.url
-        if any(x in u for x in ("doubleclick", "googlesyndication", "adnxs", "pubmatic", "criteo", "amazon-adsystem", "googletagmanager", "google-analytics", "clarity.ms", "amxrtb", "trustarc.com", "truste.com", "quantserve.com", "criteo", "onetag-sys", "cootlogix", "kueez",
-              "rubiconproject", "flashtalking", "prebid")):
+        if any(x in u for x in ("user-sync", "usync", "setuid", "criteo",
+                                "quantserve", "scorecardresearch", "hotjar",
+                                "amplitude", "sentry.io", "clarity.ms")):
             return await route.abort()
     except Exception:
         pass

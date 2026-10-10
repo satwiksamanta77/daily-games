@@ -3926,9 +3926,7 @@ def run_framed_all(gid, g, tgt, date_key, today, short):
         def _route(route):
             try:
                 u = route.request.url
-                if any(x in u for x in ("doubleclick", "googlesyndication", "adnxs",
-                                        "pubmatic", "amazon-adsystem",
-                                        "google-analytics", "clarity.ms")):
+                if any(x in u for x in ("user-sync", "usync", "setuid", "criteo", "quantserve", "scorecardresearch", "hotjar", "amplitude", "sentry.io", "tiktok", "facebook.net", "connect.facebook", "clarity.ms")):
                     return route.abort()
             except Exception:
                 pass
@@ -4268,17 +4266,7 @@ def run_one(gid):
         def _route(route):
             try:
                 u = route.request.url
-                if any(x in u for x in ("doubleclick", "googlesyndication", "adnxs", "pubmatic",
-                                        "amazon-adsystem", "google-analytics", "clarity.ms", "ad-delivery",
-                                        "hotjar", "sentry.io", "facebook.net",
-                                        "connect.facebook", "tiktok", "amplitude",
-                                        "criteo", "onetag-sys", "cootlogix", "copper6",
-                                        "kueez", "rubiconproject", "flashtalking",
-                                        "nextmillmedia", "admatic", "prebid", "moatads",
-                                        "scorecardresearch", "quantserve", "taboola",
-                                        "outbrain", "smartadserver", "sharethrough",
-                                        "googletagservices", "adsafeprotected",
-                                        "user-sync", "usync", "setuid")):
+                if any(x in u for x in ("user-sync", "usync", "setuid", "criteo", "quantserve", "scorecardresearch", "hotjar", "amplitude", "sentry.io", "tiktok", "facebook.net", "connect.facebook", "clarity.ms")):
                     return route.abort()
             except Exception:
                 pass
