@@ -669,14 +669,29 @@ def adhide_js():
       }
     } catch (e) {}
   };
-  setInterval(txtsweep, 1500);
-  document.addEventListener('DOMContentLoaded', txtsweep);
-  setInterval(kill3p, 1200);
-  document.addEventListener('DOMContentLoaded', kill3p);
-  const put = () => { if (!document.head) return;
-    if (!document.querySelector('style[data-qpadhide]')) {
+  const ts = () => { if (active.on) txtsweep(); };
+  setInterval(ts, 1500);
+  document.addEventListener('DOMContentLoaded', ts);
+  const k3 = () => { if (active.on) kill3p(); };
+  setInterval(k3, 1200);
+  document.addEventListener('DOMContentLoaded', k3);
+  // DEFERRED ACTIVATION: several of these sites (globle) run an
+  // anti-adblock boot gate that measures whether ad slots actually
+  // rendered. Hiding at document-start makes the gate refuse to load the
+  // puzzle at all. So: keep ads visible until the game content is mounted
+  // (body text grows), then hide everything; force-hide at 45 s regardless.
+  const t0 = Date.now();
+  const active = {on: false};
+  const put = () => {
+    if (!document.head || active.on) return;
+    let mounted = false;
+    try { mounted = (document.body.innerText || '').length > 200; } catch (e) {}
+    if (mounted || Date.now() - t0 > 45000) {
       css.setAttribute('data-qpadhide', '1');
-      document.head.appendChild(css); } };
+      document.head.appendChild(css);
+      active.on = true;
+    }
+  };
   put();
   document.addEventListener('DOMContentLoaded', put);
   setInterval(put, 1500);
