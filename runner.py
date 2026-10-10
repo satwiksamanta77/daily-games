@@ -183,7 +183,8 @@ GAMES = {
     "waffle": {"name": "Waffle", "url": "https://wafflegame.net/daily", "slug": "waffle-answer-today"},
     "worgle": {"name": "Worgle", "url": "https://bronze-age.com/worgle/", "slug": "worgle-answer-today"},
     "countryle": {"name": "Countryle", "url": "https://countryle.com/", "slug": "countryle-answer-today"},
-    "batterup": {"name": "Batterup", "url": "https://batter-up.app", "slug": "batterup-answer-today"},
+    "batterup": {"name": "Batterup", "url": "https://batter-up.app",
+                 "slug": "batterup-answer-today", "no_align": True},
     "marveldle": {"name": "Marveldle", "url": "https://marveldle.com", "slug": "marveldle-answer-today"},
     # Nerdle: 9 modes solved back-to-back in ONE video (same treatment as
     # framed all_modes). Lives in nerdle_solver.py (async, kept as-is) and is
@@ -4266,7 +4267,14 @@ def run_one(gid):
             # local engine answered for, the whole guess sequence targets the
             # wrong puzzle and the game is unwinnable - so re-resolve first.
             try:
-                fixed, _served = _align_answer_to_live_day(gid, ans, pg)
+                if GAMES[gid].get("no_align"):
+                    # Client-seeded board: the fake clock IS the day key. The
+                    # response probe otherwise sees the CDN fetch of YESTERDAY's
+                    # file (previous-game widget) and defers a perfectly
+                    # winnable run.
+                    fixed, _served = ans, None
+                else:
+                    fixed, _served = _align_answer_to_live_day(gid, ans, pg)
                 if fixed is not ans:
                     ans = fixed
                     aval = ans.get("answer") or ans.get("name") \
