@@ -105,7 +105,7 @@ def _push_click(page):
           }
           const vis = Array.from(document.querySelectorAll('input')).find(e => e && e.offsetParent !== null);
           if (vis) { const r = vis.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; }
-          return null;
+          return [innerWidth / 2, innerHeight / 2];
         }""") or []
         if pt:
             _push_click_at(pt[0], pt[1])
@@ -2499,6 +2499,10 @@ def _s_worldle(page, ans, gid):
 def _s_globle(page, ans, gid):
     """Globle: plain form (type + Enter), canvas board."""
     _close_modals(page)
+    try:
+        page.wait_for_selector("input[name=guess]", timeout=30000)
+    except Exception:
+        _dbg(gid, "guesser input never mounted")
     seq = _guesses(gid, ans)
     a = str(ans or "").strip()
     for n, g in enumerate(seq):
@@ -2563,6 +2567,21 @@ def _countryle_frame(page):
 def _s_countryle(page, ans, gid):
     """Countryle: pass the /welcome gate INSIDE the app iframe, then guess."""
     _close_modals(page)
+    # The outer ad shell keeps its #loading-mask ON TOP of the app iframe, so
+    # every click lands on the mask (Playwright: 'element click intercepted').
+    # Remove it and let the iframe take pointer events.
+    try:
+        page.evaluate("""() => {
+          for (const sel of ['#loading-mask', '.mask']) {
+            const m = document.querySelector(sel);
+            if (m) m.remove();
+          }
+          const f = document.querySelector('#rm-app-frame');
+          if (f) { f.style.zIndex = '999'; f.style.position = 'absolute'; }
+          document.body.style.pointerEvents = 'auto';
+        }""")
+    except Exception as e:
+        _dbg(gid, f"mask eviction failed: {str(e)[:80]}")
     fr = _countryle_frame(page)
     if fr is None:
         _dbg(gid, "app iframe never produced UI (bot-gate?)")

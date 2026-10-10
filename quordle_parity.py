@@ -641,14 +641,13 @@ def adhide_js():
         try { host = new URL(u, location.href).host; } catch (e) { continue; }
         if (host === location.host) continue;
         f.style.setProperty('display', 'none', 'important');
+        // Collapse ONLY ancestors that look like ad slots - walking up
+        // empty wrappers crushed globle's app root before React mounted
+        // (root held just the google-signin iframe at DOMContentLoaded).
         let p = f.parentElement;
         for (let i = 0; i < 2 && p && p !== document.body; i++) {
-          const kids = Array.from(p.children).filter(c => {
-            const r = c.getBoundingClientRect();
-            return r.width > 4 && r.height > 4 &&
-                   getComputedStyle(c).display !== 'none';
-          });
-          if (kids.length === 0) {
+          const cls = ((p.id || '') + ' ' + (p.className || '').toString()).toLowerCase();
+          if (/ad|rail|slot|banner|sponsor|promo/.test(cls)) {
             p.style.setProperty('display', 'none', 'important');
             p = p.parentElement;
           } else break;
