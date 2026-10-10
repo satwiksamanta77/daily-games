@@ -655,6 +655,22 @@ def adhide_js():
       }
     } catch (e) {}
   };
+  // text-ad strips ("Free Shipping with code ...", "Best Pokemon card
+  // packs!") live in same-origin iframes, so CSS selectors never catch them.
+  const txtsweep = () => {
+    try {
+      for (const el of Array.from(document.querySelectorAll('div,a,span,p'))) {
+        const t = (el.innerText || '').trim();
+        if (!t || t.length > 90) continue;
+        if (/free shipping|sponsored|advertising|promo code|card packs|best .* packs|donate now/i.test(t)) {
+          const r = el.getBoundingClientRect();
+          if (r.height < 220) el.style.setProperty('display', 'none', 'important');
+        }
+      }
+    } catch (e) {}
+  };
+  setInterval(txtsweep, 1500);
+  document.addEventListener('DOMContentLoaded', txtsweep);
   setInterval(kill3p, 1200);
   document.addEventListener('DOMContentLoaded', kill3p);
   const put = () => { if (!document.head) return;

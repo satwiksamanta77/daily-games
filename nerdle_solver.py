@@ -264,7 +264,7 @@ async def block_ads(route):
     try:
         u = route.request.url
         if any(x in u for x in ("doubleclick", "googlesyndication", "adnxs", "pubmatic", "criteo", "amazon-adsystem", "googletagmanager", "google-analytics", "clarity.ms", "amxrtb", "trustarc.com", "truste.com", "quantserve.com", "criteo", "onetag-sys", "cootlogix", "kueez",
-              "rubiconproject", "flashtalking", "prebid", "btloader")):
+              "rubiconproject", "flashtalking", "prebid")):
             return await route.abort()
     except Exception:
         pass

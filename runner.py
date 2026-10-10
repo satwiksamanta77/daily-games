@@ -2593,7 +2593,7 @@ def _s_countryle(page, ans, gid):
         b0 = ""
     if "MISSION" in b0 or "Welcome to" in b0 or "GUESS" in b0.upper() \
             or len(b0.strip()) < 50:
-        for _tap in range(10):
+        for _tap in range(16):
             box = None
             try:
                 box = fr.evaluate("""() => {
@@ -2673,6 +2673,30 @@ def _s_countryle(page, ans, gid):
                     _dbg(gid, "slide unchanged after trusted tap")
             except Exception:
                 pass
+    # final explicit PLAY/START push: the deck's last slide button is the
+    # one that actually mounts the game (runs ended one click short of it)
+    for _play in range(4):
+        try:
+            if fr.query_selector("input"):
+                break
+            pb = fr.query_selector("button:has-text('Play')") or \
+                fr.query_selector("button:has-text('PLAY')") or \
+                fr.query_selector("button:has-text('Start')")
+            if not pb:
+                break
+            try:
+                bb = pb.bounding_box()
+                if bb:
+                    page.mouse.click(bb["x"] + bb["width"] / 2,
+                                     bb["y"] + bb["height"] / 2)
+                    _push_click_at(bb["x"] + bb["width"] / 2,
+                                   bb["y"] + bb["height"] / 2)
+                    _dbg(gid, "explicit PLAY tap")
+            except Exception:
+                pb.click(timeout=2500)
+            page.wait_for_timeout(2500)
+        except Exception:
+            break
     seq = _guesses(gid, ans)
     a = str(ans or "").strip()
     picked = "none"
@@ -4250,8 +4274,7 @@ def run_one(gid):
                                         "connect.facebook", "tiktok", "amplitude",
                                         "criteo", "onetag-sys", "cootlogix", "copper6",
                                         "kueez", "rubiconproject", "flashtalking",
-                                        "nextmillmedia", "admatic", "intergient",
-                                        "pageos", "btloader", "prebid", "moatads",
+                                        "nextmillmedia", "admatic", "prebid", "moatads",
                                         "scorecardresearch", "quantserve", "taboola",
                                         "outbrain", "smartadserver", "sharethrough",
                                         "googletagservices", "adsafeprotected",
