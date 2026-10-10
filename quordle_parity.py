@@ -662,7 +662,7 @@ def adhide_js():
       for (const el of Array.from(document.querySelectorAll('div,a,span,p'))) {
         const t = (el.innerText || '').trim();
         if (!t || t.length > 90) continue;
-        if (/free shipping|sponsored|advertising|promo code|card packs|best .* packs|donate now/i.test(t)) {
+        if (/free shipping|sponsored|advertising|promo code|card packs|best .* packs|donate now|do not sell|share my personal/i.test(t)) {
           const r = el.getBoundingClientRect();
           if (r.height < 220) el.style.setProperty('display', 'none', 'important');
         }
