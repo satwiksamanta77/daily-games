@@ -4544,6 +4544,8 @@ def run_one(gid):
                           ["One secret colour name today",
                            "Similarity % narrows the hue",
                            "Green row = exact colour"])
+            else:
+                _hints = S.compute_hints(str(aval))
             DP.generate_hints(str(hints_p), g["name"], today,
                               _hints, str(aval), kind=_kind, palette=_pal)
             if gid == "waffle" and _LAST_BOARD_SHOT and Path(_LAST_BOARD_SHOT).exists():
