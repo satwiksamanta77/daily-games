@@ -3206,11 +3206,50 @@ def _s_waffle(page, ans, gid):
     return False, f"{swaps} swaps, greens {b0}->{greens}/{total}; no win"
 
 
+def _shadow_dismiss(page, gid="?"):
+    """Click close/X controls hidden inside shadow roots (worgle's About
+    dialog lives in <game-app>'s shadow DOM - main-document queries and
+    Escape never reach it)."""
+    try:
+        pt = page.evaluate("""() => {
+          const walk = (root) => {
+            for (const e of root.querySelectorAll(
+                   'button, [role=button], a, [class*=close i]')) {
+              const t = ((e.innerText || e.getAttribute('aria-label') || '')
+                         .trim().toLowerCase());
+              if (['x', '\u00d7', '\u2715', 'close', 'got it', 'ok',
+                   'dismiss'].includes(t)) {
+                const r = e.getBoundingClientRect();
+                if (r.width > 2 && r.height > 2)
+                  return {x: r.x + r.width / 2, y: r.y + r.height / 2, t: t};
+              }
+            }
+            for (const e of root.querySelectorAll('*'))
+              if (e.shadowRoot) {
+                const p = walk(e.shadowRoot);
+                if (p) return p;
+              }
+            return null;
+          };
+          return walk(document);
+        }""")
+        if pt:
+            page.mouse.click(pt["x"], pt["y"])
+            _dbg(gid, f"shadow-dismiss clicked {pt['t']!r}")
+            page.wait_for_timeout(700)
+            return True
+    except Exception as e:
+        _dbg(gid, f"shadow-dismiss failed: {str(e)[:70]}")
+    return False
+
+
 def _s_worgle(page, ans, gid):
     """Worgle: wordle-like board in a <game-app> shell; type + Enter."""
     _close_modals(page)
+    for _ in range(3):           # About dialog sits in the shadow DOM
+        if not _shadow_dismiss(page, gid):
+            break
     try:
-        page.keyboard.press("Escape")
         _dismiss_dialogs(page, rounds=2)
     except Exception:
         pass
