@@ -1412,15 +1412,20 @@ def _framed_live_answer(page, mode, fallback):
     # map" and the answer was wrong. Match THIS mode's own label only.
     label = {"daily": "CLASSIC", "one-frame": "ONE FRAME",
              "titleshot": "TITLESHOT", "poster": "POSTER"}.get(mode, "CLASSIC")
-    try:
-        shown = page.evaluate(
-            """(lbl) => {
-              const t = (document.body.innerText || '').toUpperCase();
-              const m = t.match(new RegExp(lbl + '\\\\s*#\\\\s*(\\\\d+)'));
-              return m ? parseInt(m[1], 10) : null;
-            }""", label)
-    except Exception:
-        shown = None
+    shown = None
+    for _try in range(5):          # header number renders async after board
+        try:
+            shown = page.evaluate(
+                """(lbl) => {
+                  const t = (document.body.innerText || '').toUpperCase();
+                  const m = t.match(new RegExp(lbl + '\\\\s*#\\\\s*(\\\\d+)'));
+                  return m ? parseInt(m[1], 10) : null;
+                }""", label)
+        except Exception:
+            shown = None
+        if shown:
+            break
+        page.wait_for_timeout(1500)
     if not shown:
         return fallback
     try:
@@ -1441,6 +1446,24 @@ def _framed_live_answer(page, mode, fallback):
                 return cand["answer"]
     except Exception as e:
         print(f"[framed] {mode}: live re-resolve failed: {str(e)[:110]}")
+    # Last resort: ask the titles API for the board's own number directly.
+    try:
+        import requests as _rq
+        _gt = A.FRAMED_MODES[mode][0]
+        _r = _rq.get(f"https://titles.framed.wtf/v1/titles/top-ten/{shown}",
+                     params={"gameType": _gt}, timeout=20,
+                     headers={"User-Agent": "WordSolverX Video"})
+        if _r.ok:
+            _fr = (_r.json().get("frames") or [])
+            if _fr:
+                _raw = _fr[-1].get("items")
+                _it = json.loads(_raw) if isinstance(_raw, str) else (_raw or [])
+                if _it and _it[0].get("title"):
+                    print(f"[framed] {mode}: direct titles API for #{shown} "
+                          f"-> {_it[0]['title']!r}")
+                    return _it[0]["title"]
+    except Exception as e:
+        print(f"[framed] {mode}: direct titles fetch failed: {str(e)[:90]}")
     print(f"[framed] {mode}: board #{shown} did not map to a known date; "
           f"using {fallback!r}")
     return fallback
