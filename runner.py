@@ -1427,6 +1427,22 @@ def _framed_live_answer(page, mode, fallback):
             break
         page.wait_for_timeout(1500)
     if not shown:
+        try:  # the root menu lists every mode's header - read it there
+            page.goto("https://framed.wtf", wait_until="domcontentloaded",
+                      timeout=25000)
+            page.wait_for_timeout(4000)
+            shown = page.evaluate(
+                "(lbl) => { const t = (document.body.innerText || '')"
+                ".toUpperCase(); const m = t.match(new RegExp(lbl + "
+                "'\\\\s*#\\\\s*(\\\\d+)')); return m ? parseInt(m[1], 10) : null; }",
+                label)
+            page.goto(A.FRAMED_URLS[mode], wait_until="domcontentloaded",
+                      timeout=25000)
+            page.wait_for_timeout(3000)
+        except Exception as _me:
+            print(f"[framed] {mode}: menu number read failed: "
+                  f"{str(_me)[:80]}")
+    if not shown:
         return fallback
     try:
         base = A.framed(A.target_date(), mode=mode)
@@ -4565,6 +4581,25 @@ def run_one(gid):
                         solved, evidence = solver(pg, aval_s, gid)
                 except TypeError:
                     solved, evidence = solver(pg, aval_s)
+                if not solved and not _defer_stale:
+                    try:
+                        _ptl = len((pg.evaluate(
+                            "() => document.body.innerText || ''") or ""))
+                    except Exception:
+                        _ptl = 999
+                    if _ptl < 80:      # Flutter/app shell never booted
+                        _dbg(gid, f"page text only {_ptl} chars - rebooting "
+                                  f"page and replaying solver once")
+                        try:
+                            pg.reload(wait_until="domcontentloaded")
+                            pg.wait_for_timeout(9000)
+                            if gid in ("colordle", "colorfle"):
+                                solved, evidence = solver(pg, ans)
+                            else:
+                                solved, evidence = solver(pg, aval_s, gid)
+                            evidence = f"{evidence} (after reboot retry)"
+                        except Exception as _re2:
+                            _dbg(gid, f"reboot retry failed: {str(_re2)[:90]}")
                 if solved and gid == "marveldle" and _FOUND_ANSWER.get(gid):
                     aval = _FOUND_ANSWER[gid]
                     aval_s = str(aval)
