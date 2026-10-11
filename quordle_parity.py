@@ -556,9 +556,11 @@ def consent_watch_js():
   // Unambiguous consent/tooltip/modal-close labels: clickable ANYWHERE on
   // the page (no overlay-container gate) - the gate was leaving nerdle's
   // hint tooltip + 'More games' X and worldle's 'Got it!' tip on camera.
+  // NOTE: never single-letter labels here - on-screen game keyboards have
+  // an X key and the watcher was pressing it mid-solve (phoodle/worgle/
+  // searchle regressions). Only unambiguous multi-char/glyph labels.
   const STRICT = new Set(['ok', 'okay', 'got it', 'x disable hints',
-    'disable hints', 'all rules', '\u00d7', 'x', '\u2715', 'close',
-    'no thanks']);
+    'disable hints', 'all rules', '\u00d7', '\u2715', 'close', 'no thanks']);
   const done = new WeakSet();
   const inOverlay = (el) => {
     try {
