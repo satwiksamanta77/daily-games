@@ -948,10 +948,18 @@ def polish_gameplay(src, out_path, crf=17):
         if not clips:
             bc.close()
             return base
-        comp = CompositeVideoClip([bc] + clips, size=bc.size)
         out_cur = str(_QPPath(base).parent / (_QPPath(base).stem + "_cur.mp4"))
-        comp.write_videofile(out_cur, codec="libx264", audio_codec="aac",
-                             fps=24, verbose=False, logger=None)
+        try:
+            comp = CompositeVideoClip([bc] + clips, size=bc.size)
+            comp.write_videofile(out_cur, codec="libx264", audio_codec="aac",
+                                 fps=24, verbose=False, logger=None)
+        except Exception:
+            # long videos can blow the moviepy blit budget: retry with the
+            # cursor dot only (no ripple layers) so the arrow still ships
+            print("[polish] full composite failed; retrying dot-only")
+            comp = CompositeVideoClip([bc, clips[0]], size=bc.size)
+            comp.write_videofile(out_cur, codec="libx264", audio_codec="aac",
+                                 fps=24, verbose=False, logger=None)
         try:
             bc.close()
             comp.close()

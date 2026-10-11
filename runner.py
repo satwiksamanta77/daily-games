@@ -2153,12 +2153,20 @@ def _s_betweenle(page, ans, gid):
     gs = _guesses(gid, ans)
     page.mouse.click(960, 600)
     page.wait_for_timeout(500)
-    for g in gs:
+    for gi, g in enumerate(gs):
         _idle_drift(page)
+        page.mouse.click(960, 600)          # canvas focus can drift per guess
+        page.wait_for_timeout(300)
         _type_like_a_person(page, str(g), base_delay=170)
         page.wait_for_timeout(300)
         page.keyboard.press("Enter")
         _settle(page, base=3000)
+        try:
+            _st = _betweenle_state(page)
+            _dbg(gid, f"guess {gi + 1}/{len(gs)} {g!r}: rows={_st.get('rows')} "
+                      f"len={_st.get('len')} invalid={_betweenle_invalid_showing(page)}")
+        except Exception as _e:
+            _dbg(gid, f"guess {gi + 1} state read failed: {str(_e)[:60]}")
     page.wait_for_timeout(2500)
     _enable_flutter_semantics(page)
     ok, ev = _strict_win(page, ans)
