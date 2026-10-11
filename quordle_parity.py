@@ -583,8 +583,9 @@ def consent_watch_js():
       let els = [];
       try {
         els = Array.from(root.querySelectorAll(
-          'button, a[role=button], [role=button], #truste-consent-button, .fc-cta-consent,
-          [aria-label=dismiss], [aria-label*="close" i], [class*="close" i][role=button]'));
+          'button, a[role=button], [role=button], #truste-consent-button, ' +
+          '.fc-cta-consent, [aria-label=dismiss], [aria-label*="close" i], ' +
+          '[class*="close" i][role=button]'));
       } catch (e) { continue; }
       for (const el of els) {
         if (done.has(el)) continue;
