@@ -1073,10 +1073,10 @@ def _card_composite(src, out_path, crf):
                              str(wall), "-vf",
                              "scale=1920:1080:force_original_aspect_ratio=increase,"
                              "crop=1920:1080,eq=brightness=-0.05:saturation=1.1",
-                             "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+                             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
                              "-pix_fmt", "yuv420p", "-r", "24", "-t", str(dur),
                              str(wall_mp4)], capture_output=True, text=True,
-                            timeout=60)
+                            timeout=900)
         ok_wall = r1.returncode == 0 and wall_mp4.exists()
     if not ok_wall:
         wall_mp4 = tmp / "blurred.mp4"
