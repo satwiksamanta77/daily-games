@@ -3217,8 +3217,8 @@ def _shadow_dismiss(page, gid="?"):
                    'button, [role=button], a, [class*=close i]')) {
               const t = ((e.innerText || e.getAttribute('aria-label') || '')
                          .trim().toLowerCase());
-              if (['x', '\u00d7', '\u2715', 'close', 'got it', 'ok',
-                   'dismiss'].includes(t)) {
+              if (['\u00d7', '\u2715', 'close', 'got it', 'ok',
+                   'dismiss'].includes(t) && t.length > 1) {
                 const r = e.getBoundingClientRect();
                 if (r.width > 2 && r.height > 2)
                   return {x: r.x + r.width / 2, y: r.y + r.height / 2, t: t};
