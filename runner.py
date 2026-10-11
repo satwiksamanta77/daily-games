@@ -2180,7 +2180,23 @@ def _s_betweenle(page, ans, gid):
     # Readiness loop: the daily-mode click + how-to dismiss must actually land
     # before typing, or every guess goes into the void (rows stayed 0 on CI).
     for _rd in range(6):
-        page.mouse.click(960, 600)
+        # Escape closes any open menu panel whose search box otherwise eats
+        # the keyboard (guesses were typed into the MENU, rows stayed 0),
+        # then click the Flutter canvas centre - not a blind coordinate.
+        try:
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(300)
+            _cv = page.evaluate("""() => {
+              const e = document.querySelector('flt-glass-pane, canvas, flt-scene-host');
+              if (!e) return null;
+              const r = e.getBoundingClientRect();
+              return {x: r.x + r.width / 2, y: r.y + r.height / 2}; }""")
+            if _cv:
+                page.mouse.click(_cv["x"], _cv["y"])
+            else:
+                page.mouse.click(960, 600)
+        except Exception:
+            page.mouse.click(960, 600)
         page.wait_for_timeout(600)
         try:
             _st0 = _betweenle_state(page)
@@ -2230,6 +2246,19 @@ def _s_betweenle(page, ans, gid):
                     _dbg(gid, f"recovery: clicking text field at "
                               f"({_tf['x']:.0f},{_tf['y']:.0f}) + retyping")
                     page.mouse.click(_tf["x"], _tf["y"])
+                else:
+                    try:
+                        page.keyboard.press("Escape")
+                        _cv2 = page.evaluate(
+                            "() => { const e = document.querySelector("
+                            "'flt-glass-pane, canvas'); if (!e) return null;"
+                            "const r = e.getBoundingClientRect();"
+                            "return {x: r.x + r.width/2, y: r.y + r.height/2}; }")
+                        if _cv2:
+                            _dbg(gid, "recovery: Escape + canvas-centre click")
+                            page.mouse.click(_cv2["x"], _cv2["y"])
+                    except Exception:
+                        pass
                     page.wait_for_timeout(400)
                     _type_like_a_person(page, str(g), base_delay=150)
                     page.keyboard.press("Enter")
