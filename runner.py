@@ -1519,7 +1519,7 @@ def solve_framed_modes(page, answers):
         except Exception:
             pass
         if not _framed_board_ready(page):
-            if mid == "poster" and _framed_try_unlock_poster(page):
+            if mid in ("poster", "one-frame") and _framed_try_unlock_poster(page):
                 try:
                     ready = _framed_board_ready(page)
                 except Exception:
@@ -1544,6 +1544,13 @@ def solve_framed_modes(page, answers):
         for n, t in enumerate(guesses):
             last = (n == len(guesses) - 1)
             pok, pev = _framed_submit(page, t)
+            if not pok and "ad-gated" in str(pev):
+                _dbg("framed", f"{mid}: input ad-gated; trying reward unlock")
+                try:
+                    if _framed_try_unlock_poster(page):
+                        pok, pev = _framed_submit(page, t)
+                except Exception as _ue:
+                    _dbg("framed", f"{mid}: unlock failed: {str(_ue)[:70]}")
             tag = "answer" if last else "probe"
             print(f"[framed] {mid}: {tag} {t!r} -> {pev}")
             # Only a probe that IS the resolved answer can be an early win.
