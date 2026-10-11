@@ -558,10 +558,15 @@ def consent_watch_js():
           '[class*=dialog i],[class*=tooltip i],[class*=hint i],[role=dialog],' +
           '[id*=truste],[class*=fc-]')) return true;
       let n = el;
-      for (let i = 0; i < 4 && n; i++) {
+      for (let i = 0; i < 5 && n; n = n.parentElement, i++) {
         const cs = getComputedStyle(n);
-        if (cs && (cs.position === 'fixed' || cs.position === 'sticky')) return true;
-        n = n.parentElement;
+        if (!cs) continue;
+        if (cs.position === 'fixed' || cs.position === 'sticky') return true;
+        if (cs.position === 'absolute' && parseInt(cs.zIndex || '0', 10) >= 10)
+          return true;
+        const r = n.getBoundingClientRect();
+        if (r.width > innerWidth * 0.6 && r.height < innerHeight * 0.5 &&
+            (r.top < 8 || r.bottom > innerHeight - 8)) return true;  // toast bar
       }
     } catch (e) {}
     return false;
@@ -578,7 +583,8 @@ def consent_watch_js():
       let els = [];
       try {
         els = Array.from(root.querySelectorAll(
-          'button, a[role=button], [role=button], #truste-consent-button, .fc-cta-consent, [aria-label=dismiss]'));
+          'button, a[role=button], [role=button], #truste-consent-button, .fc-cta-consent,
+          [aria-label=dismiss], [aria-label*="close" i], [class*="close" i][role=button]'));
       } catch (e) { continue; }
       for (const el of els) {
         if (done.has(el)) continue;
@@ -624,7 +630,8 @@ def adhide_js():
     [class*="sponsored"], .donate-banner, [class*="banner-ad"],
     ins, #loading-mask, [id*="rail" i], [class*="rail" i], [id*="admantle" i],
     [class*="admantle" i], [id*="trendi" i], [class*="pubexchange"],
-    [class*="outbrain"], [id*="google_ads_iframe"], [class*="banner" i] {
+    [class*="outbrain"], [id*="google_ads_iframe"], [class*="banner" i],
+    [class*="clevergist" i], [href*="clevergist" i] {
       display: none !important; visibility: hidden !important;
       width: 0 !important; height: 0 !important;
     }`;

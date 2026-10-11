@@ -419,7 +419,8 @@ def generate_mode_card(out_path, game, mode_name, subtitle=""):
     return out_path
 
 
-def generate_facts(out_path, game, date_str, answer, steps):
+def generate_facts(out_path, game, date_str, answer, steps,
+                 kind=None, palette=None):
     """Solve breakdown: stat cards instead of a wall of text."""
     img, d, f = _base(f"{game} breakdown", date_str)
     d.text((70, 165), "SOLVE BREAKDOWN", fill=TEXT, font=f["t"])
@@ -444,7 +445,7 @@ def generate_facts(out_path, game, date_str, answer, steps):
         _card(img, d, box, radius=18)
         d = ImageDraw.Draw(img)
         g = str(s.get("guess", "")).upper()[:24]
-        clue = _clue_line(s.get("pattern", ""))[:70]
+        clue = _clue_line(s.get("pattern", ""), kind=kind)[:70]
         d.text((110, y + 26), f"{s.get('turn', '?')}.", fill=GREEN, font=f["b"])
         gf = _fit_font(d, g, f["b"], 620)
         d.text((190, y + 26), g, fill=TEXT, font=gf)

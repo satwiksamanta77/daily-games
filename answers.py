@@ -175,7 +175,15 @@ def colorfle(d=None, mode=0):
                          capture_output=True, text=True, timeout=60)
     if out.returncode != 0:
         raise SystemExit(f"colorfle node failed: {out.stderr[:300]}")
-    return json.loads(out.stdout)
+    j = json.loads(out.stdout)
+    # full 20-colour palette (same order as the site bundle) so slides can
+    # render real swatches for guess indices, not grey "?" chips
+    j.setdefault("paletteHexes", [
+        '#FFFFFF', '#FFFAC8', '#FABEBE', '#AAFFC3', '#E6BEFF', '#FFD8B1',
+        '#B1F0F0', '#F0B1D8', '#C8FFB1', '#B1C8FF', '#FFF0B1', '#FFB1C8',
+        '#B1FFD8', '#D8B1FF', '#FFE6B1', '#8FD8FF', '#7FE0A0', '#FF9E7A',
+        '#5EC8E6', '#F5A9B8'])
+    return j
 
 
 # ---------- framed (all modes) ----------

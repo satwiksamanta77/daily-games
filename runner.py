@@ -2347,6 +2347,10 @@ def _s_wordle(page, ans, gid):
     except Exception:
         pass
     if gid == "canuckle":
+        try:
+            _dismiss_canvas_dialog(page, tries=2)   # HOW TO PLAY, pre-solve
+        except Exception:
+            pass
         # Flutter only takes keys when the canvas holds focus: one real click
         # (which also feeds the cursor track) + semantics tree up front.
         try:
@@ -3021,6 +3025,11 @@ def _s_waffle(page, ans, gid):
 def _s_worgle(page, ans, gid):
     """Worgle: wordle-like board in a <game-app> shell; type + Enter."""
     _close_modals(page)
+    try:
+        page.keyboard.press("Escape")
+        _dismiss_dialogs(page, rounds=2)
+    except Exception:
+        pass
     _reset_site_state(page, gid)
     _close_modals(page)
     seq = _guesses(gid, ans)
@@ -4032,7 +4041,7 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
             _pal = None
             try:
                 if gid == "colorfle" and isinstance(ans, dict):
-                    _pal = ans.get("colorHexes")
+                    _pal = ans.get("paletteHexes") or ans.get("colorHexes")
                 elif gid == "colordle" and isinstance(ans, dict) and ans.get("hex"):
                     _pal = [ans.get("hex")]
             except Exception:
@@ -4517,16 +4526,24 @@ def run_one(gid):
             elif gid == "batterup":
                 try:
                     _bp = ans.get("player") if isinstance(ans, dict) else {}
-                    _hints = [f"Team: {_bp.get('team_name', '?')}",
-                              f"Position: {', '.join(_bp.get('position', [])) or '?'}",
-                              f"Born: {_bp.get('born', '?')}"]
+                    _hints = [f"Team: {_bp.get('team_name') or 'MLB roster'}",
+                              f"Position: {', '.join(_bp.get('position') or []) or 'columns narrow it'}",
+                              f"Born: {_bp.get('born') or 'silhouette swings first'}"]
                 except Exception:
                     _hints = ["Guess the player", "Columns narrow it down"]
             elif gid == "marveldle":
                 _hints = ["Comics hero or villain", "Check gender, type, era",
-                          "Answer last after 2 probes"]
-            else:
-                _hints = S.compute_hints(str(aval))
+                          "Columns light up as you narrow it"]
+            elif gid in ("colorfle", "colordle"):
+                _n = len(_pal or []) or 3
+                _hints = ([f"{len((ans or {}).get('colors') or aval.strip('[]').split(','))} "
+                           f"colours from a {_n}-colour palette",
+                           "Order matters - pie split shows positions",
+                           "Greens lock, yellows move slot"]
+                          if gid == "colorfle" else
+                          ["One secret colour name today",
+                           "Similarity % narrows the hue",
+                           "Green row = exact colour"])
             DP.generate_hints(str(hints_p), g["name"], today,
                               _hints, str(aval), kind=_kind, palette=_pal)
             if gid == "waffle" and _LAST_BOARD_SHOT and Path(_LAST_BOARD_SHOT).exists():
@@ -4547,7 +4564,8 @@ def run_one(gid):
             else:
                 DP.generate_reveal(str(reveal_p), g["name"], today, str(aval),
                                    steps, kind=_kind, palette=_pal)
-            DP.generate_facts(str(facts_p), g["name"], today, str(aval), steps)
+            DP.generate_facts(str(facts_p), g["name"], today, str(aval),
+                                steps, kind=_kind, palette=_pal)
             DP.generate_teaser(str(teaser_p), g["name"], today, g["slug"])
 
             def _still(p, secs):
