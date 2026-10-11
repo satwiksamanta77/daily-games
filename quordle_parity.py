@@ -603,7 +603,7 @@ def consent_watch_js():
         try { r = el.getBoundingClientRect(); } catch (e) {}
         if (!r || r.width < 8 || r.height < 8) continue;
         const t = ((el.innerText || el.getAttribute('aria-label') || '')
-                   .trim().toLowerCase());
+                   .trim().toLowerCase()).replace(/[!?.]+$/g, '');
         if (!t || t.length > 30) continue;
         if (STRICT.has(t)) { /* clickable anywhere */ }
         else if (TXT.has(t)) { if (!inOverlay(el)) continue; }
@@ -619,7 +619,7 @@ def consent_watch_js():
   };
   sweep();
   const iv = setInterval(sweep, 800);
-  setTimeout(() => clearInterval(iv), 20000);
+  setTimeout(() => clearInterval(iv), 300000);   // tooltips pop mid-game
   try {
     new MutationObserver(() => sweep()).observe(
       document.documentElement, {childList: true, subtree: true});
