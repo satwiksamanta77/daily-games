@@ -622,7 +622,7 @@ def adhide_js():
     div[id*="google_ads"], div[id*="div-gpt-ad"], .ad-container, .adsbygoogle,
     .ads, [class*="ad-slot"], [class*="adspace"], [id*="ad-slot"],
     [class*="sponsored"], .donate-banner, [class*="banner-ad"],
-    ins, [id*="rail" i], [class*="rail" i], [id*="admantle" i],
+    ins, #loading-mask, [id*="rail" i], [class*="rail" i], [id*="admantle" i],
     [class*="admantle" i], [id*="trendi" i], [class*="pubexchange"],
     [class*="outbrain"], [id*="google_ads_iframe"], [class*="banner" i] {
       display: none !important; visibility: hidden !important;

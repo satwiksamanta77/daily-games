@@ -2605,6 +2605,16 @@ def _s_countryle(page, ans, gid):
         _dbg(gid, "app iframe never produced UI (bot-gate?)")
         return False, "app iframe empty after 60 s"
     _dbg(gid, f"app frame: {fr.url[:60]}")
+    # The pageos shell keeps a full-screen #loading-mask spinner OVER the app
+    # iframe until ad boot completes; on CI it never completes, so the mask
+    # intercepts every click (element AND coordinate) on the onboarding deck.
+    try:
+        _n_mask = page.evaluate(
+            "() => { let n = 0; for (const m of document.querySelectorAll("
+            "'#loading-mask, .mask')) { m.remove(); n++; } return n; }")
+        _dbg(gid, f"loading-mask removed from shell: {_n_mask}")
+    except Exception as _me:
+        _dbg(gid, f"mask removal failed: {str(_me)[:80]}")
     try:
         b0 = (fr.evaluate("() => document.body.innerText") or "")[:400]
     except Exception:
