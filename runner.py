@@ -2234,6 +2234,11 @@ def _install_live_day_probe(page):
                 return
             iso = m.group(1)
             host = url.split("/")[2] if "//" in url else url
+            try:
+                if resp.status == 404 and "globle-game.com/answer" in url:
+                    _LIVE_DAY["globle_404"] = True
+            except Exception:
+                pass
             # Keep the FIRST date each host asked for; later calls are usually
             # history/stats fetches for neighbouring days.
             seen = _LIVE_DAY.setdefault("hosts", {})
@@ -2516,6 +2521,9 @@ def _s_globle(page, ans, gid):
         page.wait_for_selector("input[name=guess]", timeout=30000)
     except Exception:
         _dbg(gid, "guesser input never mounted")
+        if _LIVE_DAY.get("globle_404"):
+            return False, ("defer: board-unpublished (globle answer endpoint "
+                           "404 - faked day is ahead of the server's roll)")
     seq = _guesses(gid, ans)
     a = str(ans or "").strip()
     for n, g in enumerate(seq):
@@ -4462,6 +4470,8 @@ def run_one(gid):
         ctx.close()
         b.close()
 
+    if str(evidence).startswith("defer:"):
+        _defer_stale = True
     try:
         (vdir / f"telemetry_{date_key}.json").write_text(
             json.dumps(QP.ev_all(), indent=1), encoding="utf-8")
