@@ -692,7 +692,32 @@ def adhide_js():
   const ts = () => { if (active.on) txtsweep(); };
   setInterval(ts, 1500);
   document.addEventListener('DOMContentLoaded', ts);
-  const k3 = () => { if (active.on) kill3p(); };
+  // geo-targeted photo-ad boxes (batter-up right edge on US runners):
+  // small third-party-image containers in the outer viewport bands.
+  const killEdgeImg = () => {
+    try {
+      for (const im of Array.from(document.querySelectorAll('img'))) {
+        let u = '';
+        try { u = im.src || ''; } catch (e) {}
+        if (!u || u.startsWith('data:')) continue;
+        let host = '';
+        try { host = new URL(u, location.href).host; } catch (e) { continue; }
+        if (host === location.host) continue;
+        const r = im.getBoundingClientRect();
+        if (r.width < 20 || r.height < 20) continue;
+        if (r.width > 460 || r.height > 460) continue;
+        const edge = r.x > innerWidth * 0.78 || r.y > innerHeight * 0.78 ||
+                     r.right < innerWidth * 0.22;
+        if (!edge) continue;
+        let n = im.parentElement;
+        for (let i = 0; i < 3 && n && n !== document.body; i++) {
+          n.style.setProperty('display', 'none', 'important');
+          n = n.parentElement;
+        }
+      }
+    } catch (e) {}
+  };
+  const k3 = () => { if (active.on) kill3p(); killEdgeImg(); };
   setInterval(k3, 1200);
   document.addEventListener('DOMContentLoaded', k3);
   // DEFERRED ACTIVATION: several of these sites (globle) run an
