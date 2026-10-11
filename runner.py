@@ -2210,21 +2210,29 @@ def _s_betweenle(page, ans, gid):
     # Readiness loop: the daily-mode click + how-to dismiss must actually land
     # before typing, or every guess goes into the void (rows stayed 0 on CI).
     for _rd in range(6):
-        # Escape closes any open menu panel whose search box otherwise eats
-        # the keyboard (guesses were typed into the MENU, rows stayed 0),
-        # then click the Flutter canvas centre - not a blind coordinate.
+        # NO Escape: Flutter treats it as BACK out of the daily board into
+        # the menu (that is why every guess typed into the void). Close the
+        # overlay panels by id, click the canvas centre, then force focus on
+        # Flutter's hidden WORD input so the keyboard reaches the board.
         try:
-            page.keyboard.press("Escape")
+            page.evaluate(
+                "() => { for (const id of ['tipspanel-close', "
+                "'statisticspanel-close']) { const e = "
+                "document.getElementById(id); if (e) e.click(); } }")
             page.wait_for_timeout(300)
-            _cv = page.evaluate("""() => {
-              const e = document.querySelector('flt-glass-pane, canvas, flt-scene-host');
-              if (!e) return null;
-              const r = e.getBoundingClientRect();
-              return {x: r.x + r.width / 2, y: r.y + r.height / 2}; }""")
+            _cv = page.evaluate(
+                "() => { const e = document.querySelector("
+                "'flt-glass-pane, canvas, flt-scene-host'); if (!e) return null;"
+                "const r = e.getBoundingClientRect();"
+                "return {x: r.x + r.width / 2, y: r.y + r.height / 2}; }")
             if _cv:
                 page.mouse.click(_cv["x"], _cv["y"])
             else:
                 page.mouse.click(960, 600)
+            try:
+                page.focus("input[placeholder='WORD' i], input[placeholder=WORD]")
+            except Exception:
+                pass
         except Exception:
             page.mouse.click(960, 600)
         page.wait_for_timeout(600)
@@ -2281,14 +2289,13 @@ def _s_betweenle(page, ans, gid):
                         pass
                 else:
                     try:
-                        page.keyboard.press("Escape")
                         _cv2 = page.evaluate(
                             "() => { const e = document.querySelector("
                             "'flt-glass-pane, canvas'); if (!e) return null;"
                             "const r = e.getBoundingClientRect();"
                             "return {x: r.x + r.width/2, y: r.y + r.height/2}; }")
                         if _cv2:
-                            _dbg(gid, "recovery: Escape + canvas-centre click")
+                            _dbg(gid, "recovery: canvas-centre click")
                             page.mouse.click(_cv2["x"], _cv2["y"])
                     except Exception:
                         pass
