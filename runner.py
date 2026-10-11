@@ -2240,19 +2240,22 @@ def _s_betweenle(page, ans, gid):
             if not _st.get("rows"):
                 # keyboard went somewhere else: click the Flutter semantics
                 # text field itself and resend this guess once
-                _tf = page.evaluate("""() => {
-                  for (const e of document.querySelectorAll(
-                          'flt-semantics[role=textbox], flt-semantics input,
-                           [role=textbox], input')) {
-                    const r = e.getBoundingClientRect();
-                    if (r.width > 40 && r.height > 10)
-                      return {x: r.x + r.width / 2, y: r.y + r.height / 2};
-                  }
-                  return null; }""")
+                _tf = page.evaluate(
+                    "() => { const els = Array.from(document.querySelectorAll("
+                    "'[role=textbox], input')); "
+                    "for (const e of els) { const r = e.getBoundingClientRect(); "
+                    "if (r.width > 40 || e.getAttribute('placeholder') === 'WORD') "
+                    "return {x: r.x + r.width / 2, y: r.y + r.height / 2}; } "
+                    "return null; }")
                 if _tf:
                     _dbg(gid, f"recovery: clicking text field at "
                               f"({_tf['x']:.0f},{_tf['y']:.0f}) + retyping")
                     page.mouse.click(_tf["x"], _tf["y"])
+                    page.wait_for_timeout(300)
+                    try:
+                        page.focus("input[placeholder='WORD' i], input[placeholder=WORD]")
+                    except Exception:
+                        pass
                 else:
                     try:
                         page.keyboard.press("Escape")
