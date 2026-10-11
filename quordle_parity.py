@@ -949,6 +949,44 @@ def polish_gameplay(src, out_path, crf=17):
             bc.close()
             return base
         out_cur = str(_QPPath(base).parent / (_QPPath(base).stem + "_cur.mp4"))
+        # Long videos (>200 s) blow moviepy's blit memory in one pass:
+        # composite in <=150 s chunks and concat with ffmpeg.
+        if bc.duration > 200:
+            try:
+                from moviepy.editor import concatenate_videoclips
+                parts, n_ch = [], max(2, int(bc.duration // 150) + 1)
+                bounds = [bc.duration * k / n_ch for k in range(n_ch + 1)]
+                for k in range(n_ch):
+                    a, b = bounds[k], bounds[k + 1]
+                    sub = bc.subclip(a, b)
+                    sc = [c.subclip(a, b) if getattr(c, "start", 0) is not None
+                          and c.duration >= b - a else c.set_start(0)
+                          for c in clips]
+                    comp = CompositeVideoClip([sub] + sc, size=bc.size)
+                    pth = out_cur.replace(".mp4", f"_ch{k}.mp4")
+                    comp.write_videofile(pth, codec="libx264",
+                                         audio_codec="aac", fps=24,
+                                         verbose=False, logger=None)
+                    parts.append(pth)
+                import subprocess as _spc
+                conc = ["ffmpeg", "-y", "-v", "error"]
+                for pth in parts:
+                    conc += ["-i", pth]
+                conc += ["-filter_complex",
+                         "".join(f"[{k}:v][{k}:a]" for k in range(len(parts)))
+                         + f"concat=n={len(parts)}:v=1:a=1[v][a]",
+                         "-map", "[v]", "-map", "[a]", "-c:v", "libx264",
+                         "-c:a", "aac", out_cur]
+                _rc = _spc.run(conc, capture_output=True, text=True,
+                               timeout=1800)
+                if _rc.returncode == 0 and _QPPath(out_cur).exists():
+                    LAST_POLISH.update(clips=len(clips), out=out_cur)
+                    print(f"[polish] chunked cursor overlay: {len(clips)} clips "
+                          f"over {n_ch} chunks")
+                    bc.close()
+                    return out_cur
+            except Exception as _ce:
+                print(f"[polish] chunked composite failed: {str(_ce)[:120]}")
         try:
             comp = CompositeVideoClip([bc] + clips, size=bc.size)
             comp.write_videofile(out_cur, codec="libx264", audio_codec="aac",

@@ -1472,6 +1472,7 @@ def solve_framed_modes(page, answers):
         ans = answers.get(mid)
         print(f"[framed] --- {mname} ---")
         mode_start = _time.time() - started
+        _mode_retry = 0
         if not ans:
             per_mode.append({"mode": mid, "solved": False, "why": "no answer",
                              "t_start": mode_start})
@@ -1569,8 +1570,33 @@ def solve_framed_modes(page, answers):
             except Exception:
                 pass
         print(f"[framed] {mname}: solved={ok} evidence={ev}")
+        if not ok and _mode_retry < 1:
+            _mode_retry += 1
+            _dbg("framed", f"{mid}: not won; retrying mode once "
+                           f"(clean reload + full replay)")
+            try:
+                page.reload(wait_until="domcontentloaded")
+                page.wait_for_timeout(4000)
+                page.goto(murl, wait_until="domcontentloaded", timeout=25000)
+                page.wait_for_timeout(5000)
+                if _framed_board_ready(page):
+                    for _t2 in _framed_probe_path(ans, max_guesses=2)[0]:
+                        _framed_submit(page, _t2)
+                    page.wait_for_timeout(6000)
+                    ok, ev = _strict_win(page, ans)
+                    if not ok:
+                        try:
+                            _b2 = (page.content() or "").lower()
+                            if "guesses remaining" in _b2 and "share" in _b2:
+                                ok, ev = True, "retry: post-win SHARE screen"
+                        except Exception:
+                            pass
+                    _dbg("framed", f"{mid}: retry solved={ok} ({ev})")
+            except Exception as _re:
+                _dbg("framed", f"{mid}: retry failed: {str(_re)[:80]}")
         per_mode.append({"mode": mid, "answer": ans, "solved": bool(ok),
                          "evidence": ev, "t_start": mode_start})
+        print(f"[framed] {mname}: FINAL solved={ok}")
         if ok:
             solved_modes.append(mid)
     return per_mode, solved_modes
@@ -2188,6 +2214,26 @@ def _s_betweenle(page, ans, gid):
             _st = _betweenle_state(page)
             _dbg(gid, f"guess {gi + 1}/{len(gs)} {g!r}: rows={_st.get('rows')} "
                       f"len={_st.get('len')} invalid={_betweenle_invalid_showing(page)}")
+            if not _st.get("rows"):
+                # keyboard went somewhere else: click the Flutter semantics
+                # text field itself and resend this guess once
+                _tf = page.evaluate("""() => {
+                  for (const e of document.querySelectorAll(
+                          'flt-semantics[role=textbox], flt-semantics input,
+                           [role=textbox], input')) {
+                    const r = e.getBoundingClientRect();
+                    if (r.width > 40 && r.height > 10)
+                      return {x: r.x + r.width / 2, y: r.y + r.height / 2};
+                  }
+                  return null; }""")
+                if _tf:
+                    _dbg(gid, f"recovery: clicking text field at "
+                              f"({_tf['x']:.0f},{_tf['y']:.0f}) + retyping")
+                    page.mouse.click(_tf["x"], _tf["y"])
+                    page.wait_for_timeout(400)
+                    _type_like_a_person(page, str(g), base_delay=150)
+                    page.keyboard.press("Enter")
+                    _settle(page, base=2500)
         except Exception as _e:
             _dbg(gid, f"guess {gi + 1} state read failed: {str(_e)[:60]}")
     page.wait_for_timeout(2500)
