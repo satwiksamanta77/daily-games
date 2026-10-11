@@ -550,7 +550,15 @@ def consent_watch_js():
   if (window.__CONSENT_WATCH) return;
   window.__CONSENT_WATCH = 1;
   window.__CONSENT_CLICKS = [];
-  const TXT = new Set([%s]);
+  const TXT = new Set(['accept', 'accept all', 'accept all cookies',
+    'reject all', 'agree', 'i agree', 'allow all', 'no thanks', 'continue',
+    'dismiss']);
+  // Unambiguous consent/tooltip/modal-close labels: clickable ANYWHERE on
+  // the page (no overlay-container gate) - the gate was leaving nerdle's
+  // hint tooltip + 'More games' X and worldle's 'Got it!' tip on camera.
+  const STRICT = new Set(['ok', 'okay', 'got it', 'x disable hints',
+    'disable hints', 'all rules', '\u00d7', 'x', '\u2715', 'close',
+    'no thanks']);
   const done = new WeakSet();
   const inOverlay = (el) => {
     try {
@@ -594,8 +602,10 @@ def consent_watch_js():
         if (!r || r.width < 8 || r.height < 8) continue;
         const t = ((el.innerText || el.getAttribute('aria-label') || '')
                    .trim().toLowerCase());
-        if (!t || t.length > 30 || !TXT.has(t)) continue;
-        if (!inOverlay(el)) continue;   // never click game buttons
+        if (!t || t.length > 30) continue;
+        if (STRICT.has(t)) { /* clickable anywhere */ }
+        else if (TXT.has(t)) { if (!inOverlay(el)) continue; }
+        else continue;
         done.add(el);
         try {
           window.__CONSENT_CLICKS.push(
@@ -613,7 +623,7 @@ def consent_watch_js():
       document.documentElement, {childList: true, subtree: true});
   } catch (e) {}
 })();
-""" % _CONSENT_TXT
+"""
 
 
 def adhide_js():
