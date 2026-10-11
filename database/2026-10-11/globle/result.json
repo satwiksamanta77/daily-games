@@ -1,8 +1,93 @@
 {
  "game": "globle",
  "date": "2026-10-11",
- "solved": false,
- "evidence": "guess 1: no guess input",
+ "solved": true,
+ "evidence": "win text after guess 4",
  "video": "/home/runner/work/daily-games/daily-games/videos/globle/globle_final_2026-10-11.mp4",
- "youtube_url": null
+ "guesses": [
+  "Liberia",
+  "Palau",
+  "Uruguay",
+  "LAOS"
+ ],
+ "steps": [
+  {
+   "turn": 1,
+   "guess": "Liberia",
+   "pattern": "",
+   "pool_before": null,
+   "pool_after": null
+  },
+  {
+   "turn": 2,
+   "guess": "Palau",
+   "pattern": "",
+   "pool_before": null,
+   "pool_after": null
+  },
+  {
+   "turn": 3,
+   "guess": "Uruguay",
+   "pattern": "",
+   "pool_before": null,
+   "pool_after": null
+  },
+  {
+   "turn": 4,
+   "guess": "LAOS",
+   "pattern": "",
+   "pool_before": null,
+   "pool_after": null
+  }
+ ],
+ "chapters": [
+  [
+   0,
+   "Intro"
+  ],
+  [
+   20.0,
+   "Today's Globle puzzle"
+  ],
+  [
+   25.0,
+   "Hints before the solve"
+  ],
+  [
+   35.0,
+   "Full solve (4 guesses)"
+  ],
+  [
+   80.5,
+   "Answer & deduction path"
+  ],
+  [
+   88.5,
+   "Solve breakdown"
+  ],
+  [
+   96.5,
+   "Tomorrow's puzzle"
+  ]
+ ],
+ "qc": {
+  "game": "globle",
+  "date": "2026-10-11",
+  "solved": true,
+  "evidence": "win text after guess 4",
+  "video": "/home/runner/work/daily-games/daily-games/videos/globle/globle_final_2026-10-11.mp4",
+  "probe": {
+   "path": "/home/runner/work/daily-games/daily-games/videos/globle/globle_final_2026-10-11.mp4",
+   "size_mb": 13.34,
+   "width": 1920,
+   "height": 1080,
+   "duration_s": 101.5,
+   "ok": true
+  },
+  "cursor_events": 2,
+  "cursor_clips": 1,
+  "frame_mode": "card",
+  "guesses": 4,
+  "ok": true
+ }
 }

@@ -1,0 +1,109 @@
+{
+ "game": "semantle",
+ "date": "2026-10-11",
+ "solved": true,
+ "evidence": "win signal 'you guessed the secret word' after 6 semantic guesses (scores=['?', '?', '?', '?', '?'])",
+ "video": "/home/runner/work/daily-games/daily-games/videos/semantle/semantle_final_2026-10-11.mp4",
+ "guesses": [
+  "steam",
+  "judgment",
+  "acceptance",
+  "sport",
+  "alliance",
+  "mud"
+ ],
+ "steps": [
+  {
+   "turn": 1,
+   "guess": "steam",
+   "pattern": "",
+   "pool_before": null,
+   "pool_after": null
+  },
+  {
+   "turn": 2,
+   "guess": "judgment",
+   "pattern": "",
+   "pool_before": null,
+   "pool_after": null
+  },
+  {
+   "turn": 3,
+   "guess": "acceptance",
+   "pattern": "",
+   "pool_before": null,
+   "pool_after": null
+  },
+  {
+   "turn": 4,
+   "guess": "sport",
+   "pattern": "",
+   "pool_before": null,
+   "pool_after": null
+  },
+  {
+   "turn": 5,
+   "guess": "alliance",
+   "pattern": "",
+   "pool_before": null,
+   "pool_after": null
+  },
+  {
+   "turn": 6,
+   "guess": "mud",
+   "pattern": "",
+   "pool_before": null,
+   "pool_after": null
+  }
+ ],
+ "chapters": [
+  [
+   0,
+   "Intro"
+  ],
+  [
+   20.0,
+   "Today's Semantle puzzle"
+  ],
+  [
+   25.0,
+   "Hints before the solve"
+  ],
+  [
+   35.0,
+   "Full solve (6 guesses)"
+  ],
+  [
+   74.2,
+   "Answer & deduction path"
+  ],
+  [
+   82.2,
+   "Solve breakdown"
+  ],
+  [
+   90.2,
+   "Tomorrow's puzzle"
+  ]
+ ],
+ "qc": {
+  "game": "semantle",
+  "date": "2026-10-11",
+  "solved": true,
+  "evidence": "win signal 'you guessed the secret word' after 6 semantic guesses (scores=['?', '?', '?', '?', '?'])",
+  "video": "/home/runner/work/daily-games/daily-games/videos/semantle/semantle_final_2026-10-11.mp4",
+  "probe": {
+   "path": "/home/runner/work/daily-games/daily-games/videos/semantle/semantle_final_2026-10-11.mp4",
+   "size_mb": 7.05,
+   "width": 1920,
+   "height": 1080,
+   "duration_s": 95.2,
+   "ok": true
+  },
+  "cursor_events": 9,
+  "cursor_clips": 8,
+  "frame_mode": "card",
+  "guesses": 6,
+  "ok": true
+ }
+}

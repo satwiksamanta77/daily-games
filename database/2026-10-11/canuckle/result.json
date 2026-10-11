@@ -1,0 +1,93 @@
+{
+ "game": "canuckle",
+ "date": "2026-10-11",
+ "solved": true,
+ "evidence": "post-win screen 'fun fact' (semantics)",
+ "video": "/home/runner/work/daily-games/daily-games/videos/canuckle/canuckle_final_2026-10-11.mp4",
+ "guesses": [
+  "SLATE",
+  "ROWEL",
+  "BELLY",
+  "YIELD"
+ ],
+ "steps": [
+  {
+   "turn": 1,
+   "guess": "SLATE",
+   "pattern": "XYXXY",
+   "pool_before": 1612,
+   "pool_after": 41
+  },
+  {
+   "turn": 2,
+   "guess": "ROWEL",
+   "pattern": "XXXYY",
+   "pool_before": 41,
+   "pool_after": 6
+  },
+  {
+   "turn": 3,
+   "guess": "BELLY",
+   "pattern": "XYXGY",
+   "pool_before": 6,
+   "pool_after": 1
+  },
+  {
+   "turn": 4,
+   "guess": "YIELD",
+   "pattern": "GGGGG",
+   "pool_before": 1,
+   "pool_after": 1
+  }
+ ],
+ "chapters": [
+  [
+   0,
+   "Intro"
+  ],
+  [
+   20.0,
+   "Today's Canuckle puzzle"
+  ],
+  [
+   25.0,
+   "Hints before the solve"
+  ],
+  [
+   35.0,
+   "Full solve (4 guesses)"
+  ],
+  [
+   110.0,
+   "Answer & deduction path"
+  ],
+  [
+   118.0,
+   "Solve breakdown"
+  ],
+  [
+   126.0,
+   "Tomorrow's puzzle"
+  ]
+ ],
+ "qc": {
+  "game": "canuckle",
+  "date": "2026-10-11",
+  "solved": true,
+  "evidence": "post-win screen 'fun fact' (semantics)",
+  "video": "/home/runner/work/daily-games/daily-games/videos/canuckle/canuckle_final_2026-10-11.mp4",
+  "probe": {
+   "path": "/home/runner/work/daily-games/daily-games/videos/canuckle/canuckle_final_2026-10-11.mp4",
+   "size_mb": 7.91,
+   "width": 1920,
+   "height": 1080,
+   "duration_s": 131.0,
+   "ok": true
+  },
+  "cursor_events": 42,
+  "cursor_clips": 43,
+  "frame_mode": "card",
+  "guesses": 4,
+  "ok": true
+ }
+}

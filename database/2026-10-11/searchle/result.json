@@ -1,0 +1,85 @@
+{
+ "game": "searchle",
+ "date": "2026-10-11",
+ "solved": true,
+ "evidence": "post-win screen 'guess distribution'",
+ "video": "/home/runner/work/daily-games/daily-games/videos/searchle/searchle_final_2026-10-11.mp4",
+ "guesses": [
+  "RABIES",
+  "KIDNEY",
+  "MILDEW"
+ ],
+ "steps": [
+  {
+   "turn": 1,
+   "guess": "RABIES",
+   "pattern": "XXXYGX",
+   "pool_before": 312,
+   "pool_after": 5
+  },
+  {
+   "turn": 2,
+   "guess": "KIDNEY",
+   "pattern": "XGYXGX",
+   "pool_before": 5,
+   "pool_after": 1
+  },
+  {
+   "turn": 3,
+   "guess": "MILDEW",
+   "pattern": "GGGGGG",
+   "pool_before": 1,
+   "pool_after": 1
+  }
+ ],
+ "chapters": [
+  [
+   0,
+   "Intro"
+  ],
+  [
+   20.0,
+   "Today's Searchle puzzle"
+  ],
+  [
+   25.0,
+   "Hints before the solve"
+  ],
+  [
+   35.0,
+   "Full solve (3 guesses)"
+  ],
+  [
+   65.5,
+   "Answer & deduction path"
+  ],
+  [
+   73.5,
+   "Solve breakdown"
+  ],
+  [
+   81.5,
+   "Tomorrow's puzzle"
+  ]
+ ],
+ "qc": {
+  "game": "searchle",
+  "date": "2026-10-11",
+  "solved": true,
+  "evidence": "post-win screen 'guess distribution'",
+  "video": "/home/runner/work/daily-games/daily-games/videos/searchle/searchle_final_2026-10-11.mp4",
+  "probe": {
+   "path": "/home/runner/work/daily-games/daily-games/videos/searchle/searchle_final_2026-10-11.mp4",
+   "size_mb": 6.76,
+   "width": 1920,
+   "height": 1080,
+   "duration_s": 86.5,
+   "ok": true
+  },
+  "cursor_events": 3,
+  "cursor_clips": 4,
+  "frame_mode": "card",
+  "guesses": 3,
+  "ok": true
+ }
+}

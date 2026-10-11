@@ -1,0 +1,85 @@
+{
+ "game": "phrazle",
+ "date": "2026-10-11",
+ "solved": true,
+ "evidence": "winning row all-green after 3 phrase guesses",
+ "video": "/home/runner/work/daily-games/daily-games/videos/phrazle/phrazle_final_2026-10-11.mp4",
+ "guesses": [
+  "LEARNING THE ROPES",
+  "BABY BOOMER",
+  "ABOVE BOARD"
+ ],
+ "steps": [
+  {
+   "turn": 1,
+   "guess": "LEARNING THE ROPES",
+   "pattern": "XYYYXXXXYXXXXXYXXX",
+   "pool_before": 964,
+   "pool_after": 2
+  },
+  {
+   "turn": 2,
+   "guess": "BABY BOOMER",
+   "pattern": "YYYXYXYGXYY",
+   "pool_before": 2,
+   "pool_after": 1
+  },
+  {
+   "turn": 3,
+   "guess": "ABOVE BOARD",
+   "pattern": "GGGGGGGGGGG",
+   "pool_before": 1,
+   "pool_after": 1
+  }
+ ],
+ "chapters": [
+  [
+   0,
+   "Intro"
+  ],
+  [
+   20.0,
+   "Today's Phrazle puzzle"
+  ],
+  [
+   25.0,
+   "Hints before the solve"
+  ],
+  [
+   35.0,
+   "Full solve (3 guesses)"
+  ],
+  [
+   76.0,
+   "Answer & deduction path"
+  ],
+  [
+   84.0,
+   "Solve breakdown"
+  ],
+  [
+   92.0,
+   "Tomorrow's puzzle"
+  ]
+ ],
+ "qc": {
+  "game": "phrazle",
+  "date": "2026-10-11",
+  "solved": true,
+  "evidence": "winning row all-green after 3 phrase guesses",
+  "video": "/home/runner/work/daily-games/daily-games/videos/phrazle/phrazle_final_2026-10-11.mp4",
+  "probe": {
+   "path": "/home/runner/work/daily-games/daily-games/videos/phrazle/phrazle_final_2026-10-11.mp4",
+   "size_mb": 7.54,
+   "width": 1920,
+   "height": 1080,
+   "duration_s": 97.0,
+   "ok": true
+  },
+  "cursor_events": 3,
+  "cursor_clips": 4,
+  "frame_mode": "card",
+  "guesses": 3,
+  "ok": true
+ }
+}

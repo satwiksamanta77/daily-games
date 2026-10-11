@@ -4,5 +4,154 @@
  "solved": true,
  "evidence": "Statistics panel confirms a win after 6 guesses ('\u00d7\\n\\nStatistics\\n\\n1\\nWins\\n0\\nHard Mode Wins\\n1\\nCurrent Streak\\n1\\nMax Streak\\nYour average color accuracy was\\n85.6%!\\nNEXT COLORFL')",
  "video": "/home/runner/work/daily-games/daily-games/videos/colorfle/colorfle_final_2026-10-11.mp4",
- "youtube_url": null
+ "guesses": [
+  [
+   9,
+   11,
+   10
+  ],
+  [
+   0,
+   1,
+   11
+  ],
+  [
+   2,
+   3,
+   4
+  ],
+  [
+   5,
+   6,
+   7
+  ],
+  [
+   8,
+   5,
+   12
+  ],
+  [
+   11,
+   15,
+   5
+  ]
+ ],
+ "steps": [
+  {
+   "turn": 1,
+   "guess": [
+    9,
+    11,
+    10
+   ],
+   "pattern": "XYX",
+   "pool_before": 6840,
+   "pool_after": 544
+  },
+  {
+   "turn": 2,
+   "guess": [
+    0,
+    1,
+    11
+   ],
+   "pattern": "XXY",
+   "pool_before": 544,
+   "pool_after": 210
+  },
+  {
+   "turn": 3,
+   "guess": [
+    2,
+    3,
+    4
+   ],
+   "pattern": "XXX",
+   "pool_before": 210,
+   "pool_after": 132
+  },
+  {
+   "turn": 4,
+   "guess": [
+    5,
+    6,
+    7
+   ],
+   "pattern": "YXX",
+   "pool_before": 132,
+   "pool_after": 18
+  },
+  {
+   "turn": 5,
+   "guess": [
+    8,
+    5,
+    12
+   ],
+   "pattern": "XYX",
+   "pool_before": 18,
+   "pool_after": 7
+  },
+  {
+   "turn": 6,
+   "guess": [
+    11,
+    15,
+    5
+   ],
+   "pattern": "GGG",
+   "pool_before": 1,
+   "pool_after": 0
+  }
+ ],
+ "chapters": [
+  [
+   0,
+   "Intro"
+  ],
+  [
+   20.0,
+   "Today's Colorfle puzzle"
+  ],
+  [
+   25.0,
+   "Hints before the solve"
+  ],
+  [
+   35.0,
+   "Full solve (6 guesses)"
+  ],
+  [
+   77.0,
+   "Answer & deduction path"
+  ],
+  [
+   85.0,
+   "Solve breakdown"
+  ],
+  [
+   93.0,
+   "Tomorrow's puzzle"
+  ]
+ ],
+ "qc": {
+  "game": "colorfle",
+  "date": "2026-10-11",
+  "solved": true,
+  "evidence": "Statistics panel confirms a win after 6 guesses ('\u00d7\\n\\nStatistics\\n\\n1\\nWins\\n0\\nHard Mode Wins\\n1\\nCurrent Streak\\n1\\nMax Streak\\nYour average color accuracy was\\n85.6%!\\nNEXT COLORFL')",
+  "video": "/home/runner/work/daily-games/daily-games/videos/colorfle/colorfle_final_2026-10-11.mp4",
+  "probe": {
+   "path": "/home/runner/work/daily-games/daily-games/videos/colorfle/colorfle_final_2026-10-11.mp4",
+   "size_mb": 6.97,
+   "width": 1920,
+   "height": 1080,
+   "duration_s": 98.0,
+   "ok": true
+  },
+  "cursor_events": 24,
+  "cursor_clips": 25,
+  "frame_mode": "card",
+  "guesses": 6,
+  "ok": true
+ }
 }
