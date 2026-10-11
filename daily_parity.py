@@ -447,8 +447,17 @@ def generate_facts(out_path, game, date_str, answer, steps,
         g = str(s.get("guess", "")).upper()[:24]
         clue = _clue_line(s.get("pattern", ""), kind=kind)[:70]
         d.text((110, y + 26), f"{s.get('turn', '?')}.", fill=GREEN, font=f["b"])
-        gf = _fit_font(d, g, f["b"], 620)
-        d.text((190, y + 26), g, fill=TEXT, font=gf)
+        gi = _parse_ints(g) if kind == "colors" else None
+        if gi:
+            gx = 190
+            for ii in gi[:8]:
+                hx = palette[ii] if palette and 0 <= ii < len(palette) \
+                    else None
+                _swatch(d, gx, y + 20, 44, hx, label=ii)
+                gx += 54
+        else:
+            gf = _fit_font(d, g, f["b"], 620)
+            d.text((190, y + 26), g, fill=TEXT, font=gf)
         cf = _fit_font(d, clue, f["s"], W - 900)
         d.text((860, y + 30), clue, fill=MUTED, font=cf)
         y += 104
