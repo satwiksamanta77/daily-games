@@ -2151,8 +2151,31 @@ def _s_betweenle(page, ans, gid):
     # starting the daily game, and it swallows all keyboard input until closed.
     _close_betweenle_help(page)
     gs = _guesses(gid, ans)
-    page.mouse.click(960, 600)
-    page.wait_for_timeout(500)
+    # Readiness loop: the daily-mode click + how-to dismiss must actually land
+    # before typing, or every guess goes into the void (rows stayed 0 on CI).
+    for _rd in range(6):
+        page.mouse.click(960, 600)
+        page.wait_for_timeout(600)
+        try:
+            _st0 = _betweenle_state(page)
+            _help = _betweenle_invalid_showing(page)
+        except Exception:
+            _st0, _help = {}, False
+        _dbg(gid, f"readiness {_rd}: rows={_st0.get('rows')} len={_st0.get('len')} "
+                  f"help_showing={_help}")
+        if _help:
+            _close_betweenle_help(page)
+            continue
+        if (_st0.get("len") or 0) > 0:
+            break
+        try:  # re-arm the daily mode panel and wait for the board
+            page.evaluate("() => { const el = "
+                          "document.getElementById('menupanel-mode-daily'); "
+                          "if (el) el.click(); }")
+            page.wait_for_timeout(3000)
+            _close_betweenle_help(page)
+        except Exception:
+            pass
     for gi, g in enumerate(gs):
         _idle_drift(page)
         page.mouse.click(960, 600)          # canvas focus can drift per guess
