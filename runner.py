@@ -277,10 +277,32 @@ def _polish_gameplay(src, out_path, crf=17):
     bus). Kept as a thin wrapper so every existing call site - including the
     framed assembler - gets the new cursor for free."""
     try:
-        return QP.polish_gameplay(str(src), str(out_path), crf=crf)
+        out = QP.polish_gameplay(str(src), str(out_path), crf=crf)
     except Exception as e:
         print(f"[polish] shared polish failed: {str(e)[:140]}")
         return str(src)
+    # Guard: whatever comes back MUST be 1920x1080 or the moviepy concat
+    # pillarboxes it on black (the marveldle 720p incident).
+    try:
+        import subprocess as _sp3
+        _r3 = _sp3.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                        "-show_entries", "stream=width,height",
+                        "-of", "csv=p=0", str(out)],
+                       capture_output=True, text=True, timeout=60)
+        _w3, _h3 = [int(v) for v in _r3.stdout.strip().split(",")[:2]]
+        if (_w3, _h3) != (1920, 1080):
+            _fx = str(out) + ".fx.mp4"
+            _r4 = _sp3.run(["ffmpeg", "-y", "-v", "error", "-i", str(out),
+                            "-vf", "scale=1920:1080:force_original_aspect_ratio="
+                            "increase,crop=1920:1080", "-c:v", "libx264",
+                            "-preset", "medium", "-crf", "18", "-c:a", "aac",
+                            _fx], capture_output=True, text=True, timeout=1800)
+            if _r4.returncode == 0 and Path(_fx).exists():
+                print(f"[polish] normalised {_w3}x{_h3} -> 1920x1080")
+                return _fx
+    except Exception as _e3:
+        print(f"[polish] resolution guard skipped: {str(_e3)[:80]}")
+    return out
 
 
 def _instrument_mouse(page):
@@ -4443,7 +4465,7 @@ def run_one(gid):
         _sstate = HERE / "browser_state.json"
         _state_kwargs = {"storage_state": str(_sstate)} if _sstate.exists() else {}
         # Record at native 1080p so the final video is real FHD, not an upscale.
-        _vw, _vh = (1280, 720) if gid == "marveldle" else (1920, 1080)
+        _vw, _vh = 1920, 1080   # uniform: chunked composite handles memory
         ctx = b.new_context(record_video_dir=str(vdir),
                             record_video_size={"width": _vw, "height": _vh},
                             viewport={"width": _vw, "height": _vh},
