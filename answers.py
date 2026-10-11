@@ -620,7 +620,7 @@ def countryle(d=None):
         j = None
         # CI egress to countryle.com is intermittently blocked/403: try
         # direct (two UAs) then two CORS mirrors of the SAME upstream JSON.
-        for fetch in (
+        for n, fetch in enumerate((
             lambda: requests.get(url, headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                               "Chrome/120 Safari/537.36",
@@ -634,10 +634,14 @@ def countryle(d=None):
             lambda: requests.get(
                 "https://corsproxy.io/?url="
                 + requests.utils.quote(url, safe=""), timeout=25),
-        ):
+            lambda: requests.get(
+                "https://r.jina.ai/" + url,
+                headers={"Accept": "application/json"}, timeout=30),
+        )):
             try:
                 r = fetch()
                 if not r.ok:
+                    print(f"[countryle] fetcher {n}: HTTP {r.status_code}")
                     continue
                 cand = r.json()
                 if isinstance(cand, dict) and "contents" in cand:
@@ -645,8 +649,13 @@ def countryle(d=None):
                 if isinstance(cand, dict) and ("country" in cand
                                                or "number" in cand):
                     j = cand
+                    print(f"[countryle] fetcher {n}: OK number="
+                          f"{cand.get('number')}")
                     break
-            except Exception:
+                print(f"[countryle] fetcher {n}: unexpected shape "
+                      f"{str(cand)[:60]}")
+            except Exception as _fe:
+                print(f"[countryle] fetcher {n}: {str(_fe)[:90]}")
                 continue
         if isinstance(j, dict):
             raw = j.get("country", j.get("id", j))
