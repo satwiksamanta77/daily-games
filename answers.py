@@ -96,11 +96,62 @@ def _days(a, b):
 
 
 # ---------- betweenle ----------
+_BETWEENLE_BUNDLE_CACHE = {}
+
+
+def _betweenle_daily_string():
+    """Live cs.daily encoded word-string from the site's own bundle.
+
+    The vendored daily-words.txt snapshot drifted when the site redeployed
+    (Oct-12: board word no longer in our rotation). The bundle embeds the
+    whole daily list as 5-char chunks encoded with per-letter shifts
+    [13,8,4,16,7]; decoding chunk (puzzle-1) is the site's exact word.
+    """
+    import re as _re
+    import urllib.request as _uq
+    if "daily" in _BETWEENLE_BUNDLE_CACHE:
+        return _BETWEENLE_BUNDLE_CACHE["daily"]
+    hdr = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                         "Chrome/120 Safari/537.36"}
+    html = _uq.urlopen(_uq.Request("https://betweenle.com", headers=hdr),
+                       timeout=25).read().decode("utf-8", "ignore")
+    m = _re.search(r'src="(/?assets/index-[^"]+\.js)"', html)
+    if not m:
+        raise ValueError("bundle script not found")
+    src = m.group(1)
+    url = src if src.startswith("http") else "https://betweenle.com/" + src.lstrip("/")
+    js = _uq.urlopen(_uq.Request(url, headers=hdr), timeout=30).read().decode("utf-8", "ignore")
+    m2 = _re.search(r'daily:"([a-z]+)"', js)
+    if not m2:
+        raise ValueError("cs.daily string not found in bundle")
+    _BETWEENLE_BUNDLE_CACHE["daily"] = m2.group(1)
+    return m2.group(1)
+
+
+def _betweenle_decode(chunk):
+    shifts = [13, 8, 4, 16, 7]
+    a = ord("a")
+    out = ""
+    for i, ch in enumerate(chunk):
+        out += chr(a + (ord(ch) - a - shifts[i % 5] + 26) % 26)
+    return out
+
+
 def betweenle(d=None):
     d = d or target_date()
-    words = (ZAI / "src/lib/data/betweenle/daily-words.txt").read_text().split()
     puzzle = _days(d, date(2023, 3, 17)) + 1
-    return {"answer": words[(puzzle - 1) % len(words)], "puzzle": puzzle, "date": str(d)}
+    try:
+        daily = _betweenle_daily_string()
+        chunk = daily[5 * (puzzle - 1): 5 * (puzzle - 1) + 5]
+        if len(chunk) == 5:
+            word = _betweenle_decode(chunk).upper()
+            return {"answer": word, "puzzle": puzzle, "date": str(d),
+                    "via": "live-bundle"}
+    except Exception as e:
+        print(f"[betweenle] live bundle failed: {str(e)[:100]}")
+    words = (ZAI / "src/lib/data/betweenle/daily-words.txt").read_text().split()
+    return {"answer": words[(puzzle - 1) % len(words)], "puzzle": puzzle,
+            "date": str(d), "via": "vendored"}
 
 
 # ---------- searchle ----------

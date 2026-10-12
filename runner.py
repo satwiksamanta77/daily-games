@@ -2244,13 +2244,28 @@ def _steps(gid, answer):
 
 def _s_betweenle(page, ans, gid):
     _close_modals(page)
-    try:
-        page.evaluate("() => { const el = "
-                      "document.getElementById('menupanel-mode-daily'); "
-                      "if (el) el.click(); }")
-        page.wait_for_timeout(4000)
-    except Exception:
-        pass
+    # Post-migration the daily game starts from a DOM menu button labelled
+    # DAILY WORD (the old #menupanel-mode-daily id no longer exists, so the
+    # game never left the menu and every guess typed into the void).
+    _started = False
+    for _sel in ("button:has-text('DAILY WORD')", "text=DAILY WORD",
+                 "a:has-text('DAILY WORD')", "#menupanel-mode-daily"):
+        try:
+            el = page.query_selector(_sel)
+            if el and el.is_visible():
+                _bb = el.bounding_box()
+                el.click(timeout=3000)
+                if _bb:
+                    QP.ev_push(_bb["x"] + _bb["width"] / 2,
+                               _bb["y"] + _bb["height"] / 2, "click")
+                _started = True
+                _dbg(gid, f"daily game started via {_sel}")
+                break
+        except Exception:
+            continue
+    if not _started:
+        _dbg(gid, "WARN: no DAILY WORD button found on menu")
+    page.wait_for_timeout(4000)
     # Must come after the mode click: the How-to-Play panel is raised by
     # starting the daily game, and it swallows all keyboard input until closed.
     _close_betweenle_help(page)
