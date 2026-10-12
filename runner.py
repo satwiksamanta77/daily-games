@@ -919,31 +919,51 @@ def _close_generic_howto(page):
 
 
 def _close_betweenle_help(page):
-    """Close Betweenle's "How to play" overlay.
-
-    The overlay is `#helppanel` and its X is `#helppanel-close`. The previous
-    code clicked `#tipspanel-close`, which does not exist on the current build,
-    so the panel stayed open for the whole video and every keystroke was
-    swallowed by it - the board never received a single guess.
-    """
-    for _ in range(3):
-        try:
-            state = page.evaluate("""() => {
-              const hp = document.getElementById('helppanel');
-              if (!hp) return 'missing';
-              return getComputedStyle(hp).display;
-            }""")
-        except Exception:
-            return page
-        if state in (None, "none", "missing"):
+    """Close Betweenle's "How to play" overlay - whichever panel id the
+    current build uses (#tipspanel on the canvas-migrated site, #helppanel
+    on older ones). Untrusted el.click() does NOT dismiss it (the listener
+    ignores synthetic clicks), so use a real mouse click on the X button and
+    verify the panel is actually hidden before typing anything."""
+    for _round in range(4):
+        hidden = True
+        for pid in ("tipspanel", "helppanel"):
+            try:
+                st = page.evaluate(
+                    "(p) => { const e = document.getElementById(p);"
+                    " if (!e) return 'missing';"
+                    " const cs = getComputedStyle(e);"
+                    " return cs.display + '/' + cs.visibility; }", pid)
+            except Exception:
+                st = "missing"
+            if st in ("missing", "none/hidden", "none/visible"):
+                continue
+            hidden = False
+            box = None
+            try:
+                box = page.evaluate("""(p) => {
+                  const c = document.getElementById(p + '-close') ||
+                    (document.getElementById(p) || {})
+                      .querySelector?.('button, .close, [class*=close i]');
+                  if (!c) return null;
+                  const r = c.getBoundingClientRect();
+                  return r.width > 2 ? {x: r.x + r.width / 2,
+                                        y: r.y + r.height / 2} : null;
+                }""", pid)
+            except Exception:
+                box = None
+            if box:
+                page.mouse.click(box["x"], box["y"])
+                try:
+                    QP.ev_push(box["x"], box["y"], "click")
+                except Exception:
+                    pass
+            else:
+                page.mouse.click(960, 120)   # X sits top-right of the panel
+            page.wait_for_timeout(900)
+        if hidden:
             break
-        try:
-            page.evaluate(
-                "() => document.getElementById('helppanel-close')?.click()")
-        except Exception:
-            pass
-        page.wait_for_timeout(1200)
     return page
+
 
 
 def _betweenle_invalid_showing(page):
