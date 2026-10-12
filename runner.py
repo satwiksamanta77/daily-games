@@ -4708,6 +4708,11 @@ def run_one(gid):
                         if str(_aval2) != str(aval):
                             _dbg(gid, f"no win; retrying with {_prev} answer "
                                       f"{_aval2!r}")
+                            # the cached plan still holds the WRONG day's
+                            # guesses - drop it or the retry replays them
+                            _PLANS.pop(gid, None)
+                            _HEX.pop(gid, None)
+                            _COLORS.pop(gid, None)
                             pg.reload(wait_until="domcontentloaded")
                             pg.wait_for_timeout(6000)
                             if gid in ("colordle", "colorfle"):
