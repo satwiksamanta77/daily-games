@@ -2677,6 +2677,7 @@ def _s_worldle(page, ans, gid):
         last = (n == len(seq) - 1)
         _idle_drift(page)
         ok, detail = _type_country_guess(page, page, g)
+        _dbg(gid, f"guess {n + 1}/{len(seq)} {g!r}: pick ok={ok} ({detail[:70]})")
         if not ok:
             return False, f"guess {n + 1} {g!r}: pick failed ({detail})"
         try:
@@ -2705,6 +2706,7 @@ def _s_worldle(page, ans, gid):
         body = (page.evaluate("() => document.body.innerText") or "")
     except Exception:
         body = ""
+    _dbg(gid, f"final board tail: {body[-220:]!r}")
     if a.lower() in body.lower() and any(
             k in body.lower() for k in ("well done", "correct",
                                         "guesses remaining", "share")):
@@ -4003,6 +4005,18 @@ def _db_save(date_key, gid, record):
     """
     d = _db_dir(date_key, gid)
     try:
+        # Never DOWNGRADE a solved record: a later flaky re-run must not
+        # replace a good publishable video entry with its own failure.
+        _old_p = d / "result.json"
+        if _old_p.exists() and not record.get("solved"):
+            try:
+                _old = json.loads(_old_p.read_text(encoding="utf-8"))
+                if _old.get("solved") and str(_old.get("video") or "").endswith(".mp4"):
+                    print(f"[db] keeping solved {gid} record for {date_key} "
+                          f"(new run failed: {str(record.get('evidence'))[:60]})")
+                    return
+            except Exception:
+                pass
         (d / "result.json").write_text(json.dumps(record, indent=1), encoding="utf-8")
     except Exception:
         pass
