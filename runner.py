@@ -2497,6 +2497,13 @@ def _s_betweenle(page, ans, gid):
             page.wait_for_timeout(2500)
             page.keyboard.press("Enter")
             _settle(page, base=2500)
+            _st2 = _betweenle_state(page)
+            if (_st2.get("rows") or 0) <= _rows_before:
+                # Word is out of the current bounds (the canvas build gives
+                # no DOM bounds text on CI): retyping it can never submit.
+                # Skip it so the in-bounds answer still gets its turn.
+                _dbg(gid, f"{g!r} rejected by bounds; skipping to next guess")
+                continue
             page.keyboard.type(str(g), delay=150)
             page.wait_for_timeout(300)
             page.keyboard.press("Enter")
