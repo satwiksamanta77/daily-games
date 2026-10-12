@@ -2517,8 +2517,23 @@ def _s_betweenle(page, ans, gid):
             _settle(page, base=2500)
             _st2 = _betweenle_state(page)
             if (_st2.get("rows") or 0) <= _rows_before:
-                # Keystrokes died (ad-iframe focus on CI) or the word is out
-                # of bounds. Last resort: dispatch synthetic KeyboardEvents
+                # US ad stack paints a CANVAS interstitial after a couple of
+                # guesses that swallows all input until its button is hit.
+                # Sweep the likely button spots (harmless on empty canvas),
+                # then retype + submit.
+                _dbg(gid, "submit stalled; sweeping canvas for interstitial")
+                for _pt in ((960, 540), (960, 760), (960, 420),
+                            (700, 540), (1220, 540), (960, 900)):
+                    page.mouse.click(_pt[0], _pt[1])
+                    QP.ev_push(_pt[0], _pt[1], "click")
+                    page.wait_for_timeout(500)
+                page.keyboard.type(str(g), delay=150)
+                page.wait_for_timeout(300)
+                page.keyboard.press("Enter")
+                _settle(page, base=2500)
+                _st2 = _betweenle_state(page)
+            if (_st2.get("rows") or 0) <= _rows_before:
+                # Keystrokes still dead: dispatch synthetic KeyboardEvents
                 # straight at document (focus-proof), then read again.
                 _dbg(gid, f"{g!r} still not in; synthetic key dispatch")
                 try:
