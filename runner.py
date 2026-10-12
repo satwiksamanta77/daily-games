@@ -2522,6 +2522,13 @@ def _s_betweenle(page, ans, gid):
                 # Sweep the likely button spots (harmless on empty canvas),
                 # then retype + submit.
                 _dbg(gid, "submit stalled; sweeping canvas for interstitial")
+                try:  # capture the interstitial for coordinate mapping
+                    _sp = HERE / "videos" / gid / f"stall_{_rows_before}.png"
+                    _sp.parent.mkdir(parents=True, exist_ok=True)
+                    page.screenshot(path=str(_sp))
+                    _dbg(gid, f"stall screenshot saved: {_sp.name}")
+                except Exception:
+                    pass
                 for _pt in ((960, 540), (960, 760), (960, 420),
                             (700, 540), (1220, 540), (960, 900)):
                     page.mouse.click(_pt[0], _pt[1])
