@@ -501,13 +501,23 @@ def _human_mouse_to(page, el):
 
 def _type_like_a_person(page, text, base_delay=150):
     """Type `text` one key at a time with human timing and a settled cursor."""
-    for ch in str(text):
+    try:
+        page.evaluate("() => { window.__QP_HOLD = 1; window.__QP_HOLD_T = Date.now(); }")
+    except Exception:
+        pass
+    try:
+        for ch in str(text):
+            try:
+                page.keyboard.type(ch)
+            except Exception:
+                return False
+            page.wait_for_timeout(_human_delay(base_delay))
+        return True
+    finally:
         try:
-            page.keyboard.type(ch)
+            page.evaluate("() => { window.__QP_HOLD = 0; }")
         except Exception:
-            return False
-        page.wait_for_timeout(_human_delay(base_delay))
-    return True
+            pass
 
 
 def _type_into(page, sel, text, base_delay=150):

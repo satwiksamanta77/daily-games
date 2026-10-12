@@ -612,6 +612,10 @@ CLICK_POWER_JS = """
 
 async def type_equation(page, eq, delay=200):
     try:
+        await page.evaluate("() => { window.__QP_HOLD = 1; window.__QP_HOLD_T = Date.now(); }")
+    except Exception:
+        pass
+    try:
         QP.ev_push(960, 540, "focus")
     except Exception:
         pass

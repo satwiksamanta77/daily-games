@@ -582,6 +582,8 @@ def consent_watch_js():
     return false;
   };
   const sweep = () => {
+    if (window.__QP_HOLD === 1 &&
+        (Date.now() - (window.__QP_HOLD_T || 0)) < 9000) return;
     const roots = [document];
     try {
       for (const f of Array.from(document.querySelectorAll('iframe'))) {
