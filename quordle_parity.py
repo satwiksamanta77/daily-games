@@ -642,7 +642,10 @@ def adhide_js():
         if (host === location.host) continue;
         f.style.setProperty('display', 'none', 'important');
         let p = f.parentElement;
-        for (let i = 0; i < 2 && p && p !== document.body; i++) {
+        for (let i = 0; i < 2 && p && p !== document.body &&
+             p !== document.head && p !== document.documentElement; i++) {
+          if (p.tagName !== 'DIV' && p.tagName !== 'SECTION' &&
+              p.tagName !== 'ASIDE') break;
           const kids = Array.from(p.children).filter(c => {
             const r = c.getBoundingClientRect();
             return r.width > 4 && r.height > 4 &&

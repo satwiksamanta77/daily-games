@@ -980,10 +980,12 @@ def _betweenle_state(page):
     try:
         return page.evaluate("""() => {
           const t = (document.body.innerText || '');
-          const rows = Array.from(document.querySelectorAll(
-            '[class*="guess" i], [class*="row" i]'))
-            .filter(e => e && e.offsetParent !== null).length;
-          return {len: t.length, rows: rows,
+          const gm = t.match(/GUESS\s*(\d+)\s*\/\s*(\d+)/i) || [];
+          const rows = Number(gm[1] || 0);
+          const enter = Array.from(document.querySelectorAll('button'))
+            .some(b => (b.innerText || '').trim().toUpperCase() === 'ENTER'
+                       && b.offsetParent !== null);
+          return {len: t.length, rows: rows, enter: enter,
                   tail: t.slice(-160),
                   invalid: /not a word|not valid|invalid word|not in the word list|unknown word|before|after/i.test(t)};
         }""") or {}
@@ -996,13 +998,66 @@ def _type_betweenle_word(page, gid, word, used):
     bank word exactly like a human would (never hammer Enter on a dead word).
     Verifies the Enter actually submitted (state changed); otherwise refocuses
     the board and resends once instead of typing into the void."""
+    # Ad iframes steal window focus after the first couple of guesses and
+    # every later keystroke dies inside them: reclaim focus explicitly.
+    try:
+        page.evaluate(
+            "() => { const a = document.activeElement; "
+            "if (a && a !== document.body) a.blur(); window.focus(); }")
+        page.mouse.click(960, 320)     # neutral canvas spot above the board
+        QP.ev_push(960, 320, "click")
+        page.wait_for_timeout(250)
+    except Exception:
+        pass
     _push_click_at(960, 620)
     before = _betweenle_state(page)
-    _type_like_a_person(page, word, base_delay=170)
+    # The migrated build draws a DOM on-screen keyboard: click the key
+    # elements themselves (focus-proof, human-looking, feeds the cursor
+    # track). Physical typing stays as fallback.
+    _key_js = """(want) => {
+      const els = Array.from(document.querySelectorAll('button, div, span'))
+        .filter(e => e.offsetParent !== null && e.children.length === 0 &&
+          (e.innerText || '').trim().toUpperCase() === want);
+      for (const e of els) {
+        const r = e.getBoundingClientRect();
+        if (r.width > 18 && r.width < 150 && r.height > 18 && r.y > 480)
+          return {x: r.x + r.width / 2, y: r.y + r.height / 2};
+      }
+      return null;
+    }"""
+    _typed_keys = True
+    for _ch in str(word).upper():
+        try:
+            _kp = page.evaluate(_key_js, _ch)
+        except Exception:
+            _kp = None
+        if not _kp:
+            _typed_keys = False
+            break
+        page.mouse.click(_kp["x"], _kp["y"])
+        QP.ev_push(_kp["x"], _kp["y"], "click")
+        page.wait_for_timeout(140)
+    if not _typed_keys:
+        _type_like_a_person(page, word, base_delay=170)
     page.wait_for_timeout(300)
-    page.keyboard.press("Enter")
-    page.wait_for_timeout(3000)
+    # Migrated build draws a DOM on-screen keyboard: click its ENTER button
+    # with a real mouse event (physical Enter also works, but the button
+    # click is what a human does and it feeds the cursor track).
+    try:
+        _ep = page.evaluate(_key_js, "ENTER")
+        if _ep:
+            page.mouse.click(_ep["x"], _ep["y"])
+            QP.ev_push(_ep["x"], _ep["y"], "click")
+        else:
+            page.keyboard.press("Enter")
+    except Exception:
+        page.keyboard.press("Enter")
+    page.wait_for_timeout(2500)
     after = _betweenle_state(page)
+    if after.get("rows", 0) <= before.get("rows", 0):
+        page.keyboard.press("Enter")
+        page.wait_for_timeout(2000)
+        after = _betweenle_state(page)
     if _betweenle_invalid_showing(page):
         _dbg(gid, f"{word!r} rejected by site; replacing from bank")
         try:
@@ -1019,14 +1074,32 @@ def _type_betweenle_word(page, gid, word, used):
             after.get("rows") == before.get("rows"):
         # Enter went nowhere (focus on tooltip, not the board): refocus the
         # board centre and resend Enter once.
-        _dbg(gid, f"{word!r} no board change; refocusing + resending Enter")
+        _dbg(gid, f"{word!r} no board change; canvas-centre + ENTER retry")
         try:
-            page.keyboard.press("Escape")
-            page.wait_for_timeout(400)
             page.mouse.click(960, 620)
             page.wait_for_timeout(400)
-            page.keyboard.press("Enter")
-            page.wait_for_timeout(3000)
+            _ep = page.evaluate(_key_js, "ENTER") if False else None
+            try:
+                _ep = page.evaluate("""(want) => {
+                  const els = Array.from(document.querySelectorAll(
+                    'button, div, span')).filter(e => e.offsetParent !== null &&
+                    e.children.length === 0 &&
+                    (e.innerText || '').trim().toUpperCase() === want);
+                  for (const e of els) {
+                    const r = e.getBoundingClientRect();
+                    if (r.width > 18 && r.width < 150 && r.height > 18 &&
+                        r.y > 480) return {x: r.x + r.width / 2,
+                                           y: r.y + r.height / 2};
+                  }
+                  return null;
+                }""", "ENTER")
+            except Exception:
+                _ep = None
+            if _ep:
+                page.mouse.click(_ep["x"], _ep["y"])
+            else:
+                page.keyboard.press("Enter")
+            page.wait_for_timeout(2500)
         except Exception:
             pass
         after2 = _betweenle_state(page)
@@ -2265,6 +2338,37 @@ def _steps(gid, answer):
     return _plan_for(gid, answer)[1]
 
 
+def _betweenle_bounds(page):
+    """Current (lo, hi) bounds from the board text: 'Secret word is placed
+    in dictionary between LEVEL and SLATE'. Guesses outside these bounds are
+    rejected with an 'Enter word placed in dictionary after ...' prompt."""
+    try:
+        t = (page.evaluate("() => document.body.innerText") or "")
+    except Exception:
+        return None
+    import re as _re
+    m = _re.search(r"between\s+([A-Za-z]{3,15})\s+and\s+([A-Za-z]{3,15})", t)
+    if m:
+        return m.group(1).upper(), m.group(2).upper()
+    return None
+
+
+def _betweenle_pick_in_bounds(gs, bank, bounds, used, answer):
+    """Next guess strictly inside bounds: prefer the planned word, else the
+    bank word closest to the alphabetical middle of (lo, hi)."""
+    lo, hi = bounds if bounds else ("AAAAA", "ZZZZZ")
+    def inside(w):
+        w = str(w).upper()
+        return lo < w < hi and w not in used
+    for g in gs:
+        if inside(g):
+            return str(g).upper()
+    mid = [w for w in bank if inside(w)]
+    if mid:
+        return mid[len(mid) // 2]
+    return str(answer).upper() if inside(answer) else None
+
+
 def _s_betweenle(page, ans, gid):
     _close_modals(page)
     # Post-migration the daily game starts from a DOM menu button labelled
@@ -2292,7 +2396,13 @@ def _s_betweenle(page, ans, gid):
     # Must come after the mode click: the How-to-Play panel is raised by
     # starting the daily game, and it swallows all keyboard input until closed.
     _close_betweenle_help(page)
+    _used_bl = set()
     gs = _guesses(gid, ans)
+    try:
+        _bank, _ = S.words_betweenle()
+        _bank = sorted({str(w).upper() for w in (_bank or [])})
+    except Exception:
+        _bank = []
     # Readiness loop: the daily-mode click + how-to dismiss must actually land
     # before typing, or every guess goes into the void (rows stayed 0 on CI).
     for _rd in range(6):
@@ -2327,6 +2437,9 @@ def _s_betweenle(page, ans, gid):
             _help = _betweenle_invalid_showing(page)
         except Exception:
             _st0, _help = {}, False
+        if _st0.get("enter"):
+            _dbg(gid, "on-screen keyboard visible; board ready")
+            break
         _dbg(gid, f"readiness {_rd}: rows={_st0.get('rows')} len={_st0.get('len')} "
                   f"help_showing={_help}")
         if _help:
@@ -2342,9 +2455,27 @@ def _s_betweenle(page, ans, gid):
             _close_betweenle_help(page)
         except Exception:
             pass
+    _rows_before = 0
     for gi, g in enumerate(gs):
+        _rows_before = (_betweenle_state(page) or {}).get("rows") or 0
+        _bd = _betweenle_bounds(page)
+        _dbg(gid, f"bounds before guess {gi + 1}: {_bd}")
+        if _bd and not (_bd[0] < str(g).upper() < _bd[1]):
+            _alt = _betweenle_pick_in_bounds(gs[gi:], _bank, _bd,
+                                             _used_bl, ans)
+            _dbg(gid, f"{g!r} outside bounds {_bd}; playing {_alt!r}")
+            g = _alt or g
+        _used_bl.add(str(g).upper())
         _idle_drift(page)
-        page.mouse.click(960, 600)          # canvas focus can drift per guess
+        # ad iframes steal focus mid-game: reclaim it before every word
+        try:
+            page.evaluate(
+                "() => { const a = document.activeElement; "
+                "if (a && a !== document.body) a.blur(); window.focus(); }")
+        except Exception:
+            pass
+        page.mouse.click(960, 320)
+        QP.ev_push(960, 320, "click")
         page.wait_for_timeout(300)
         _type_like_a_person(page, str(g), base_delay=170)
         page.wait_for_timeout(300)
@@ -2352,43 +2483,43 @@ def _s_betweenle(page, ans, gid):
         _settle(page, base=3000)
         try:
             _st = _betweenle_state(page)
+        except Exception:
+            _st = {}
+        if (_st.get("rows") or 0) <= _rows_before:
+            # out-of-bounds prompt or stolen focus: dismiss + resend once
+            _dbg(gid, f"{g!r} did not submit; dismissing prompt + resending")
+            try:
+                page.evaluate(
+                    "() => { const a = document.activeElement; "
+                    "if (a && a !== document.body) a.blur(); window.focus(); }")
+            except Exception:
+                pass
+            page.wait_for_timeout(2500)
+            page.keyboard.press("Enter")
+            _settle(page, base=2500)
+            page.keyboard.type(str(g), delay=150)
+            page.wait_for_timeout(300)
+            page.keyboard.press("Enter")
+            _settle(page, base=2500)
+        try:
+            _st = _betweenle_state(page)
             _dbg(gid, f"guess {gi + 1}/{len(gs)} {g!r}: rows={_st.get('rows')} "
                       f"len={_st.get('len')} invalid={_betweenle_invalid_showing(page)}")
-            if not _st.get("rows"):
-                # keyboard went somewhere else: click the Flutter semantics
-                # text field itself and resend this guess once
-                _tf = page.evaluate(
-                    "() => { const els = Array.from(document.querySelectorAll("
-                    "'[role=textbox], input')); "
-                    "for (const e of els) { const r = e.getBoundingClientRect(); "
-                    "if (r.width > 40 || e.getAttribute('placeholder') === 'WORD') "
-                    "return {x: r.x + r.width / 2, y: r.y + r.height / 2}; } "
-                    "return null; }")
-                if _tf:
-                    _dbg(gid, f"recovery: clicking text field at "
-                              f"({_tf['x']:.0f},{_tf['y']:.0f}) + retyping")
-                    page.mouse.click(_tf["x"], _tf["y"])
-                    page.wait_for_timeout(300)
-                    try:
-                        page.focus("input[placeholder='WORD' i], input[placeholder=WORD]")
-                    except Exception:
-                        pass
-                else:
-                    try:
-                        _cv2 = page.evaluate(
-                            "() => { const e = document.querySelector("
-                            "'flt-glass-pane, canvas'); if (!e) return null;"
-                            "const r = e.getBoundingClientRect();"
-                            "return {x: r.x + r.width/2, y: r.y + r.height/2}; }")
-                        if _cv2:
-                            _dbg(gid, "recovery: canvas-centre click")
-                            page.mouse.click(_cv2["x"], _cv2["y"])
-                    except Exception:
-                        pass
-                    page.wait_for_timeout(400)
-                    _type_like_a_person(page, str(g), base_delay=150)
-                    page.keyboard.press("Enter")
-                    _settle(page, base=2500)
+            if not _st.get("enter"):
+                # on-screen keyboard not visible yet: one canvas-centre click
+                _dbg(gid, "on-screen ENTER missing; canvas-centre click")
+                try:
+                    _cv2 = page.evaluate(
+                        "() => { const e = document.querySelector("
+                        "'#canvas, canvas'); if (!e) return null;"
+                        "const r = e.getBoundingClientRect();"
+                        "return {x: r.x + r.width/2, y: r.y + r.height/2}; }")
+                    if _cv2:
+                        page.mouse.click(_cv2["x"], _cv2["y"])
+                        QP.ev_push(_cv2["x"], _cv2["y"], "click")
+                except Exception:
+                    pass
+                page.wait_for_timeout(800)
         except Exception as _e:
             _dbg(gid, f"guess {gi + 1} state read failed: {str(_e)[:60]}")
     page.wait_for_timeout(2500)
