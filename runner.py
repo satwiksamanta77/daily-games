@@ -4718,6 +4718,15 @@ def run_one(gid):
                             _PLANS.pop(gid, None)
                             _HEX.pop(gid, None)
                             _COLORS.pop(gid, None)
+                            # purge the attempt-1 rows from site storage or
+                            # the reload restores them and the board is full
+                            try:
+                                pg.evaluate(
+                                    "() => { try { localStorage.clear(); }"
+                                    " catch (e) {} try { sessionStorage.clear(); }"
+                                    " catch (e) {} }")
+                            except Exception:
+                                pass
                             pg.reload(wait_until="domcontentloaded")
                             pg.wait_for_timeout(6000)
                             if gid in ("colordle", "colorfle"):
