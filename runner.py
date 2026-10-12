@@ -2594,11 +2594,16 @@ def _type_country_guess(page, scope, country):
     if not name:
         return False, "empty country"
     try:
-        inp = scope.query_selector(
-            "input[type=text], input:not([type]), input[name=guess], "
-            "input[type=search], input[placeholder], textarea, "
-            "[contenteditable=true], [role=searchbox], [role=combobox] input, "
-            "[role=combobox]")
+        inp = None
+        for _wq in range(6):      # input can detach during SPA transitions
+            inp = scope.query_selector(
+                "input[type=text], input:not([type]), input[name=guess], "
+                "input[type=search], input[placeholder], textarea, "
+                "[contenteditable=true], [role=searchbox], "
+                "[role=combobox] input, [role=combobox]")
+            if inp:
+                break
+            page.wait_for_timeout(1500)
         if not inp:
             try:
                 n = scope.evaluate(
