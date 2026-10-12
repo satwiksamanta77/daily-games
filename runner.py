@@ -2499,9 +2499,31 @@ def _s_betweenle(page, ans, gid):
             _settle(page, base=2500)
             _st2 = _betweenle_state(page)
             if (_st2.get("rows") or 0) <= _rows_before:
-                # Word is out of the current bounds (the canvas build gives
-                # no DOM bounds text on CI): retyping it can never submit.
-                # Skip it so the in-bounds answer still gets its turn.
+                # Keystrokes died (ad-iframe focus on CI) or the word is out
+                # of bounds. Last resort: dispatch synthetic KeyboardEvents
+                # straight at document (focus-proof), then read again.
+                _dbg(gid, f"{g!r} still not in; synthetic key dispatch")
+                try:
+                    page.evaluate("""(w) => {
+                      const send = (type, key, code) => document.dispatchEvent(
+                        new KeyboardEvent(type, {key, code, bubbles: true}));
+                      for (const ch of w) {
+                        const code = 'Key' + ch.toUpperCase();
+                        send('keydown', ch, code); send('keypress', ch, code);
+                        send('keyup', ch, code);
+                      }
+                      send('keydown', 'Enter', 'Enter');
+                      send('keypress', 'Enter', 'Enter');
+                      send('keyup', 'Enter', 'Enter');
+                    }""", str(g))
+                except Exception:
+                    pass
+                _settle(page, base=2500)
+                _st2 = _betweenle_state(page)
+            if (_st2.get("rows") or 0) <= _rows_before:
+                # Out-of-bounds words can never submit (the canvas build
+                # exposes no DOM bounds text on CI): skip so the in-bounds
+                # answer still gets its turn.
                 _dbg(gid, f"{g!r} rejected by bounds; skipping to next guess")
                 continue
             page.keyboard.type(str(g), delay=150)
