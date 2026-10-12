@@ -2467,15 +2467,33 @@ def _s_betweenle(page, ans, gid):
             g = _alt or g
         _used_bl.add(str(g).upper())
         _idle_drift(page)
-        # ad iframes steal focus mid-game: reclaim it before every word
+        # ad iframes/overlays steal window focus (and intercept clicks) on the
+        # US ad stack: evict whatever sits on top of the board's typing row,
+        # then click the row itself.
+        try:
+            _top = page.evaluate(
+                "() => { const e = (document.elementsFromPoint(960, 500) "
+                "|| [])[0]; if (!e) return null; "
+                "return {tag: e.tagName, id: e.id || '', "
+                "cls: (e.className || '').toString().slice(0, 60)}; }")
+            if _top and (_top["tag"] == "IFRAME" or "ad" in _top["id"].lower()
+                         or "ad" in _top["cls"].lower()
+                         or "slot" in _top["id"].lower()):
+                page.evaluate(
+                    "() => { const e = (document.elementsFromPoint(960, 500) "
+                    "|| [])[0]; if (e && e.id !== 'canvas') "
+                    "e.style.setProperty('display', 'none', 'important'); }")
+                _dbg(gid, f"evicted interceptor over typing row: {_top}")
+        except Exception:
+            pass
         try:
             page.evaluate(
                 "() => { const a = document.activeElement; "
                 "if (a && a !== document.body) a.blur(); window.focus(); }")
         except Exception:
             pass
-        page.mouse.click(960, 320)
-        QP.ev_push(960, 320, "click")
+        page.mouse.click(960, 500)     # the orange typing row on the canvas
+        QP.ev_push(960, 500, "click")
         page.wait_for_timeout(300)
         _type_like_a_person(page, str(g), base_delay=170)
         page.wait_for_timeout(300)
