@@ -550,17 +550,7 @@ def consent_watch_js():
   if (window.__CONSENT_WATCH) return;
   window.__CONSENT_WATCH = 1;
   window.__CONSENT_CLICKS = [];
-  const TXT = new Set(['accept', 'accept all', 'accept all cookies',
-    'reject all', 'agree', 'i agree', 'allow all', 'no thanks', 'continue',
-    'dismiss']);
-  // Unambiguous consent/tooltip/modal-close labels: clickable ANYWHERE on
-  // the page (no overlay-container gate) - the gate was leaving nerdle's
-  // hint tooltip + 'More games' X and worldle's 'Got it!' tip on camera.
-  // NOTE: never single-letter labels here - on-screen game keyboards have
-  // an X key and the watcher was pressing it mid-solve (phoodle/worgle/
-  // searchle regressions). Only unambiguous multi-char/glyph labels.
-  const STRICT = new Set(['ok', 'okay', 'got it', 'x disable hints',
-    'disable hints', 'all rules', '\u00d7', '\u2715', 'close', 'no thanks']);
+  const TXT = new Set([%s]);
   const done = new WeakSet();
   const inOverlay = (el) => {
     try {
@@ -568,22 +558,15 @@ def consent_watch_js():
           '[class*=dialog i],[class*=tooltip i],[class*=hint i],[role=dialog],' +
           '[id*=truste],[class*=fc-]')) return true;
       let n = el;
-      for (let i = 0; i < 5 && n; n = n.parentElement, i++) {
+      for (let i = 0; i < 4 && n; i++) {
         const cs = getComputedStyle(n);
-        if (!cs) continue;
-        if (cs.position === 'fixed' || cs.position === 'sticky') return true;
-        if (cs.position === 'absolute' && parseInt(cs.zIndex || '0', 10) >= 10)
-          return true;
-        const r = n.getBoundingClientRect();
-        if (r.width > innerWidth * 0.6 && r.height < innerHeight * 0.5 &&
-            (r.top < 8 || r.bottom > innerHeight - 8)) return true;  // toast bar
+        if (cs && (cs.position === 'fixed' || cs.position === 'sticky')) return true;
+        n = n.parentElement;
       }
     } catch (e) {}
     return false;
   };
   const sweep = () => {
-    if (window.__QP_HOLD === 1 &&
-        (Date.now() - (window.__QP_HOLD_T || 0)) < 9000) return;
     const roots = [document];
     try {
       for (const f of Array.from(document.querySelectorAll('iframe'))) {
@@ -595,9 +578,7 @@ def consent_watch_js():
       let els = [];
       try {
         els = Array.from(root.querySelectorAll(
-          'button, a[role=button], [role=button], #truste-consent-button, ' +
-          '.fc-cta-consent, [aria-label=dismiss], [aria-label*="close" i], ' +
-          '[class*="close" i][role=button]'));
+          'button, a[role=button], [role=button], #truste-consent-button, .fc-cta-consent, [aria-label=dismiss]'));
       } catch (e) { continue; }
       for (const el of els) {
         if (done.has(el)) continue;
@@ -605,11 +586,9 @@ def consent_watch_js():
         try { r = el.getBoundingClientRect(); } catch (e) {}
         if (!r || r.width < 8 || r.height < 8) continue;
         const t = ((el.innerText || el.getAttribute('aria-label') || '')
-                   .trim().toLowerCase()).replace(/[!?.]+$/g, '');
-        if (!t || t.length > 30) continue;
-        if (STRICT.has(t)) { /* clickable anywhere */ }
-        else if (TXT.has(t)) { if (!inOverlay(el)) continue; }
-        else continue;
+                   .trim().toLowerCase());
+        if (!t || t.length > 30 || !TXT.has(t)) continue;
+        if (!inOverlay(el)) continue;   // never click game buttons
         done.add(el);
         try {
           window.__CONSENT_CLICKS.push(
@@ -621,13 +600,13 @@ def consent_watch_js():
   };
   sweep();
   const iv = setInterval(sweep, 800);
-  setTimeout(() => clearInterval(iv), 300000);   // tooltips pop mid-game
+  setTimeout(() => clearInterval(iv), 20000);
   try {
     new MutationObserver(() => sweep()).observe(
       document.documentElement, {childList: true, subtree: true});
   } catch (e) {}
 })();
-"""
+""" % _CONSENT_TXT
 
 
 def adhide_js():
@@ -643,10 +622,9 @@ def adhide_js():
     div[id*="google_ads"], div[id*="div-gpt-ad"], .ad-container, .adsbygoogle,
     .ads, [class*="ad-slot"], [class*="adspace"], [id*="ad-slot"],
     [class*="sponsored"], .donate-banner, [class*="banner-ad"],
-    ins, #loading-mask, [id*="rail" i], [class*="rail" i], [id*="admantle" i],
+    ins, [id*="rail" i], [class*="rail" i], [id*="admantle" i],
     [class*="admantle" i], [id*="trendi" i], [class*="pubexchange"],
-    [class*="outbrain"], [id*="google_ads_iframe"], [class*="banner" i],
-    [class*="clevergist" i], [href*="clevergist" i] {
+    [class*="outbrain"], [id*="google_ads_iframe"], [class*="banner" i] {
       display: none !important; visibility: hidden !important;
       width: 0 !important; height: 0 !important;
     }`;
@@ -663,13 +641,14 @@ def adhide_js():
         try { host = new URL(u, location.href).host; } catch (e) { continue; }
         if (host === location.host) continue;
         f.style.setProperty('display', 'none', 'important');
-        // Collapse ONLY ancestors that look like ad slots - walking up
-        // empty wrappers crushed globle's app root before React mounted
-        // (root held just the google-signin iframe at DOMContentLoaded).
         let p = f.parentElement;
         for (let i = 0; i < 2 && p && p !== document.body; i++) {
-          const cls = ((p.id || '') + ' ' + (p.className || '').toString()).toLowerCase();
-          if (/ad|rail|slot|banner|sponsor|promo/.test(cls)) {
+          const kids = Array.from(p.children).filter(c => {
+            const r = c.getBoundingClientRect();
+            return r.width > 4 && r.height > 4 &&
+                   getComputedStyle(c).display !== 'none';
+          });
+          if (kids.length === 0) {
             p.style.setProperty('display', 'none', 'important');
             p = p.parentElement;
           } else break;
@@ -677,68 +656,12 @@ def adhide_js():
       }
     } catch (e) {}
   };
-  // text-ad strips ("Free Shipping with code ...", "Best Pokemon card
-  // packs!") live in same-origin iframes, so CSS selectors never catch them.
-  const txtsweep = () => {
-    try {
-      for (const el of Array.from(document.querySelectorAll('div,a,span,p'))) {
-        const t = (el.innerText || '').trim();
-        if (!t || t.length > 90) continue;
-        if (/free shipping|sponsored|advertising|promo code|card packs|best .* packs|donate now|do not sell|share my personal|clevergist/i.test(t)) {
-          const r = el.getBoundingClientRect();
-          if (r.height < 220) el.style.setProperty('display', 'none', 'important');
-        }
-      }
-    } catch (e) {}
-  };
-  const ts = () => { if (active.on) txtsweep(); };
-  setInterval(ts, 1500);
-  document.addEventListener('DOMContentLoaded', ts);
-  // geo-targeted photo-ad boxes (batter-up right edge on US runners):
-  // small third-party-image containers in the outer viewport bands.
-  const killEdgeImg = () => {
-    try {
-      for (const im of Array.from(document.querySelectorAll('img'))) {
-        let u = '';
-        try { u = im.src || ''; } catch (e) {}
-        if (!u || u.startsWith('data:')) continue;
-        let host = '';
-        try { host = new URL(u, location.href).host; } catch (e) { continue; }
-        if (host === location.host) continue;
-        const r = im.getBoundingClientRect();
-        if (r.width < 20 || r.height < 20) continue;
-        if (r.width > 460 || r.height > 460) continue;
-        const edge = r.x > innerWidth * 0.78 || r.y > innerHeight * 0.78 ||
-                     r.right < innerWidth * 0.22;
-        if (!edge) continue;
-        let n = im.parentElement;
-        for (let i = 0; i < 3 && n && n !== document.body; i++) {
-          n.style.setProperty('display', 'none', 'important');
-          n = n.parentElement;
-        }
-      }
-    } catch (e) {}
-  };
-  const k3 = () => { if (active.on) kill3p(); killEdgeImg(); };
-  setInterval(k3, 1200);
-  document.addEventListener('DOMContentLoaded', k3);
-  // DEFERRED ACTIVATION: several of these sites (globle) run an
-  // anti-adblock boot gate that measures whether ad slots actually
-  // rendered. Hiding at document-start makes the gate refuse to load the
-  // puzzle at all. So: keep ads visible until the game content is mounted
-  // (body text grows), then hide everything; force-hide at 45 s regardless.
-  const t0 = Date.now();
-  const active = {on: false};
-  const put = () => {
-    if (!document.head || active.on) return;
-    let mounted = false;
-    try { mounted = (document.body.innerText || '').length > 200; } catch (e) {}
-    if (mounted || Date.now() - t0 > 45000) {
+  setInterval(kill3p, 1200);
+  document.addEventListener('DOMContentLoaded', kill3p);
+  const put = () => { if (!document.head) return;
+    if (!document.querySelector('style[data-qpadhide]')) {
       css.setAttribute('data-qpadhide', '1');
-      document.head.appendChild(css);
-      active.on = true;
-    }
-  };
+      document.head.appendChild(css); } };
   put();
   document.addEventListener('DOMContentLoaded', put);
   setInterval(put, 1500);
@@ -987,56 +910,10 @@ def polish_gameplay(src, out_path, crf=17):
         if not clips:
             bc.close()
             return base
+        comp = CompositeVideoClip([bc] + clips, size=bc.size)
         out_cur = str(_QPPath(base).parent / (_QPPath(base).stem + "_cur.mp4"))
-        # Long videos (>200 s) blow moviepy's blit memory in one pass:
-        # composite in <=150 s chunks and concat with ffmpeg.
-        if bc.duration > 200:
-            try:
-                from moviepy.editor import concatenate_videoclips
-                parts, n_ch = [], max(2, int(bc.duration // 150) + 1)
-                bounds = [bc.duration * k / n_ch for k in range(n_ch + 1)]
-                for k in range(n_ch):
-                    a, b = bounds[k], bounds[k + 1]
-                    sub = bc.subclip(a, b)
-                    sc = [c.subclip(a, b) if getattr(c, "start", 0) is not None
-                          and c.duration >= b - a else c.set_start(0)
-                          for c in clips]
-                    comp = CompositeVideoClip([sub] + sc, size=bc.size)
-                    pth = out_cur.replace(".mp4", f"_ch{k}.mp4")
-                    comp.write_videofile(pth, codec="libx264",
-                                         audio_codec="aac", fps=24,
-                                         verbose=False, logger=None)
-                    parts.append(pth)
-                import subprocess as _spc
-                conc = ["ffmpeg", "-y", "-v", "error"]
-                for pth in parts:
-                    conc += ["-i", pth]
-                conc += ["-filter_complex",
-                         "".join(f"[{k}:v][{k}:a]" for k in range(len(parts)))
-                         + f"concat=n={len(parts)}:v=1:a=1[v][a]",
-                         "-map", "[v]", "-map", "[a]", "-c:v", "libx264",
-                         "-c:a", "aac", out_cur]
-                _rc = _spc.run(conc, capture_output=True, text=True,
-                               timeout=1800)
-                if _rc.returncode == 0 and _QPPath(out_cur).exists():
-                    LAST_POLISH.update(clips=len(clips), out=out_cur)
-                    print(f"[polish] chunked cursor overlay: {len(clips)} clips "
-                          f"over {n_ch} chunks")
-                    bc.close()
-                    return out_cur
-            except Exception as _ce:
-                print(f"[polish] chunked composite failed: {str(_ce)[:120]}")
-        try:
-            comp = CompositeVideoClip([bc] + clips, size=bc.size)
-            comp.write_videofile(out_cur, codec="libx264", audio_codec="aac",
-                                 fps=24, verbose=False, logger=None)
-        except Exception:
-            # long videos can blow the moviepy blit budget: retry with the
-            # cursor dot only (no ripple layers) so the arrow still ships
-            print("[polish] full composite failed; retrying dot-only")
-            comp = CompositeVideoClip([bc, clips[0]], size=bc.size)
-            comp.write_videofile(out_cur, codec="libx264", audio_codec="aac",
-                                 fps=24, verbose=False, logger=None)
+        comp.write_videofile(out_cur, codec="libx264", audio_codec="aac",
+                             fps=24, verbose=False, logger=None)
         try:
             bc.close()
             comp.close()
@@ -1100,10 +977,10 @@ def _card_composite(src, out_path, crf):
                              str(wall), "-vf",
                              "scale=1920:1080:force_original_aspect_ratio=increase,"
                              "crop=1920:1080,eq=brightness=-0.05:saturation=1.1",
-                             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                             "-c:v", "libx264", "-preset", "medium", "-crf", "20",
                              "-pix_fmt", "yuv420p", "-r", "24", "-t", str(dur),
                              str(wall_mp4)], capture_output=True, text=True,
-                            timeout=900)
+                            timeout=60)
         ok_wall = r1.returncode == 0 and wall_mp4.exists()
     if not ok_wall:
         wall_mp4 = tmp / "blurred.mp4"
