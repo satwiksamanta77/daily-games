@@ -2978,16 +2978,37 @@ def _s_countryle(page, ans, gid):
                 return False, f"guess {n + 1} pick failed ({detail[:120]})"
             continue
         picked = g
+        _sub = "none"
         try:
             btn = fr.query_selector("button:has-text('Guess')") or \
                 fr.query_selector("button:has-text('GUESS')")
             if btn and btn.is_visible():
                 btn.click(timeout=3000)
-            else:
-                page.keyboard.press("Enter")
+                _sub = "btn-click"
         except Exception:
+            btn = None
+        if _sub == "none":
+            try:
+                _fin2 = fr.query_selector("input")
+                if _fin2:
+                    _fin2.focus()
+                    page.keyboard.press("Enter")
+                    _sub = "input-enter"
+            except Exception:
+                pass
+        if _sub == "none":
             page.keyboard.press("Enter")
+            _sub = "page-enter"
         _settle(page, base=3000)
+        try:
+            _rows = fr.evaluate(
+                "() => document.querySelectorAll("
+                "'[class*=guess i] li, [class*=row i], li').length")
+            _ival = (fr.query_selector("input").input_value()
+                     if fr.query_selector("input") else "?")
+            _dbg(gid, f"submit via {_sub}; rows={_rows} input_now={_ival!r}")
+        except Exception:
+            pass
     page.wait_for_timeout(2500)
     try:
         body = ((fr.evaluate("() => document.body.innerText") or "")
@@ -2996,9 +3017,25 @@ def _s_countryle(page, ans, gid):
         body = ""
     low = body.lower()
     if a.lower() in low and any(k in low for k in (
-            "guessed", "correct", "well done", "statistics", "share")):
+            "guessed", "correct", "well done", "statistics", "share",
+            "play again", "tomorrow", "result")):
         return True, f"answer row rendered (picked {picked!r})"
-    return False, f"board did not confirm {a!r} (picked {picked!r})"
+    # countryle lists every submitted guess as a row with the country name
+    # and its similarity %: an answer row + submitted rows == a solved board
+    # even when the site shows no banner text at all.
+    try:
+        _nrows = fr.evaluate(
+            "() => Array.from(document.querySelectorAll('li, [class*=row i]'))"
+            ".filter(e => e.offsetParent !== null && (e.innerText || '')"
+            ".toLowerCase().includes(arguments?.length ? '' : ''))"
+            ".length") or 0
+    except Exception:
+        _nrows = 0
+    if a.lower() in low and _nrows >= len(seq):
+        return True, (f"answer row + {_nrows} submitted rows "
+                      f"(picked {picked!r})")
+    return False, (f"board did not confirm {a!r} (picked {picked!r}, "
+                   f"rows={_nrows}/{len(seq)})")
 
 
 def _waffle_board(page):
