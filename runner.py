@@ -278,6 +278,9 @@ def _polish_gameplay(src, out_path, crf=17):
     framed assembler - gets the new cursor for free."""
     try:
         out = QP.polish_gameplay(str(src), str(out_path), crf=crf)
+        _lp = QP.LAST_POLISH or {}
+        print(f"[polish] done mode={_lp.get('mode')} clips={_lp.get('clips')} "
+              f"events={_lp.get('events')} out={out}")
     except Exception as e:
         print(f"[polish] shared polish failed: {str(e)[:140]}")
         return str(src)
@@ -3014,7 +3017,35 @@ def _s_countryle(page, ans, gid):
         if _sub == "none":
             page.keyboard.press("Enter")
             _sub = "page-enter"
-        _settle(page, base=3000)
+        _settle(page, base=2000)
+        # Countryle's real submit control is the round arrow button beside the
+        # input (no DOM submit button with text). If no row landed, click it
+        # by geometry.
+        try:
+            _n0 = fr.evaluate(
+                "() => document.querySelectorAll('li, [class*=row i]').length")
+            if _n0 == 0:
+                _sb = fr.evaluate("""() => {
+                  const inp = document.querySelector('input');
+                  if (!inp) return null;
+                  const wrap = inp.closest('form') ||
+                      (inp.parentElement && inp.parentElement.parentElement);
+                  if (!wrap) return null;
+                  const btns = Array.from(wrap.querySelectorAll('button'))
+                    .filter(b => b.offsetParent !== null);
+                  const b = btns[btns.length - 1];
+                  if (!b) return null;
+                  const r = b.getBoundingClientRect();
+                  return {x: r.x + r.width / 2, y: r.y + r.height / 2};
+                }""")
+                if _sb:
+                    page.mouse.click(_sb["x"], _sb["y"])
+                    QP.ev_push(_sb["x"], _sb["y"], "click")
+                    _sub += "+round-btn"
+                    _settle(page, base=2000)
+        except Exception:
+            pass
+        _settle(page, base=1000)
         try:
             _rows = fr.evaluate(
                 "() => document.querySelectorAll("
