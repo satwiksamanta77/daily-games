@@ -827,19 +827,20 @@ def _ring_frames(n=8, max_r=26):
     return frames
 
 
-def _cursor_clips(base_clip, events, ox=0.0, oy=0.0, scx=1.0, scy=1.0):
+def _cursor_clips(base_clip, events, ox=0.0, oy=0.0, scx=1.0, scy=1.0,
+                  t0=0.0):
     """moviepy clips: spring-smoothed native cursor + ripple per click."""
     from moviepy.editor import ImageClip, ImageSequenceClip
     cur_p, _ring_p, (hx, hy) = _cursor_assets()
     evs = [dict(e, x=ox + e["x"] * scx, y=oy + e["y"] * scy)
            for e in sorted(events, key=lambda e: e["t"])]
-    path = _spring_path(evs, base_clip.duration)
+    path = _spring_path(evs, base_clip.duration + t0)
     if not path:
         return []
     clicks = [e for e in evs if e["kind"] == "click"][:80]
 
     def _pos(t):
-        i = max(0, min(int(t * 24.0), len(path) - 1))
+        i = max(0, min(int((t + t0) * 24.0), len(path) - 1))
         return (path[i][0] - hx, path[i][1] - hy)
 
     dot = (ImageClip(cur_p, transparent=True)
@@ -850,7 +851,7 @@ def _cursor_clips(base_clip, events, ox=0.0, oy=0.0, scx=1.0, scy=1.0):
     for e in clicks:
         try:
             rc = (ImageSequenceClip(rframes, fps=24, with_mask=True)
-                  .set_start(e["t"]).set_duration(0.30)
+                  .set_start(e["t"] - t0).set_duration(0.30)
                   .set_position((e["x"] - 32, e["y"] - 32)))
             clips.append(rc)
         except Exception:
@@ -903,27 +904,73 @@ def polish_gameplay(src, out_path, crf=17):
     LAST_POLISH.update(mode=mode, events=len(evs), clips=0, base=base)
     if not evs or base == src and not _QPPath(base).exists():
         return base
+    out_cur = _QPPath(base).parent / (_QPPath(base).stem + "_cur.mp4")
+    # Chunked composite: a single 1080p CompositeVideoClip over a 4-5 minute
+    # clip blew moviepy's memory on CI runners (countryle fell back to raw
+    # capture). 40 s windows keep peak memory flat for any duration.
     try:
         from moviepy.editor import VideoFileClip, CompositeVideoClip
         bc = VideoFileClip(base)
-        clips = _cursor_clips(bc, evs, ox, oy, scx, scy)
-        if not clips:
-            bc.close()
-            return base
-        comp = CompositeVideoClip([bc] + clips, size=bc.size)
-        out_cur = str(_QPPath(base).parent / (_QPPath(base).stem + "_cur.mp4"))
-        comp.write_videofile(out_cur, codec="libx264", audio_codec="aac",
-                             fps=24, verbose=False, logger=None)
+        dur = float(bc.duration or 0)
+        CH = 40.0
+        segs = []
+        t = 0.0
+        nclips = 0
+        while t < dur:
+            t1 = min(dur, t + CH)
+            sub = bc.subclip(t, t1)
+            evs_w = [e for e in evs if t - 0.4 <= e["t"] < t1]
+            clips = _cursor_clips(sub, evs_w, ox, oy, scx, scy, t0=t)
+            nclips += len(clips)
+            if not clips:
+                seg_pf = out_cur.parent / f"{out_cur.stem}_seg{int(t)}.mp4"
+                sub.write_videofile(str(seg_pf), codec="libx264",
+                                    audio_codec="aac", fps=24,
+                                    verbose=False, logger=None)
+            else:
+                comp = CompositeVideoClip([sub] + clips, size=sub.size)
+                seg_pf = out_cur.parent / f"{out_cur.stem}_seg{int(t)}.mp4"
+                comp.write_videofile(str(seg_pf), codec="libx264",
+                                     audio_codec="aac", fps=24,
+                                     verbose=False, logger=None)
+                try:
+                    comp.close()
+                except Exception:
+                    pass
+            segs.append(seg_pf)
+            try:
+                sub.close()
+            except Exception:
+                pass
+            t = t1
         try:
             bc.close()
-            comp.close()
         except Exception:
             pass
-        if _QPPath(out_cur).exists() and _QPPath(out_cur).stat().st_size > 10000:
-            LAST_POLISH.update(clips=len(clips), out=out_cur)
-            print(f"[polish] cursor overlay: {len(clips)} clips over "
-                  f"{len(evs)} telemetry events ({mode} frame)")
-            return out_cur
+        lst = out_cur.parent / f"{out_cur.stem}_segs.txt"
+        lst.write_text("\n".join(f"file '{p}'" for p in segs),
+                       encoding="utf-8")
+        import subprocess as _sp3
+        r3 = _sp3.run(["ffmpeg", "-y", "-v", "error", "-f", "concat",
+                       "-safe", "0", "-i", str(lst), "-c", "copy",
+                       str(out_cur)], capture_output=True, text=True,
+                      timeout=900)
+        for p in segs:
+            try:
+                p.unlink()
+            except Exception:
+                pass
+        try:
+            lst.unlink()
+        except Exception:
+            pass
+        if r3.returncode == 0 and out_cur.exists() \
+                and out_cur.stat().st_size > 10000:
+            LAST_POLISH.update(clips=nclips, out=str(out_cur))
+            print(f"[polish] cursor overlay: {nclips} clips over {len(evs)} "
+                  f"telemetry events in {len(segs)} chunks ({mode} frame)")
+            return str(out_cur)
+        print(f"[polish] concat failed: {(r3.stderr or '')[:200]}")
     except Exception as e:
         print(f"[polish] cursor overlay failed: {str(e)[:140]}")
     return base
