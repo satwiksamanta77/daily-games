@@ -1029,6 +1029,10 @@ def _type_betweenle_word(page, gid, word, used):
     except Exception:
         pass
     _push_click_at(960, 620)
+    try:
+        page.bring_to_front()
+    except Exception:
+        pass
     before = _betweenle_state(page)
     # The migrated build draws a DOM on-screen keyboard: click the key
     # elements themselves (focus-proof, human-looking, feeds the cursor
@@ -4912,6 +4916,16 @@ def run_one(gid):
                 pass
             return route.continue_()
         ctx.route("**/*", _route)
+
+        def _kill_popups(popup):
+            # ad popunders steal window focus mid-game (betweenle lost every
+            # keystroke after guess 2 to one); close them on birth.
+            try:
+                _dbg(gid, f"popup closed: {(popup.url or '')[:60]}")
+                popup.close(run_before_unload=False)
+            except Exception:
+                pass
+        ctx.on("page", _kill_popups)
         pg = ctx.new_page()
         _instrument_mouse(pg)
         pg.on("dialog", _auto_dismiss_dialog(gid))
