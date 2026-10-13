@@ -3381,11 +3381,43 @@ def _s_countryle(page, ans, gid):
         ok, detail = _type_country_guess(page, fr, g)
         _dbg(gid, f"guess {n + 1}/{len(seq)} {g!r}: ok={ok} ({detail[:80]})")
         if not ok and "no text input" in str(detail):
-            # app iframe can navigate/re-mount mid-run: re-acquire and retry
+            # The ad shell refreshes the game iframe mid-play: state resets
+            # to the /welcome deck. Re-acquire, tap through the deck again,
+            # then replay this guess on the fresh board.
             _dbg(gid, "input vanished; re-acquiring app frame")
             fr2 = _countryle_frame(page)
             if fr2 is not None:
                 fr = fr2
+                if "welcome" in (fr.url or ""):
+                    _dbg(gid, "deck re-appeared after iframe refresh; re-tapping")
+                    for _tap2 in range(10):
+                        try:
+                            _b2 = fr.evaluate("""() => {
+                                const btns = Array.from(document.querySelectorAll('button, a'))
+                                    .filter(e => e && e.offsetParent !== null);
+                                for (const b of btns) {
+                                    const t = (b.innerText || '').trim().toUpperCase();
+                                    if (/^(NEXT|SKIP|PLAY|START|CONTINUE|GO|GOT IT)$/.test(t)) {
+                                        const r = b.getBoundingClientRect();
+                                        if (r.width > 4 && r.height > 4)
+                                            return {x: r.x + r.width / 2,
+                                                    y: r.y + r.height / 2};
+                                    }
+                                }
+                                return null;
+                            }""")
+                        except Exception:
+                            _b2 = None
+                        if not _b2:
+                            break
+                        page.mouse.click(_b2["x"], _b2["y"])
+                        _push_click_at(_b2["x"], _b2["y"])
+                        page.wait_for_timeout(1200)
+                        try:
+                            if fr.query_selector("input"):
+                                break
+                        except Exception:
+                            pass
                 ok, detail = _type_country_guess(page, fr, g)
                 _dbg(gid, f"retry guess {n + 1}: ok={ok} ({detail[:80]})")
         if not ok:
@@ -4714,7 +4746,7 @@ def run_framed_all(gid, g, tgt, date_key, today, short):
         def _route(route):
             try:
                 u = route.request.url
-                if any(x in u for x in ("user-sync", "usync", "setuid", "criteo", "quantserve", "scorecardresearch", "hotjar", "amplitude", "sentry.io", "tiktok", "facebook.net", "connect.facebook", "clarity.ms")):
+                if any(x in u for x in ("user-sync", "usync", "setuid", "criteo", "quantserve", "scorecardresearch", "hotjar", "amplitude", "sentry.io", "tiktok", "facebook.net", "connect.facebook", "clarity.ms", "/ads/index", "ads/index.")):
                     return route.abort()
             except Exception:
                 pass
@@ -5054,7 +5086,7 @@ def run_one(gid):
         def _route(route):
             try:
                 u = route.request.url
-                if any(x in u for x in ("user-sync", "usync", "setuid", "criteo", "quantserve", "scorecardresearch", "hotjar", "amplitude", "sentry.io", "tiktok", "facebook.net", "connect.facebook", "clarity.ms")):
+                if any(x in u for x in ("user-sync", "usync", "setuid", "criteo", "quantserve", "scorecardresearch", "hotjar", "amplitude", "sentry.io", "tiktok", "facebook.net", "connect.facebook", "clarity.ms", "/ads/index", "ads/index.")):
                     return route.abort()
             except Exception:
                 pass
