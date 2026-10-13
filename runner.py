@@ -1073,6 +1073,38 @@ def _submit_betweenle(page):
     return "physical-enter"
 
 
+def _evict_interceptors(page, gid, pts=((960, 540), (960, 880), (960, 320))):
+    """Neuter transparent full-page overlay divs that swallow every click
+    (the countryle NEXT-interceptor pattern, now seen on betweenle too:
+    physical keys work twice, then a see-through ad layer eats all input).
+    Only touches BIG transparent elements - never the canvas or keycaps."""
+    try:
+        hits = page.evaluate("""(pts) => {
+          const out = [];
+          for (const p of pts) {
+            const el = document.elementFromPoint(p[0], p[1]);
+            if (!el) continue;
+            const tag = el.tagName.toLowerCase();
+            if (tag in {canvas:1, body:1, html:1, input:1, button:1}) continue;
+            const r = el.getBoundingClientRect();
+            if (r.width < innerWidth * 0.6 || r.height < innerHeight * 0.6)
+              continue;
+            const cs = getComputedStyle(el);
+            const bg = cs.backgroundColor || '';
+            const m = bg.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)(?:,\\s*([0-9.]+))?\\)/);
+            const alpha = m ? (m[4] === undefined ? 1 : parseFloat(m[4])) : 1;
+            if (alpha > 0.05 && cs.opacity !== '0') continue;
+            out.push((el.id || el.className || tag).toString().slice(0, 60));
+            el.style.setProperty('pointer-events', 'none', 'important');
+          }
+          return out;
+        }""", [list(p) for p in pts])
+        for h in (hits or []):
+            _dbg(gid, f"transparent interceptor neutered: {h!r}")
+    except Exception:
+        pass
+
+
 def _type_betweenle_word(page, gid, word, used):
     """Type one betweenle guess; on 'not a word' drop it and try the next
     bank word exactly like a human would (never hammer Enter on a dead word).
@@ -1094,6 +1126,7 @@ def _type_betweenle_word(page, gid, word, used):
         page.bring_to_front()
     except Exception:
         pass
+    _evict_interceptors(page, gid)
     before = _betweenle_state(page)
     # The migrated build draws a DOM on-screen keyboard: click the key
     # elements themselves (focus-proof, human-looking, feeds the cursor
@@ -2626,6 +2659,7 @@ def _s_betweenle(page, ans, gid):
                     _dbg(gid, f"stall screenshot saved: {_sp.name}")
                 except Exception:
                     pass
+                _evict_interceptors(page, gid)
                 for _pt in ((960, 540), (960, 760), (960, 420),
                             (700, 540), (1220, 540), (960, 900)):
                     page.mouse.click(_pt[0], _pt[1])
