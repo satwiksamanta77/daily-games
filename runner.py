@@ -1048,15 +1048,15 @@ def _click_on_screen_key(page, label):
 def _type_betweenle_via_keys(page, word):
     """Clear leftovers with the backspace keycap, then click letter keycaps;
     falls back to physical typing for any key the DOM map misses."""
-    for _ in range(10):
-        if not any(_click_on_screen_key(page, lab)
-                   for lab in ("\u232b", "delete", "backspace")):
+    # CANVAS game: the internal letter buffer keeps a rejected word
+    # ("Word not in list" leaves garbage which garbles the next guess -
+    # the WEIRW stall). The game's own key handler clears on Backspace.
+    for _ in range(14):
+        try:
+            page.keyboard.press("Backspace")
+        except Exception:
             break
-    try:
-        page.keyboard.press("Control+a")
-        page.keyboard.press("Backspace")
-    except Exception:
-        pass
+        page.wait_for_timeout(35)
     clicked = 0
     for ch in str(word).upper():
         if _click_on_screen_key(page, ch):
@@ -1127,6 +1127,15 @@ def _type_betweenle_word(page, gid, word, used):
     except Exception:
         pass
     _evict_interceptors(page, gid)
+    # CANVAS game: the internal letter buffer keeps any rejected word
+    # ("Word not in list" leaves garbage that garbles the next guess - the
+    # WEIRW stall). The game's own key handler clears on Backspace keydowns.
+    for _bs in range(14):
+        try:
+            page.keyboard.press("Backspace")
+        except Exception:
+            break
+        page.wait_for_timeout(30)
     before = _betweenle_state(page)
     # The migrated build draws a DOM on-screen keyboard: click the key
     # elements themselves (focus-proof, human-looking, feeds the cursor
