@@ -640,7 +640,12 @@ def adhide_js():
         let host = '';
         try { host = new URL(u, location.href).host; } catch (e) { continue; }
         if (host === location.host) continue;
+        // display:none iframes KEEP document focus - every physical
+        // keystroke would die inside them (betweenle lost guesses 3+
+        // exactly this way). Blur and then remove them from the DOM.
+        try { f.contentWindow && f.contentWindow.blur && f.contentWindow.blur(); } catch (e) {}
         f.style.setProperty('display', 'none', 'important');
+        f.setAttribute('data-qpx', '1');
         let p = f.parentElement;
         for (let i = 0; i < 2 && p && p !== document.body; i++) {
           const kids = Array.from(p.children).filter(c => {
@@ -668,7 +673,14 @@ def adhide_js():
       }
     } catch (e) {}
   };
+  const reap = () => {
+    try {
+      for (const f of Array.from(document.querySelectorAll('iframe[data-qpx]')))
+        f.remove();
+    } catch (e) {}
+  };
   setInterval(kill3p, 1200);
+  setInterval(reap, 2600);
   setInterval(killShellBanners, 1500);
   document.addEventListener('DOMContentLoaded', kill3p);
   const put = () => { if (!document.head) return;
