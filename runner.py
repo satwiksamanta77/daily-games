@@ -3384,18 +3384,17 @@ def _s_countryle(page, ans, gid):
     body = ""
     for _rd in range(4):
         try:
-            if fr not in page.frames:   # detached by a mid-game remount
-                fr = _countryle_frame(page) or fr
+            # re-look-up by URL every attempt: wrappers/detaches make
+            # identity checks unreliable after a mid-game remount
+            _fresh = next((f for f in page.frames
+                           if "index.html" in (f.url or "")), None)
+            fr = _fresh or _countryle_frame(page) or fr
             body = ((fr.evaluate("() => document.body.innerText") or "")
                     + (page.evaluate("() => document.body.innerText") or ""))
         except Exception:
             body = ""
         if len(body.strip()) > 40:
             break
-        try:
-            fr = _countryle_frame(page) or fr
-        except Exception:
-            pass
         page.wait_for_timeout(2500)
     _dbg(gid, f"win-check body len={len(body)} tail={body[-160:]!r}")
     low = body.lower()
