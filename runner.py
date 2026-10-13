@@ -925,6 +925,25 @@ def _close_betweenle_help(page):
     ignores synthetic clicks), so use a real mouse click on the X button and
     verify the panel is actually hidden before typing anything."""
     for _round in range(4):
+        # Current build dismisses the how-to via the panel's PLAY button
+        # (#helppanel-pagination-play); the old -close X no longer exists, so
+        # without this the overlay swallowed every keystroke (Oct-12/13 fails).
+        for _play_sel in ("#helppanel-pagination-play",
+                          "button:has-text('PLAY')"):
+            try:
+                _p = page.query_selector(_play_sel)
+                if _p and _p.is_visible():
+                    _pb = _p.bounding_box()
+                    _p.click(timeout=2000)
+                    if _pb:
+                        try:
+                            QP.ev_push(_pb["x"] + _pb["width"] / 2,
+                                       _pb["y"] + _pb["height"] / 2, "click")
+                        except Exception:
+                            pass
+                    page.wait_for_timeout(900)
+            except Exception:
+                continue
         hidden = True
         for pid in ("tipspanel", "helppanel"):
             try:
@@ -1184,6 +1203,13 @@ def solve_betweenle(page, ans):
     except Exception:
         stat = ""
     ok = ans["answer"].lower() in stat.lower() if stat else False
+    if not ok:
+        try:
+            _tail = (page.evaluate("() => document.body.innerText") or "")[-400:]
+            ok = ("WIN" in _tail.upper()
+                  and ans["answer"].lower() in _tail.lower())
+        except Exception:
+            ok = False
     if not ok:
         return False, f"no solve signal; stats={stat!r}"
     return True, f"stats panel word={stat!r}"
@@ -2415,6 +2441,12 @@ def _s_betweenle(page, ans, gid):
                 "() => { for (const id of ['tipspanel-close', "
                 "'statisticspanel-close']) { const e = "
                 "document.getElementById(id); if (e) e.click(); } }")
+            try:
+                _p = page.query_selector("#helppanel-pagination-play")
+                if _p and _p.is_visible():
+                    _p.click(timeout=1500)
+            except Exception:
+                pass
             page.wait_for_timeout(300)
             _cv = page.evaluate(
                 "() => { const e = document.querySelector("
@@ -3211,6 +3243,14 @@ def _s_countryle(page, ans, gid):
         _idle_drift(page)
         ok, detail = _type_country_guess(page, fr, g)
         _dbg(gid, f"guess {n + 1}/{len(seq)} {g!r}: ok={ok} ({detail[:80]})")
+        if not ok and "no text input" in str(detail):
+            # app iframe can navigate/re-mount mid-run: re-acquire and retry
+            _dbg(gid, "input vanished; re-acquiring app frame")
+            fr2 = _countryle_frame(page)
+            if fr2 is not None:
+                fr = fr2
+                ok, detail = _type_country_guess(page, fr, g)
+                _dbg(gid, f"retry guess {n + 1}: ok={ok} ({detail[:80]})")
         if not ok:
             if last:
                 return False, f"guess {n + 1} pick failed ({detail[:120]})"
