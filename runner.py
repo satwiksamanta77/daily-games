@@ -1115,7 +1115,7 @@ def _type_betweenle_word(page, gid, word, used):
     try:
         page.evaluate(
             "() => { const a = document.activeElement; "
-            "if (a && a !== document.body) a.blur(); window.focus(); }")
+            "if (a && a !== document.body) a.blur(); " "if (a && a.tagName === 'IFRAME') { try { a.contentWindow.blur(); } " "catch (e) {} } try { window.top.focus(); } catch (e) {} " "window.focus(); }")
         page.mouse.click(960, 320)     # neutral canvas spot above the board
         QP.ev_push(960, 320, "click")
         page.wait_for_timeout(250)
@@ -2619,7 +2619,7 @@ def _s_betweenle(page, ans, gid):
         try:
             page.evaluate(
                 "() => { const a = document.activeElement; "
-                "if (a && a !== document.body) a.blur(); window.focus(); }")
+                "if (a && a !== document.body) a.blur(); " "if (a && a.tagName === 'IFRAME') { try { a.contentWindow.blur(); } " "catch (e) {} } try { window.top.focus(); } catch (e) {} " "window.focus(); }")
         except Exception:
             pass
         page.mouse.click(960, 500)     # the orange typing row on the canvas
@@ -2639,7 +2639,7 @@ def _s_betweenle(page, ans, gid):
             try:
                 page.evaluate(
                     "() => { const a = document.activeElement; "
-                    "if (a && a !== document.body) a.blur(); window.focus(); }")
+                    "if (a && a !== document.body) a.blur(); " "if (a && a.tagName === 'IFRAME') { try { a.contentWindow.blur(); } " "catch (e) {} } try { window.top.focus(); } catch (e) {} " "window.focus(); }")
             except Exception:
                 pass
             page.wait_for_timeout(2500)
@@ -3203,7 +3203,9 @@ def _s_countryle(page, ans, gid):
         b0 = ""
     if "MISSION" in b0 or "Welcome to" in b0 or "GUESS" in b0.upper() \
             or len(b0.strip()) < 50:
-        for _tap in range(16):
+        _last_tap = None
+    page._qp_unch = 0
+    for _tap in range(16):
             box = None
             try:
                 box = fr.evaluate("""() => {
@@ -3239,6 +3241,26 @@ def _s_countryle(page, ans, gid):
                     "() => document.body.innerText.slice(0, 200)") or "")
             except Exception:
                 _before = ""
+            if _last_tap and box["t"] == _last_tap:
+                try:  # NEXT is a no-op on some decks: rotate the label
+                    _alt = fr.evaluate("""(skip) => {
+    const btns = Array.from(document.querySelectorAll('button, a'))
+        .filter(e => e && e.offsetParent !== null);
+    for (const b of btns) {
+        const t = (b.innerText || '').trim().toUpperCase();
+        if (/^(NEXT|SKIP|PLAY|START|CONTINUE|GO|GOT IT)$/.test(t)
+            && t !== skip) {
+            const r = b.getBoundingClientRect();
+            if (r.width > 4 && r.height > 4)
+                return {t: t, x: r.x + r.width / 2, y: r.y + r.height / 2};
+        }
+    }
+    return null;
+}""", box["t"])
+                    if _alt:
+                        box = _alt
+                except Exception:
+                    pass
             # An invisible overlay (re-rendered ad/mask layer) was absorbing
             # every tap: probe the point and evict whatever is not the button.
             try:
@@ -3280,7 +3302,14 @@ def _s_countryle(page, ans, gid):
                 _after = (fr.evaluate(
                     "() => document.body.innerText.slice(0, 200)") or "")
                 if _after == _before:
-                    _dbg(gid, "slide unchanged after trusted tap")
+                    _u = getattr(page, "_qp_unch", 0) + 1
+                    page._qp_unch = _u
+                    _last_tap = box["t"]
+                    _dbg(gid, f"slide unchanged after trusted tap ({_u}x, "
+                              f"last={_last_tap})")
+                else:
+                    page._qp_unch = 0
+                    _last_tap = None
             except Exception:
                 pass
     # final explicit PLAY/START push: the deck's last slide button is the
