@@ -3,6 +3,10 @@ name: ALL videos - every game parallel
 on:
   workflow_dispatch:
     inputs:
+      game:
+        description: 'Single game (empty = whole matrix)'
+        required: false
+        default: ''
       date:
         description: 'Puzzle date YYYY-MM-DD (empty = auto per-batch clock)'
         required: false
