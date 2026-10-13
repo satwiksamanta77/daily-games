@@ -4996,8 +4996,12 @@ def run_one(gid):
             # keystroke after guess 2 to one); close them on birth. NEVER the
             # main page: ctx 'page' also fires for ctx.new_page() itself and
             # closing it aborted the first goto (ERR_ABORTED trio).
-            if popup is pg:
-                return
+            try:
+                if popup._impl_obj is pg._impl_obj:
+                    return
+            except Exception:
+                if popup is pg:
+                    return
             try:
                 _dbg(gid, f"popup closed: {(popup.url or '')[:60]}")
                 popup.close(run_before_unload=False)
