@@ -4928,17 +4928,21 @@ def run_one(gid):
                 pass
             return route.continue_()
         ctx.route("**/*", _route)
+        pg = ctx.new_page()
 
         def _kill_popups(popup):
             # ad popunders steal window focus mid-game (betweenle lost every
-            # keystroke after guess 2 to one); close them on birth.
+            # keystroke after guess 2 to one); close them on birth. NEVER the
+            # main page: ctx 'page' also fires for ctx.new_page() itself and
+            # closing it aborted the first goto (ERR_ABORTED trio).
+            if popup is pg:
+                return
             try:
                 _dbg(gid, f"popup closed: {(popup.url or '')[:60]}")
                 popup.close(run_before_unload=False)
             except Exception:
                 pass
         ctx.on("page", _kill_popups)
-        pg = ctx.new_page()
         _instrument_mouse(pg)
         pg.on("dialog", _auto_dismiss_dialog(gid))
         try:
