@@ -2,7 +2,7 @@
  "game": "betweenle",
  "date": "2026-10-13",
  "solved": false,
- "evidence": "NO win signal on page; stats='WORD'",
+ "evidence": "exception: Page.goto: net::ERR_ABORTED; maybe frame was detached?\nCall log:\n  - navigating to \"https://betweenle.com/\", waiting until \"domcontentloaded\"\n",
  "video": "/home/runner/work/daily-games/daily-games/videos/betweenle/betweenle_final_2026-10-13.mp4",
  "youtube_url": null
 }
