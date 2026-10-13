@@ -20,7 +20,6 @@ on:
 
 jobs:
   generate:
-    if: ${{ (inputs.game || '') == '' || inputs.game == matrix.game }}
     permissions:
       contents: write
     runs-on: ubuntu-latest
@@ -45,6 +44,7 @@ jobs:
           npm init -y >/dev/null 2>&1 || true
           npm install --no-save seedrandom 2>&1 | tail -1 || true
       - name: Run game (never fails job without secrets - local mode, saves artifact)
+        if: ${{ (inputs.game || '') == '' || inputs.game == matrix.game }}
         env:
           HEADLESS: 'true'
           TZ_OFFSET_MINUTES: '540'
