@@ -1012,6 +1012,67 @@ def _betweenle_state(page):
         return {}
 
 
+def _click_on_screen_key(page, label):
+    """Click a visible on-screen keycap by its text (betweenle's migrated
+    build renders keys as divs, so button-only maps and physical keys both
+    miss once an ad steals focus)."""
+    try:
+        box = page.evaluate("""(want) => {
+          const els = Array.from(document.querySelectorAll(
+            'button, div, span, [role=button]'));
+          for (const e of els) {
+            if (e.offsetParent === null) continue;
+            const t = (e.innerText || '').trim();
+            if (t.toLowerCase() !== want.toLowerCase()) continue;
+            const r = e.getBoundingClientRect();
+            if (r.width < 16 || r.width > 150 || r.height < 16 || r.height > 95)
+              continue;
+            if (e.children.length > 2) continue;
+            return {x: r.x + r.width / 2, y: r.y + r.height / 2};
+          }
+          return null;
+        }""", label)
+        if box:
+            page.mouse.click(box["x"], box["y"])
+            try:
+                QP.ev_push(box["x"], box["y"], "click")
+            except Exception:
+                pass
+            page.wait_for_timeout(90)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _type_betweenle_via_keys(page, word):
+    """Clear leftovers with the backspace keycap, then click letter keycaps;
+    falls back to physical typing for any key the DOM map misses."""
+    for _ in range(10):
+        if not any(_click_on_screen_key(page, lab)
+                   for lab in ("\u232b", "delete", "backspace")):
+            break
+    try:
+        page.keyboard.press("Control+a")
+        page.keyboard.press("Backspace")
+    except Exception:
+        pass
+    clicked = 0
+    for ch in str(word).upper():
+        if _click_on_screen_key(page, ch):
+            clicked += 1
+        else:
+            page.keyboard.type(ch, delay=120)
+    return clicked
+
+
+def _submit_betweenle(page):
+    if _click_on_screen_key(page, "enter"):
+        return "keycap-enter"
+    page.keyboard.press("Enter")
+    return "physical-enter"
+
+
 def _type_betweenle_word(page, gid, word, used):
     """Type one betweenle guess; on 'not a word' drop it and try the next
     bank word exactly like a human would (never hammer Enter on a dead word).
@@ -2570,9 +2631,9 @@ def _s_betweenle(page, ans, gid):
                     page.mouse.click(_pt[0], _pt[1])
                     QP.ev_push(_pt[0], _pt[1], "click")
                     page.wait_for_timeout(500)
-                page.keyboard.type(str(g), delay=150)
+                _type_betweenle_via_keys(page, g)
                 page.wait_for_timeout(300)
-                page.keyboard.press("Enter")
+                _submit_betweenle(page)
                 _settle(page, base=2500)
                 _st2 = _betweenle_state(page)
             if (_st2.get("rows") or 0) <= _rows_before:
@@ -2602,9 +2663,9 @@ def _s_betweenle(page, ans, gid):
                 # answer still gets its turn.
                 _dbg(gid, f"{g!r} rejected by bounds; skipping to next guess")
                 continue
-            page.keyboard.type(str(g), delay=150)
+            _type_betweenle_via_keys(page, g)
             page.wait_for_timeout(300)
-            page.keyboard.press("Enter")
+            _submit_betweenle(page)
             _settle(page, base=2500)
         try:
             _st = _betweenle_state(page)

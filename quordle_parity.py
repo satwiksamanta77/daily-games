@@ -656,7 +656,20 @@ def adhide_js():
       }
     } catch (e) {}
   };
+  const killShellBanners = () => {
+    try {
+      for (const el of Array.from(document.body.children)) {
+        const r = el.getBoundingClientRect();
+        if (r.height < 8 || r.height > 170 || r.width < 500) continue;
+        const has3p = Array.from(el.querySelectorAll('img, iframe, script'))
+          .some(m => { try { return new URL(m.src || m.href || '', location.href).host !== location.host; } catch (e) { return false; } });
+        const isGame = el.querySelector('canvas, #menupanel, game-app, input');
+        if (has3p && !isGame) el.style.setProperty('display', 'none', 'important');
+      }
+    } catch (e) {}
+  };
   setInterval(kill3p, 1200);
+  setInterval(killShellBanners, 1500);
   document.addEventListener('DOMContentLoaded', kill3p);
   const put = () => { if (!document.head) return;
     if (!document.querySelector('style[data-qpadhide]')) {
