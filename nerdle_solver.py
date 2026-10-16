@@ -1246,22 +1246,26 @@ async def main():
         except Exception as e:
             print(f"[assembly] fallback raw: {e}")
 
-    if YOUTUBE_AVAILABLE and final:
+    # Iteration 2: never upload an unsolved nerdle video (same rule as runner).
+    if YOUTUBE_AVAILABLE and final and all_solved:
         title_v = [
             f"Nerdle Answer Today ({date_short}) - All 9 Modes Solved!",
             f"Nerdle Answer Today - {today} Classic/Mini/Maxi + More",
             f"Nerdle Answers Today - {today} Full Solve + Hints",
         ]
         title = title_v[day_num % len(title_v)]
-        if not chapters:
-            chapters = [(0, f"{m['name']} Solve") for m in NERDLE_MODES]
+        # Upload description fallback must NOT mutate `chapters`: the
+        # (0, mode) fallback is a display placeholder, and result.json
+        # below must record only real assembly chapter times.
+        up_chapters = chapters or [(0, f"{m['name']} Solve")
+                                   for m in NERDLE_MODES]
         mode_lines = []
         if isinstance(official, dict):
             for m in NERDLE_MODES:
                 eqs = official.get(m["id"]) or []
                 if eqs:
                     mode_lines.append(f"{m['name']}: {' | '.join(eqs)}")
-        chap_str = "\n".join(f"{int(s//60)}:{int(s%60):02d} {l}" for s, l in chapters)
+        chap_str = "\n".join(f"{int(s//60)}:{int(s%60):02d} {l}" for s, l in up_chapters)
         desc = (f"Nerdle Answer Today — {today} | All 9 Modes Solved\n\n"
                 + ("\n".join(mode_lines) + "\n\n" if mode_lines else "")
                 + f"Watch every mode solved step by step with hints.\n\nCHAPTERS:\n{chap_str}\n\n"
@@ -1271,13 +1275,21 @@ async def main():
                 "Math Puzzle", "Nerdle Classic", "Nerdle Mini", "Nerdle Maxi",
                 "Nerdle Hints", "Nerdle Solver"]
         vid = upload_to_youtube(str(final), title=title, description=desc,
-                                chapters=chapters, tags=tags, ytd_info={})
+                                chapters=up_chapters, tags=tags, ytd_info={})
         print(f"[upload] {vid}")
     import json as _json
+    # Iteration 2: write the REAL chapter times computed during assembly
+    # (previously result.json had no chapters, so the runner invented
+    # (0, mode) entries) and the official equations per mode (previously
+    # nothing recorded the answers). typed counts probes + official guesses;
+    # expected counts official equations only — they are NOT comparable.
     (video_dir / f"result_{date_key}.json").write_text(_json.dumps(
         {"game": "nerdle", "date": date_key, "solved": all_solved,
          "modes": [{"id": mid, "typed": t, "expected": e, "signal": s}
-                   for mid, t, e, s in results]}, indent=1))
+                   for mid, t, e, s in results],
+         "chapters": [[round(float(s), 1), str(t)] for s, t in chapters],
+         "equations": {str(m["id"]): list((official or {}).get(m["id"]) or [])
+                       for m in NERDLE_MODES}}, indent=1))
     print("Done!" if all_solved else "NOT SOLVED — see result json")
     import sys as _sys
     _sys.exit(0 if all_solved else 1)

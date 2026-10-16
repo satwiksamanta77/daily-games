@@ -67,6 +67,8 @@ jobs:
             videos/${{ matrix.game }}/telemetry_*.json
             videos/${{ matrix.game }}/result.json
             videos/${{ matrix.game }}/stall_*.png
+            videos/${{ matrix.game }}/shot_win.png
+            videos/${{ matrix.game }}/board_*.png
           retention-days: 7
           if-no-files-found: warn
       - name: Commit database record
@@ -127,6 +129,8 @@ jobs:
             videos/${{ matrix.game }}/telemetry_*.json
             videos/${{ matrix.game }}/result.json
             videos/${{ matrix.game }}/stall_*.png
+            videos/${{ matrix.game }}/shot_win.png
+            videos/${{ matrix.game }}/board_*.png
           retention-days: 7
           if-no-files-found: warn
       - name: Commit database record

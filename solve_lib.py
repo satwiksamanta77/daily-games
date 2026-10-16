@@ -603,7 +603,9 @@ def plan_colorfle(secret, max_guesses=6, n_colors=20):
     if not seq or list(seq[-1]) != secret:
         seq.append(secret)
         steps.append({"turn": len(seq), "guess": secret, "pattern": "G" * n,
-                      "pool_before": 1, "pool_after": 0})
+                      # Iteration 2: after a GGG guess exactly 1 candidate
+                      # remains (the secret itself), not 0.
+                      "pool_before": 1, "pool_after": 1})
     _cache[memo] = (seq, steps)
     return seq, steps
 

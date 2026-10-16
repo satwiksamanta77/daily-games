@@ -2176,7 +2176,8 @@ def solve_semantle(page, ans, gid="semantle"):
     ok, ev = _strict_win(page, ans)
     if not ok:
         return False, f"{ev}; guesses={used} scores={scores}"
-    return True, f"{ev} after {len(used)} semantic guesses (scores={scores})"
+    return True, (f"{ev} after {len(used)} typed guesses "
+                   f"(scores={scores if scores else 'unreadable'})")
 
 
 def solve_contexto(page, ans, gid="contexto"):
@@ -2246,7 +2247,8 @@ def solve_contexto(page, ans, gid="contexto"):
     ok, ev = _strict_win(page, ans)
     if not ok:
         return False, f"{ev}; guesses={used} scores={scores}"
-    return True, f"{ev} after {len(used)} semantic guesses (scores={scores})"
+    return True, (f"{ev} after {len(used)} typed guesses "
+                   f"(scores={scores if scores else 'unreadable'})")
 
 
 # ---------------- plan builders ----------------
@@ -2710,10 +2712,12 @@ def _s_betweenle(page, ans, gid):
                 _settle(page, base=2500)
                 _st2 = _betweenle_state(page)
             if (_st2.get("rows") or 0) <= _rows_before:
-                # Out-of-bounds words can never submit (the canvas build
-                # exposes no DOM bounds text on CI): skip so the in-bounds
-                # answer still gets its turn.
-                _dbg(gid, f"{g!r} rejected by bounds; skipping to next guess")
+                # Rows did not advance after retries. The cause is NOT
+                # proven to be bounds (stale-state reads also produce this;
+                # video proof in rerun #1 showed guesses logged this way DID
+                # submit). Label it honestly so future analysis is not misled.
+                _dbg(gid, f"{g!r} did not submit after retries; skipping "
+                          f"(bounds not verified)")
                 continue
             _type_betweenle_via_keys(page, g)
             page.wait_for_timeout(300)
@@ -2987,9 +2991,13 @@ def _s_searchle(page, ans, gid):
 
 def _type_country_guess(page, scope, country):
     """Type a country into an autosuggest box and click the suggestion row."""
+    import time as _time
+    _t0 = _time.time()
+    _gid = getattr(page, "_qp_gid", "attr")
     name = str(country or "").strip()
     if not name:
         return False, "empty country"
+    _dbg(_gid, f"country-guess start {name!r}")
     try:
         inp = None
         for _wq in range(6):      # input can detach during SPA transitions
@@ -3008,7 +3016,8 @@ def _type_country_guess(page, scope, country):
                     "'input,textarea,[contenteditable=true]').length")
             except Exception:
                 n = "?"
-            _dbg("attr", f"no text input (inputs on page: {n}) url={page.url}")
+            _dbg(getattr(page, "_qp_gid", "attr"),
+                 f"no text input (inputs on page: {n}) url={page.url}")
             return False, "no text input"
         try:
             inp.scroll_into_view_if_needed(timeout=3000)
@@ -3061,10 +3070,14 @@ def _type_country_guess(page, scope, country):
             try:
                 _v = (inp.input_value() or "").strip().lower()
                 if _v and name.lower() not in _v:
+                    _dbg(_gid, f"country-guess {name!r} FAILED after "
+                               f"{_time.time() - _t0:.1f}s (input holds {_v!r})")
                     return False, (f"picked row {detail!r} but input "
                                    f"holds {_v!r}")
             except Exception:
                 pass
+        _dbg(_gid, f"country-guess {name!r} -> picked={bool(picked)} "
+                   f"in {_time.time() - _t0:.1f}s")
         return bool(picked), str(detail or "")
     except Exception as e:
         return False, f"exception: {str(e)[:110]}"
@@ -3342,9 +3355,16 @@ def _s_countryle(page, ans, gid):
                 pass
     # final explicit PLAY/START push: the deck's last slide button is the
     # one that actually mounts the game (runs ended one click short of it)
-    for _play in range(4):
+    # Iteration 2: 4 -> 2 taps. Rerun #1 spent ~146s in the PLAY/input-wait
+    # phase with no log lines; fewer taps + timing logs below expose where
+    # the wait actually goes instead of burning recording time.
+    import time as _time2
+    _t_play0 = _time2.time()
+    for _play in range(2):
         try:
             if fr.query_selector("input"):
+                _dbg(gid, f"PLAY loop: input already visible after "
+                          f"{_time2.time() - _t_play0:.1f}s")
                 break
             pb = fr.query_selector("button:has-text('Play')") or \
                 fr.query_selector("button:has-text('PLAY')") or \
@@ -3368,21 +3388,24 @@ def _s_countryle(page, ans, gid):
     a = str(ans or "").strip()
     picked = "none"
     _fin = None
-    for _w in range(20):
+    _t_wait0 = _time2.time()
+    for _w in range(10):
         try:
             _fin = fr.query_selector("input")
         except Exception:
             _fin = None
         if _fin:
+            _dbg(gid, f"input appeared after "
+                      f"{_time2.time() - _t_wait0:.1f}s (wait iter {_w})")
             break
-        if _w == 6:     # keyboard fallback: some decks advance on Enter/Space
+        if _w == 5:     # keyboard fallback: some decks advance on Enter/Space
             for _k in ("Enter", "Space", "ArrowRight"):
                 try:
                     page.keyboard.press(_k)
                     page.wait_for_timeout(700)
                 except Exception:
                     pass
-        if _w == 12:   # last resort: jump the frame straight to the app route
+        if _w == 8:   # last resort: jump the frame straight to the app route
             try:
                 fr.evaluate("""() => {
                     if (!document.querySelector('input'))
@@ -3393,6 +3416,8 @@ def _s_countryle(page, ans, gid):
             fr = _countryle_frame(page) or fr
         page.wait_for_timeout(1000)
     if not _fin:
+        _dbg(gid, f"input wait exhausted after "
+                  f"{_time2.time() - _t_wait0:.1f}s")
         return False, "no input inside app iframe"
     for n, g in enumerate(seq):
         last = (n == len(seq) - 1)
@@ -3618,7 +3643,11 @@ def _s_waffle(page, ans, gid):
         info = A.waffle(A.target_date())
     except Exception as e:
         return False, f"waffle answer unavailable: {str(e)[:110]}"
-    solution = str(info.get("solution") or ans or "")
+    # A.waffle() returns "answer" (21-letter grid string), NOT "solution".
+    # The old `info.get("solution")` was always None and only worked via the
+    # `or ans` fallback. Read the real key explicitly.
+    _sol = info.get("answer") or info.get("solution") or ans
+    solution = str(_sol.get("answer") if isinstance(_sol, dict) else _sol or "")
     words = [str(w) for w in (info.get("words") or []) if w]
     if not solution:
         return False, "empty waffle solution"
@@ -3633,6 +3662,7 @@ def _s_waffle(page, ans, gid):
     bad_pairs = set()
     _seen_pairs = {}
     _best_greens = None
+    _blocked = set()
     for _round in range(15):
         board = _waffle_board(page)
         if not board:
@@ -3659,7 +3689,7 @@ def _s_waffle(page, ans, gid):
         cur = [(s["ch"], board[s["bi"]].get("pos")) for s in state]
         idx = next((k for k, s in enumerate(state)
                     if not s["green"] and k < len(sol)
-                    and s["ch"] != sol[k]), None)
+                    and s["ch"] != sol[k] and k not in _blocked), None)
         if idx is None:
             break
         want = sol[idx]
@@ -3670,12 +3700,24 @@ def _s_waffle(page, ans, gid):
                  if k != idx and not s["green"] and (idx, k) not in bad_pairs]
         j = next((k for k in cands if state[k]["ch"] == want), None)
         if j is None:
-            j = next(iter(cands), None)
+            # CYCLE fallback (iteration 2): swap with the cell that wants
+            # THIS tile's letter, i.e. resolve the 2-cycle. This is the only
+            # principled fallback: it moves both tiles toward their homes.
+            j = next((k for k in cands if sol[k] == state[idx]["ch"]), None)
+            if j is not None:
+                _dbg("waffle", f"cycle fallback: cell {idx}({state[idx]['ch']}) "
+                                f"<-> cell {j} (wants {state[idx]['ch']})")
         if j is None:
-            if bad_pairs:
-                bad_pairs.clear()
-                continue
-            break
+            # NO arbitrary fallback swap (iteration 2): the old
+            # `j = next(iter(cands))` swapped a random tile when the wanted
+            # letter was not movable, which undid the previous swap and
+            # oscillated the same pair (2026-10-17: V<->E toggled 5x).
+            # Block this index for this run and re-scan for the next
+            # mismatch; if none remains, stop.
+            _dbg("waffle", f"no movable tile holds {want!r} for cell {idx}; "
+                            f"blocking index (no arbitrary swap)")
+            _blocked.add(idx)
+            continue
         bj = state[j]["bi"]
         # Tiles are draggable: drag idx onto j like a finger. Click-click
         # selects but never swaps on this board.
@@ -3724,6 +3766,29 @@ def _s_waffle(page, ans, gid):
                 if len(bad_pairs) >= 3:
                     _dbg("waffle", "3 dead pairs; stopping swaps early")
                     break
+            # Post-swap verify (iteration 2): the two cells must have
+            # exchanged letters. moved=True alone only says the
+            # (letter,pos) multiset changed, which a snap-back with stale
+            # data-pos can also produce.
+            try:
+                _cells2 = sorted(
+                    [i for i, t in enumerate(_nb) if not t.get("empty")],
+                    key=lambda i: _pos(_nb[i]))
+                _state2 = [{"ch": _nb[i]["ch"]} for i in _cells2]
+                _took = (len(_state2) > max(idx, j)
+                         and _state2[idx]["ch"] == want
+                         and _state2[j]["ch"] == cur[idx][0])
+                if not _took:
+                    _dbg("waffle", f"swap {swaps} did not take effect: "
+                                   f"cell {idx} now "
+                                   f"{_state2[idx]['ch'] if len(_state2) > idx else '?'} "
+                                   f"(want {want}); marking pair dead")
+                    bad_pairs.add((idx, j))
+                    if len(bad_pairs) >= 3:
+                        _dbg("waffle", "3 dead pairs; stopping swaps early")
+                        break
+            except Exception:
+                pass
             # FIX-LOOP: moved=True but no progress is also a loop. The
             # 2026-10-17 run toggled the same O<->V pair 15x with moved=True
             # and greens stuck at 6-7/21. Stop after 3 repeats of the same
@@ -3739,6 +3804,9 @@ def _s_waffle(page, ans, gid):
             elif _cur_greens is not None and _cur_greens > (_best_greens or 0):
                 _best_greens = _cur_greens
                 _seen_pairs.clear()
+                # Board changed for the better: a previously blocked index
+                # may be solvable now, so unblock and re-scan.
+                _blocked.clear()
             if _seen_pairs.get(_pair, 0) >= 3:
                 _dbg("waffle", f"same pair {_pair} repeated 3x with no green gain; stopping (was 15x loop)")
                 break
@@ -4460,11 +4528,18 @@ def _s_marveldle(page, ans, gid):
     except Exception as e:
         print(f"[marveldle] probe info failed: {str(e)[:110]}")
     if not str(ans or "").strip() or str(ans) == "None":
-        return _marveldle_browser_solve(page, gid)
+        # Iteration 2: NEVER browser-solve with no answer. A missing answer
+        # means the pick-id gate fired, so the site's board is the previous
+        # day's puzzle. Defer instead of playing yesterday's game.
+        return False, ("answer unavailable: pick-id gate; defer, do not "
+                       "browser-solve previous-day board")
     return solve_attr_game(page, ans, gid, api_probes=probes)
 
 
 def _marveldle_browser_solve(page, gid, max_guesses=14):
+    # DISABLED (iteration 2): no longer called. Browser-solving with no
+    # answer played the previous-day board when the pick-id gate fired.
+    # Kept for reference; do not re-enable without a served-day check.
     """Identify today's character IN-PAGE (the public guess API answers
     205-empty): guess date-seeded candidates from the vendored comics pool,
     read the column feedback, stop on an all-Exact win."""
@@ -4772,7 +4847,20 @@ def run_nerdle_external(g, tgt, date_key, today, short):
             # video/evidence/answers/chapters, so answers were unrecoverable.
             _modes2 = rec.get("modes") or []
             _guesses2 = [f"{m.get('id')}:{m.get('typed')}" for m in _modes2 if isinstance(m, dict)]
-            _ch2 = [(0, str(m.get("id"))) for m in _modes2 if isinstance(m, dict)]
+            # Iteration 2: use the REAL chapters the solver recorded (it
+            # computes them from per-mode starts + card offsets). The old
+            # code invented (0, mode) entries, which are not chapter times.
+            _ch2 = [(float(s), str(t)) for s, t in (rec.get("chapters") or [])
+                     if isinstance(s, (int, float))] or \
+                [(0, str(m.get("id"))) for m in _modes2 if isinstance(m, dict)]
+            # Embed chapters into the MP4 (iteration 2): the nerdle path
+            # never ran _embed_chapters, so rerun #1 had 0 embedded chapters.
+            try:
+                if final and Path(str(final)).exists() and _ch2:
+                    _ok_ch2 = _embed_chapters(str(final), _ch2)
+                    _dbg("nerdle", f"chapters embedded={_ok_ch2} n={len(_ch2)}")
+            except Exception as _e_ch2:
+                _dbg("nerdle", f"chapter embed skipped: {str(_e_ch2)[:80]}")
             _pr2 = _probe_video(final) if final and Path(str(final)).exists() else {}
             _qc2 = {"game": "nerdle", "date": date_key, "solved": bool(rec.get("solved")),
                      "evidence": str(evidence)[:300], "video": str(final) if final and Path(str(final)).exists() else None,
@@ -4782,11 +4870,20 @@ def run_nerdle_external(g, tgt, date_key, today, short):
                      "guesses": len(_guesses2)}
             _qc2["ok"] = bool(_qc2["solved"] and _qc2["video"] and str(_qc2["video"]).endswith(".mp4") and _pr2.get("ok") and _pr2.get("duration_s", 0) >= 40 and _pr2.get("width") == 1920 and _pr2.get("height") == 1080)
             for _m in _modes2:
-                if isinstance(_m, dict) and _m.get("typed") != _m.get("expected"):
-                    _dbg("nerdle", f"mode {_m.get('id')}: typed={_m.get('typed')} vs expected={_m.get('expected')} signal={_m.get('signal')} MISMATCH - see solver log")
+                # Iteration 2: typed counts probes + official guesses, while
+                # expected counts official equations only, so typed !=
+                # expected is NORMAL (classic typed 2 = 1 probe + 1 official).
+                # Only signal != "won" is a real failure.
+                if isinstance(_m, dict) and _m.get("signal") != "won":
+                    _dbg("nerdle", f"mode {_m.get('id')}: signal={_m.get('signal')} "
+                                   f"typed={_m.get('typed')} expected={_m.get('expected')} NOT WON")
             rec = {**rec, "video": _qc2["video"], "evidence": str(evidence)[:300],
                    "guesses": _guesses2, "chapters": _ch2, "qc": _qc2,
-                   "answers": {str(m.get("id")): m.get("typed") for m in _modes2 if isinstance(m, dict)}}
+                   # Iteration 2: the old "answers" dict held typed COUNTS,
+                   # not equations. Record counts under their true name and
+                   # pass through the solver's real equations (if present).
+                   "typed_counts": {str(m.get("id")): m.get("typed") for m in _modes2 if isinstance(m, dict)},
+                   "equations": rec.get("equations") or {}}
             try:
                 (vdir / f"qc_{date_key}.json").write_text(json.dumps(_qc2, indent=1), encoding="utf-8")
             except Exception:
@@ -4877,6 +4974,13 @@ def run_framed_all(gid, g, tgt, date_key, today, short):
             return route.continue_()
         ctx.route("**/*", _route)
         pg = ctx.new_page()
+        # Per-guess logging: _play_guesses logs with page._qp_gid, which was
+        # only set inside _s_wordle — every other game's per-guess lines
+        # went to videos/wordle-like/ or were lost. Set it at page creation.
+        try:
+            pg._qp_gid = "framed"
+        except Exception:
+            pass
         _instrument_mouse(pg)
         # A stray JS alert/confirm (ads, "already played") blocks EVERY
         # later evaluate call forever - auto-dismiss so a popup can never
@@ -5174,17 +5278,18 @@ def run_one(gid):
     try:
         ans = getattr(A, key)(tgt)
     except SystemExit as e:
-        if gid == "marveldle":
-            ans = {"answer": None, "via": "browser-solve"}
-            _dbg(gid, f"answer source unavailable ({e}); browser solve on")
-        else:
-            _dbg(gid, f"QC FAIL: answer unavailable: {e}")
-            _db_save(date_key, gid, {"game": gid, "date": date_key,
-                                     "solved": False,
-                                     "evidence": f"answer unavailable: {e}",
-                                     "video": None})
-            return {"game": gid, "solved": False, "video": None,
-                    "evidence": f"answer unavailable: {e}"}
+        # Iteration 2: marveldle is NOT special here. The old fallback set
+        # ans={"answer": None} and "browser solved" the site's board — but
+        # when the pick-id gate fires, the site's board IS the previous
+        # day's puzzle, so browser-solve played yesterday's game. Defer
+        # immediately like every other game instead.
+        _dbg(gid, f"QC FAIL: answer unavailable: {e}")
+        _db_save(date_key, gid, {"game": gid, "date": date_key,
+                                 "solved": False,
+                                 "evidence": f"answer unavailable: {e}",
+                                 "video": None})
+        return {"game": gid, "solved": False, "video": None,
+                "evidence": f"answer unavailable: {e}"}
     aval = ans.get("answer") or ans.get("name") or str(ans.get("colors"))
     if gid == "marveldle" and not ans.get("answer"):
         aval = None
@@ -5242,6 +5347,13 @@ def run_one(gid):
             return route.continue_()
         ctx.route("**/*", _route)
         pg = ctx.new_page()
+        # Per-guess logging: _play_guesses logs with page._qp_gid, which was
+        # only set inside _s_wordle — every other game's per-guess lines
+        # went to videos/wordle-like/ or were lost. Set it at page creation.
+        try:
+            pg._qp_gid = gid
+        except Exception:
+            pass
 
         def _kill_popups(popup):
             # ad popunders steal window focus mid-game (betweenle lost every
@@ -5410,6 +5522,25 @@ def run_one(gid):
             pg.screenshot(path=str(vdir / "shot_win.png"))
         except Exception:
             pass
+        # Iteration 2 (phoodle): the rerun #1 gameplay recording was a blank
+        # white screen while solved=True + QC PASS. Check the post-solve
+        # screenshot for near-blank content so a blank capture is visible in
+        # the log instead of silently shipping. This does NOT fail the run —
+        # the screenshot and the recording can legitimately differ — but a
+        # WARNING here plus shot_win.png in the artifact lets the next
+        # analysis compare screenshot vs recording directly.
+        try:
+            from PIL import Image as _PILImage2
+            import numpy as _np2
+            _shot = _PILImage2.open(vdir / "shot_win.png").convert("L")
+            _arr = _np2.array(_shot, dtype=float)
+            _mean, _std = float(_arr.mean()), float(_arr.std())
+            _dbg(gid, f"shot_win brightness mean={_mean:.1f} std={_std:.1f}")
+            if _mean > 245 and _std < 12:
+                _dbg(gid, "WARNING: shot_win near-blank (mean>245, std<12); "
+                          "gameplay recording may also be blank (phoodle class)")
+        except Exception as _e2:
+            _dbg(gid, f"shot_win blank check skipped: {str(_e2)[:80]}")
         try:
             vpath = pg.video.path()
         except Exception:
@@ -5436,10 +5567,22 @@ def run_one(gid):
                 "evidence": evidence}
     print(f"[{gid}] solved={solved} evidence={evidence}")
     final = vpath
+    if not solved:
+        # Iteration 2: do not assemble a publishable final for an unsolved
+        # game (the marveldle/waffle class built 100-200s videos for
+        # failures, with "Full solve" chapter titles). Keep the polished
+        # gameplay intermediate for diagnosis, report video=None.
+        _dbg(gid, "skipping final assembly: not solved (no publishable video)")
+        try:
+            _polish_gameplay(str(final), vdir / "gameplay_1080.mp4")
+        except Exception:
+            pass
+        final = None
+        chapters = [(0, "The solve")]
     # Quordle-parity assembly:
     #   recap(5s) + hints(10s) + gameplay + reveal(8s) + facts(8s) + teaser(5s)
     #   + uniform music + SRT captions + real chapter list
-    if final and HAS and HAS_MOVIEPY and HAS_PIL:
+    elif final and HAS and HAS_MOVIEPY and HAS_PIL:
         try:
             steps = _steps(gid, aval)
             nguess = len(steps)
@@ -5582,9 +5725,9 @@ def run_one(gid):
     else:
         chapters = [(0, "The solve")]
 
-    # upload (skips without creds)
+    # upload (skips without creds; never upload an unsolved game)
     nguess = len(_steps(gid, aval))
-    if final and HAS:
+    if solved and final and HAS:
         def _ts(sec):
             sec = max(0, int(sec))
             return f"{sec // 60}:{sec % 60:02d}"
@@ -5638,10 +5781,12 @@ def run_one(gid):
         pass
     (vdir / "result.json").write_text(json.dumps(
         {"game": gid, "date": date_key, "solved": solved, "evidence": evidence,
-         "video": str(final), "guesses": _guesses(gid, aval),
+         "video": str(final) if final else None,
+         "guesses": _guesses(gid, aval),
          "steps": _steps(gid, aval), "chapters": chapters, "qc": _qc}, indent=1))
     _db_save(date_key, gid, {"game": gid, "date": date_key, "solved": solved,
-                             "evidence": evidence, "video": str(final),
+                             "evidence": evidence,
+                             "video": str(final) if final else None,
                              "youtube_url": vid if 'vid' in dir() else None})
     _report_game(gid, date_key, answer=f"{aval} ({ans.get('via', '?')})",
                  guesses=_guesses(gid, aval),
@@ -5652,7 +5797,7 @@ def run_one(gid):
                  upload=(vid if 'vid' in dir() and vid else
                          "skipped-no-creds"),
                  extra={"slides": "recap+hints+reveal+facts+teaser+intro"})
-    return {"game": gid, "solved": solved, "video": str(final),
+    return {"game": gid, "solved": solved, "video": str(final) if final else None,
             "evidence": evidence, "guesses": nguess}
 
 
