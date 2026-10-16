@@ -66,14 +66,16 @@ def target_date():
         off = int(os.environ.get("TZ_OFFSET_MINUTES", "540"))
     except ValueError:
         off = 540
-    # ONE rule for every batch (verified against all six crons on 2026-10-09):
-    # UTC+9h == IST+3:30. At the 21:00-IST batch (15:30 UTC) it rolls to the
-    # NEXT calendar day - the board the video publishes for - while every
-    # morning batch (02:30/05:15/06:20/10:30 UTC) stays on the same day. It is
-    # also exactly nerdle_solver's old `+1 if UTC hour >= 15` rule, so runner
-    # and nerdle can never disagree again. The 330 (IST-same-day) default used
-    # between audits made the 9pm batch record a board that is stale by
-    # publish time - do not "fix" this back to 330.
+    # SINGLE SOURCE OF TRUTH (fix-loop 2026-10-17): target = FAKE_DATE_ISO
+    # date if set, else (UTC now + 540 min).date() i.e. UTC+9. At the
+    # 21:00-IST batch (15:30 UTC) it rolls to the NEXT calendar day - the
+    # board the video publishes for - while morning batches stay same-day.
+    # Browser must use BROWSER_TZ=Pacific/Kiritimati (UTC+14) with fake
+    # clock <target> 00:05 local, so browser local date == target_date.
+    # Workflows and runner defaults must all use Kiritimati; Asia/Kolkata
+    # here was a contradiction (540=UTC+9 vs Kolkata=UTC+5:30). Do not
+    # change this back to 330 (IST-same-day): that made the 9pm batch
+    # record a stale board.
     return (datetime.utcnow() + timedelta(minutes=off)).date()
 
 
@@ -81,12 +83,10 @@ def shift_target_date(days):
     """`target_date()` moved by `days`.
 
     Daily puzzle sites key their puzzle off the BROWSER's local calendar day.
-    BROWSER_TZ is deliberately a far-east zone (Pacific/Kiritimati, UTC+14) and
-    the faked clock sits just after local midnight, so the browser very often
-    reports the NEXT calendar day. An answer fetched for the unshifted date then
-    describes yesterday's puzzle: every guess is scored wrong and the run can
-    never win. Callers that have seen the page's own date use this to agree
-    with it.
+    BROWSER_TZ is Pacific/Kiritimati (UTC+14) and the faked clock sits just
+    after local midnight, so the browser local date == target_date().
+    Callers that have seen the page's own date use this to agree with it.
+    Do NOT use shift to silently fall back to a previous-day answer.
     """
     return target_date() + timedelta(days=int(days))
 
@@ -538,34 +538,48 @@ WAFFLE_WORKER = "https://api.wafflegame.workers.dev"
 
 
 def waffle(d=None):
-    """Waffle grid: worker API is what wordsolverx's frontend calls."""
+    """Waffle grid: site daily*.txt files (wafflegame.net/dailyN.txt).
+
+    The worker API (api.wafflegame.workers.dev) is stale and silently
+    returned the wrong-day puzzle. Fetch daily0/1/2.txt, base64 +
+    UTF-16LE-decode + JSON.parse, and return the entry whose date ==
+    target date. If none matches, raise SystemExit (defer/skip).
+    """
+    import base64 as _b64
     import requests
     d = d or target_date()
     key = d.isoformat()
     hdr = {"User-Agent": "WordSolverX Video"}
-    for u in (f"{WAFFLE_WORKER}/date/{key}", f"{WAFFLE_WORKER}/today"):
+    for _n in (0, 1, 2):
         try:
-            r = requests.get(u, timeout=25, headers=hdr)
+            r = requests.get(f"https://wafflegame.net/daily{_n}.txt", timeout=25, headers=hdr)
             if not r.ok:
                 continue
-            j = r.json()
+            raw = _b64.b64decode(r.text.strip())
+            j = json.loads(raw.decode("utf-16-le"))
         except Exception:
             continue
-        if not j or j.get("error") or not j.get("solution"):
+        if not isinstance(j, dict) or str(j.get("date") or "")[:10] != key:
             continue
-        return {"answer": j["solution"], "puzzle": j.get("puzzle"),
-                "words": j.get("words") or [], "number": j.get("number"),
-                "date": j.get("date") or key, "via": u}
-    raise SystemExit(f"waffle: no puzzle for {key}")
+        words = j.get("words") or []
+        sol = j.get("solution") or " ".join(words)
+        if not sol:
+            continue
+        return {"answer": sol, "puzzle": j.get("puzzle"), "words": words,
+                "number": j.get("number"), "date": key,
+                "via": f"https://wafflegame.net/daily{_n}.txt"}
+    raise SystemExit(f"waffle: no daily*.txt entry for {key} (defer, do not use worker)")
 
 
 # ---------- worldle ----------
 def worldle(d=None):
-    """Worldle: seedrandom(worldleNumber) over countries sorted by code.
+    """Worldle: live site uses CDN JSON per dayString.
 
-    Ported from src/lib/worldle/logic.ts. seedrandom is an ARC4 variant, so
-    the index is computed by Node with the SAME package the frontend uses
-    rather than a hand-rolled port that could drift by one.
+    GET https://cdn-assets.teuteuf.fr/data/worldle/games/<year>/<day>.json
+    returns {countryCode, ...}. That is authoritative. The old
+    seedrandom formula no longer reproduces the CDN codes (verified
+    2026-10-16: CDN TG for 10-17 vs formula CI/CD) and is kept only as
+    a fallback if the CDN fetch fails.
     """
     d = d or target_date()
     number = _days(d, date(2022, 1, 21)) + 1
@@ -573,6 +587,19 @@ def worldle(d=None):
              "2026-02-28": "BG", "2026-03-01": "GR", "2026-03-02": "MG"}
     countries = json.loads(
         (ZAI / "src/lib/data/worldle/countries.json").read_text("utf-8"))
+    # CDN-first (fix-loop): live site no longer uses seedrandom.
+    try:
+        import requests as _rq
+        _r = _rq.get(f"https://cdn-assets.teuteuf.fr/data/worldle/games/{d.year}/{d.isoformat()}.json", timeout=20, headers={"User-Agent": "WordSolverX Video"})
+        if _r.ok:
+            _cj = _r.json()
+            _code = _cj.get("countryCode") or _cj.get("code")
+            if _code:
+                _hit = next((c for c in countries if c.get("code") == _code), None)
+                if _hit:
+                    return {"answer": _hit["name"], "code": _code, "number": number, "date": d.isoformat(), "via": "cdn"}
+    except Exception:
+        pass
     code = known.get(d.isoformat())
     idx = None
     if not code:
@@ -680,11 +707,13 @@ def countryle(d=None):
 
 # ---------- globle ----------
 def globle(d=None):
-    """Globle: /answer?day=... returns an AES-passphrase country index.
+    """Globle: /answer?day=...&timeZone=... returns an AES-passphrase country index.
 
-    The site refuses future-dated days (404), so if the target day is ahead
-    of its calendar we fall back to whatever it calls today rather than
-    failing the whole run.
+    The site only serves day == today-in-timeZone. Send timeZone=
+    BROWSER_TZ (Pacific/Kiritimati) and request exactly the target day.
+    On 404 / "Puzzle is not available" raise SystemExit so the runner
+    DEFERS to the game cron window. NEVER fall back to date.today() -
+    that silently returned the previous-day puzzle.
     """
     import requests
     d = d or target_date()
@@ -694,8 +723,9 @@ def globle(d=None):
     K = "ee53e68c3074206a002bf01333b047d5"
 
     def _decode(day):
+        _tz = os.environ.get("BROWSER_TZ", "Pacific/Kiritimati")
         r = requests.get(f"https://globle-game.com/answer?day={day}",
-                         params={"list": len(countries)},
+                         params={"list": len(countries), "timeZone": _tz},
                          headers={"User-Agent": "WordSolverX Video"},
                          timeout=20)
         r.raise_for_status()
@@ -707,13 +737,10 @@ def globle(d=None):
         return {"answer": c["name"], "code": c.get("code"), "index": idx,
                 "date": day, "via": "api"}
 
-    last = ""
-    for day in dict.fromkeys((key, date.today().isoformat())):
-        try:
-            return _decode(day)
-        except Exception as e:
-            last = str(e)[:110]
-    raise SystemExit(f"globle: no answer for {key} ({last})")
+    try:
+        return _decode(key)
+    except Exception as e:
+        raise SystemExit(f"globle: no answer for {key} (defer, do not fallback: {str(e)[:110]})")
 
 
 # ---------- worgle ----------
@@ -773,8 +800,9 @@ def batterup(d=None):
         except Exception as e:
             print(f"[batterup] cdn {key} failed: {str(e)[:100]}")
             continue
-    # Before ~01:04 UTC on day D the file does not exist yet: that window
-    # belongs to the morning batch - fail loudly, never guess.
+    # Before the CDN file for day D exists (observed ~03:30 UTC for the
+    # 2026-10-16 file; earlier docs said ~01:04 UTC) that window belongs
+    # to the morning batch - fail loudly, never guess.
     raise SystemExit(f"batterup: day {d.isoformat()} not published yet "
                      f"(CDN flips ~01:04 UTC)")
     try:
@@ -829,6 +857,24 @@ def marveldle(d=None, mode="comics"):
     d = d or target_date()
     date_id = f"{d.month}/{d.day}/{d.year} 12:00:00 AM"
     up = {"comics": "comics", "mcu": "audiovisual"}.get(mode, "comics")
+    # FIX-LOOP pick-id gate: server rollover is 00:00:30 UTC. If the live
+    # pick-id is not the target date, the target puzzle is NOT published
+    # yet - raise SystemExit so runner DEFERS. NEVER solve yesterday's
+    # board and label it today (2026-10-16 HOWARD THE DUCK bug).
+    try:
+        # pick-id endpoint returns plain text (not JSON), so fetch raw text.
+        import requests as _rq2
+        _sid0 = _marvel_sid()
+        _pr = _rq2.get(f"{_MARVEL_API}/config/pick-id", headers={**_MARVEL_HDR, "sessionId": _sid0}, timeout=30)
+        _pr.raise_for_status()
+        _pick_s = (_pr.text or "").strip()
+        _want = f"{d.month}/{d.day}/{d.year}"
+        if _want not in _pick_s:
+            raise SystemExit(f"marveldle: pick-id {_pick_s!r} != target {_want} (not published yet, defer)")
+    except SystemExit:
+        raise
+    except Exception as _e:
+        print(f"[marveldle] pick-id gate check failed (proceeding to live-solve): {str(_e)[:110]}")
     try:
         sid = _marvel_sid()
         chars = _marvel_call(f"/characters/{up}", sid, timeout=60)

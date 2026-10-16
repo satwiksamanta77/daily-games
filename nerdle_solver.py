@@ -4,7 +4,7 @@ Modes (9, from all-wordsolverx-workers/nerdle-answers):
   classic(8), micro(5), mini(6), midi(7), maxi(10),
   minibi(2x6), quad(4x8), speed(2x8), instant(8-hint)
 Answers: nerdle-answers worker (D1) -> direct nerdlegame md5 URLs fallback.
-Video: Playwright record 1280x720, BROWSER_TZ (default Asia/Tokyo for next-day),
+Video: Playwright record 1280x720, BROWSER_TZ (default Pacific/Kiritimati for next-day),
   FAKE_DATE_ISO time-travel init script, Wordle-parity assembly
   (recap 5s + hints 10s + gameplay + 3x analysis 8s + teaser 5s),
   uniform music, SEO like Wordle, 9pm IST trigger via Cloudflare worker.
@@ -1057,7 +1057,7 @@ async def main():
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=HEADLESS)
-        tz = os.environ.get("BROWSER_TZ", "Asia/Kolkata")
+        tz = os.environ.get("BROWSER_TZ", "Pacific/Kiritimati")
         print(f"[tz] {tz}")
         _sstate = script_dir / "browser_state.json"
         _state_kwargs = {"storage_state": str(_sstate)} if _sstate.exists() else {}

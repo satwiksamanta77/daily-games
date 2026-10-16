@@ -49,15 +49,16 @@ jobs:
         env:
           HEADLESS: 'true'
           TZ_OFFSET_MINUTES: '540'
-          BROWSER_TZ: 'Asia/Kolkata'
+          BROWSER_TZ: 'Pacific/Kiritimati'
+          CURSOR_OVERLAY: 'off'
           FORCE_REGENERATE: ${{ inputs.force }}
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ] || [ "$1" = "betweenle" ]; then
-            HEADLESS=false xvfb-run -a python -u runner.py --game "$1" || true;
-          else python -u runner.py --game "$1" || true; fi; }
+            HEADLESS=false xvfb-run -a python -u runner.py --game "$1";
+          else python -u runner.py --game "$1"; fi; }
           if [ -n "${{ inputs.game }}" ]; then RUN "${{ inputs.game }}"; else RUN ${{ matrix.game }}; fi
       - name: Upload video artifact
         if: always()

@@ -43,19 +43,20 @@ jobs:
           python -m playwright install --with-deps chromium
           npm init -y >/dev/null 2>&1 || true
           npm install --no-save seedrandom 2>&1 | tail -1 || true
-      - name: Run game (never fails job without secrets - local mode, saves artifact)
+      - name: Run game (fails on unsolved - saves artifact)
         if: ${{ (inputs.game || '') == '' || inputs.game == matrix.game }}
         env:
           HEADLESS: 'true'
           TZ_OFFSET_MINUTES: '540'
-          BROWSER_TZ: 'Asia/Kolkata'
+          BROWSER_TZ: 'Pacific/Kiritimati'
+          CURSOR_OVERLAY: 'off'
           FORCE_REGENERATE: ${{ inputs.force }}
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           if [ -n "${{ inputs.date }}" ]; then export FAKE_DATE_ISO="${{ inputs.date }}T00:05:00"; echo "PINNED DATE $FAKE_DATE_ISO"; fi
-          G="${{ inputs.game }}"; if [ -z "$G" ]; then G="${{ matrix.game }}"; fi; python -u runner.py --game "$G" || true
+          G="${{ inputs.game }}"; if [ -z "$G" ]; then G="${{ matrix.game }}"; fi; python -u runner.py --game "$G"
       - name: Upload video artifact
         if: always()
         uses: actions/upload-artifact@v4

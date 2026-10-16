@@ -1370,6 +1370,7 @@ def solve_colordle(page, ans):
 
     body = (page.evaluate("() => document.body.innerText") or "").lower()
     # The site's own win banner - the only trustworthy signal.
+    _dbg("colordle", f"per-guess scores={percents} guesses={guesses}")
     if "you guessed the right color" in body:
         return True, (f"win banner 'You guessed the right color' after "
                        f"{len(guesses)} guesses; scores={percents}")
@@ -2105,19 +2106,20 @@ def _semantic_guess_accepted(page, word, before_txt):
     try:
         txt = page.evaluate("() => document.body.innerText") or ""
     except Exception:
-        return True, "?"
+        return True, None
     import re as _re
     low = txt.lower()
     w = str(word).lower()
     if _re.search(r"not a valid word|isn't a valid|invalid word|"
                   r"not in the dictionary|unknown word", low):
-        return False, "?"
+        return False, None
     m = _re.search(_re.escape(w) + r"[^\n]{0,40}?([\d.]+)\s*%", low)
     if m:
         return True, m.group(1)
     if w in low and before_txt and before_txt.lower().count(w) == 0:
-        return True, "?"
-    return False, "?"
+        # FIX-LOOP: accepted but score not readable -> None, not "?", so evidence never shows ['?'] placeholders.
+        return True, None
+    return False, None
 
 
 def solve_semantle(page, ans, gid="semantle"):
@@ -2169,7 +2171,8 @@ def solve_semantle(page, ans, gid="semantle"):
                     break
             continue
         used.append(w)
-        scores.append(score)
+        if score is not None:
+            scores.append(score)
     ok, ev = _strict_win(page, ans)
     if not ok:
         return False, f"{ev}; guesses={used} scores={scores}"
@@ -2229,7 +2232,8 @@ def solve_contexto(page, ans, gid="contexto"):
                     break
             continue
         used.append(w)
-        scores.append(score)
+        if score is not None:
+            scores.append(score)
     if str(ans).lower() not in [u.lower() for u in used]:
         try:
             _idle_drift(page)
@@ -2421,7 +2425,12 @@ def _plan_for(gid, answer):
             words = [str(w).upper() for w in (info.get("words") or [])]
         except Exception:
             words = []
-        seq = [w for w in words if w and w != a.upper()][:5] + [a.upper()]
+        # FIX-LOOP: waffle answer is space-joined words (e.g. 'SWEPT SHOUT ...').
+        # The old code appended a.upper() which was the CONCATENATED
+        # 30-letter string ('EXPELEOARESETIECEARTH') as a fake 6th guess.
+        # Plan is now just the real words.
+        _aw = [w for w in str(a).upper().split() if w] if " " in str(a) else []
+        seq = _aw if _aw else [w for w in words if w][:6]
         steps = [{"turn": i + 1, "guess": g, "pattern": "", "pool_before": None,
                   "pool_after": None} for i, g in enumerate(seq)]
         p = (seq, steps)
@@ -2742,8 +2751,18 @@ def _s_betweenle(page, ans, gid):
                                  "return w ? w.innerText : ''; }") or ""
         except Exception:
             stat = ""
+        # FIX-LOOP: stats-panel fallback previously returned True even
+        # when RATIO/GATOR were logged "rejected by bounds". Require that
+        # the answer was actually in the submitted set and rows advanced.
+        _final_st = {}
+        try:
+            _final_st = _betweenle_state(page) or {}
+        except Exception:
+            _final_st = {}
+        if stat and str(ans).lower() in stat.lower() and str(ans).upper() in _used_bl and (_final_st.get("rows") or 0) > 0:
+            return True, f"stats panel word={stat!r} (submitted, rows={_final_st.get('rows')})"
         if stat and str(ans).lower() in stat.lower():
-            return True, f"stats panel word={stat!r}"
+            _dbg(gid, f"stats panel shows {stat!r} but answer not in submitted set {_used_bl} / rows={_final_st.get('rows')}; NOT claiming solved")
         return False, f"{ev}; stats={stat!r}"
     return ok, ev
 
@@ -3502,6 +3521,12 @@ def _s_countryle(page, ans, gid):
         page.wait_for_timeout(2500)
     _dbg(gid, f"win-check body len={len(body)} tail={body[-160:]!r}")
     low = body.lower()
+    # FIX-LOOP: accept the explicit win banner "You found the COUNTRYLE"
+    # (i18n statisticsPage.youFoundThe + " COUNTRYLE"). The 2026-10-17 run
+    # discarded a confirmed TIMOR-LESTE win because this phrase was not
+    # in the keyword list. If the banner is seen, accept the win.
+    if "you found the" in low and "countryle" in low:
+        return True, f"win banner You found the COUNTRYLE (picked {picked!r})"
     if a.lower() in low and any(k in low for k in (
             "guessed", "correct", "well done", "statistics", "share",
             "play again", "tomorrow", "result")):
@@ -3606,6 +3631,8 @@ def _s_waffle(page, ans, gid):
         b0 = "?"
     swaps = 0
     bad_pairs = set()
+    _seen_pairs = {}
+    _best_greens = None
     for _round in range(15):
         board = _waffle_board(page)
         if not board:
@@ -3697,6 +3724,24 @@ def _s_waffle(page, ans, gid):
                 if len(bad_pairs) >= 3:
                     _dbg("waffle", "3 dead pairs; stopping swaps early")
                     break
+            # FIX-LOOP: moved=True but no progress is also a loop. The
+            # 2026-10-17 run toggled the same O<->V pair 15x with moved=True
+            # and greens stuck at 6-7/21. Stop after 3 repeats of the same
+            # unordered pair or 3 swaps with no green increase.
+            _pair = tuple(sorted((idx, j)))
+            _seen_pairs[_pair] = _seen_pairs.get(_pair, 0) + 1
+            try:
+                _cur_greens = sum(1 for t in _waffle_board(page) if not t.get("empty") and t.get("green"))
+            except Exception:
+                _cur_greens = None
+            if _best_greens is None:
+                _best_greens = _cur_greens
+            elif _cur_greens is not None and _cur_greens > (_best_greens or 0):
+                _best_greens = _cur_greens
+                _seen_pairs.clear()
+            if _seen_pairs.get(_pair, 0) >= 3:
+                _dbg("waffle", f"same pair {_pair} repeated 3x with no green gain; stopping (was 15x loop)")
+                break
         except Exception:
             pass
         if "ERR" in str(detail) or str(detail).startswith(("no-", "bad-", "already-")):
@@ -4584,6 +4629,60 @@ def _probe_video(path):
     return info
 
 
+def _embed_chapters(mp4_path, chapters):
+    """Embed chapters into an MP4 via ffmetadata remux (chapters were JSON-only).
+
+    chapters: list of (start_seconds_float, title). Writes a temp ffmetadata
+    file, remuxes with -map_metadata 1, replaces the original on success.
+    Returns True on success, False otherwise. Never raises.
+    """
+    try:
+        import subprocess as _sp
+        p = Path(str(mp4_path))
+        if not p.exists() or not chapters or len(chapters) < 1:
+            return False
+        # Need durations: use next chapter start as end, last chapter to EOF.
+        # ffmetadata needs TIMEBASE 1/1000 and START/END in ms.
+        import json as _js
+        _r = _sp.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                      "-of", "json", str(p)], capture_output=True, text=True, timeout=60)
+        _dur = float((_js.loads(_r.stdout or "{}").get("format") or {}).get("duration") or 0)
+        if _dur <= 0:
+            return False
+        lines = [";FFMETADATA1"]
+        for _i, (_s, _t) in enumerate(chapters):
+            _start = int(float(_s) * 1000)
+            _end = int(float(chapters[_i + 1][0]) * 1000) if _i + 1 < len(chapters) else int(_dur * 1000)
+            if _end <= _start:
+                _end = _start + 1000
+            _title = str(_t).replace("=", "-").replace(";", ",").replace("#", "").replace("\n", " ")[:100]
+            lines.append("[CHAPTER]")
+            lines.append("TIMEBASE=1/1000")
+            lines.append(f"START={_start}")
+            lines.append(f"END={_end}")
+            lines.append(f"title={_title}")
+        _meta = p.parent / (p.stem + ".ffmetadata")
+        _meta.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        _tmp = p.parent / (p.stem + ".chapters.mp4")
+        _r2 = _sp.run(["ffmpeg", "-y", "-v", "error", "-i", str(p), "-i", str(_meta),
+                       "-map", "0", "-map_metadata", "1", "-c", "copy", str(_tmp)],
+                      capture_output=True, text=True, timeout=600)
+        try:
+            _meta.unlink()
+        except Exception:
+            pass
+        if _r2.returncode == 0 and _tmp.exists() and _tmp.stat().st_size > 1000:
+            _tmp.replace(p)
+            return True
+        try:
+            _tmp.unlink()
+        except Exception:
+            pass
+        return False
+    except Exception:
+        return False
+
+
 def _report_game(gid, date_key, *, answer=None, guesses=None, rejected=None,
                  reloads=None, verify=None, video=None, chapters=None,
                  upload=None, extra=None):
@@ -4633,7 +4732,7 @@ def run_nerdle_external(g, tgt, date_key, today, short):
     env = dict(os.environ)
     env.setdefault("HEADLESS", "true")
     env.setdefault("TZ_OFFSET_MINUTES", "540")
-    env.setdefault("BROWSER_TZ", "Asia/Kolkata")
+    env.setdefault("BROWSER_TZ", "Pacific/Kiritimati")
     print(f"[nerdle] target {date_key} (9 modes, one video)")
     try:
         r = _sp.run([sys.executable, str(HERE / "nerdle_solver.py")],
@@ -4665,6 +4764,31 @@ def run_nerdle_external(g, tgt, date_key, today, short):
             evidence = f"modes={rec.get('modes')}"
             try:
                 src.rename(vdir / f"result_{date_key}.json")
+            except Exception:
+                pass
+            # FIX-LOOP: enrich normalized result so artifact is self-contained:
+            # video/evidence/guesses/chapters/qc like other games. Previously
+            # vdir/result.json was just {game,date,solved,modes} with no
+            # video/evidence/answers/chapters, so answers were unrecoverable.
+            _modes2 = rec.get("modes") or []
+            _guesses2 = [f"{m.get('id')}:{m.get('typed')}" for m in _modes2 if isinstance(m, dict)]
+            _ch2 = [(0, str(m.get("id"))) for m in _modes2 if isinstance(m, dict)]
+            _pr2 = _probe_video(final) if final and Path(str(final)).exists() else {}
+            _qc2 = {"game": "nerdle", "date": date_key, "solved": bool(rec.get("solved")),
+                     "evidence": str(evidence)[:300], "video": str(final) if final and Path(str(final)).exists() else None,
+                     "probe": _pr2, "cursor_events": len(QP.ev_all()),
+                     "cursor_clips": (QP.LAST_POLISH or {}).get("clips", 0),
+                     "frame_mode": (QP.LAST_POLISH or {}).get("mode"),
+                     "guesses": len(_guesses2)}
+            _qc2["ok"] = bool(_qc2["solved"] and _qc2["video"] and str(_qc2["video"]).endswith(".mp4") and _pr2.get("ok") and _pr2.get("duration_s", 0) >= 40 and _pr2.get("width") == 1920 and _pr2.get("height") == 1080)
+            for _m in _modes2:
+                if isinstance(_m, dict) and _m.get("typed") != _m.get("expected"):
+                    _dbg("nerdle", f"mode {_m.get('id')}: typed={_m.get('typed')} vs expected={_m.get('expected')} signal={_m.get('signal')} MISMATCH - see solver log")
+            rec = {**rec, "video": _qc2["video"], "evidence": str(evidence)[:300],
+                   "guesses": _guesses2, "chapters": _ch2, "qc": _qc2,
+                   "answers": {str(m.get("id")): m.get("typed") for m in _modes2 if isinstance(m, dict)}}
+            try:
+                (vdir / f"qc_{date_key}.json").write_text(json.dumps(_qc2, indent=1), encoding="utf-8")
             except Exception:
                 pass
             (vres).write_text(json.dumps(rec, indent=1), encoding="utf-8")
@@ -4728,7 +4852,7 @@ def run_framed_all(gid, g, tgt, date_key, today, short):
         ctx = b.new_context(record_video_dir=str(vdir),
                             record_video_size={"width": 1920, "height": 1080},
                             viewport={"width": 1920, "height": 1080},
-                            timezone_id=os.environ.get("BROWSER_TZ", "Asia/Kolkata"),
+                            timezone_id=os.environ.get("BROWSER_TZ", "Pacific/Kiritimati"),
                             locale="en-US", **_state_kwargs)
         if HAS:
             iso = os.environ.get("FAKE_DATE_ISO", tgt.strftime("%Y-%m-%dT00:05:00"))
@@ -4941,6 +5065,11 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
             clip.write_videofile(out, codec="libx264", audio_codec="aac",
                                  fps=24, verbose=False, logger=None)
             final = out
+            try:
+                _ok_ch = _embed_chapters(out, chapters)
+                _dbg(gid, f"chapters embedded={_ok_ch} n={len(chapters)}")
+            except Exception:
+                pass
             DP.build_captions_srt(chapters, total, today, g["name"],
                                   out_path=vdir / "captions.srt")
         except Exception as e:
@@ -4949,10 +5078,30 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
     else:
         chapters = [(0, "The solve")]
     _upload_framed(gid, g, today, short, answers, chapters, final)
+    _fpr = _probe_video(final) if final else {}
+    _fqc = {"game": gid, "date": date_key, "solved": bool(solved),
+            "evidence": str(evidence)[:300], "video": str(final) if final else None,
+            "probe": _fpr, "cursor_events": len(QP.ev_all()),
+            "cursor_clips": (QP.LAST_POLISH or {}).get("clips", 0),
+            "frame_mode": (QP.LAST_POLISH or {}).get("mode"),
+            "guesses": len(per_mode) * 2}
+    _fqc["ok"] = bool(solved and final and str(final).endswith(".mp4") and _fpr.get("ok")
+                      and _fpr.get("duration_s", 0) >= 40
+                      and _fpr.get("width") == 1920 and _fpr.get("height") == 1080)
+    _dbg(gid, f"QC {'PASS' if _fqc['ok'] else 'FAIL'}: mp4={_fqc['video']} "
+               f"res={_fpr.get('width')}x{_fpr.get('height')} dur={_fpr.get('duration_s')}s solved={solved}")
+    try:
+        (vdir / f"qc_{date_key}.json").write_text(json.dumps(_fqc, indent=1), encoding="utf-8")
+    except Exception:
+        pass
+    try:
+        (vdir / f"telemetry_{date_key}.json").write_text(json.dumps(QP.ev_all(), indent=1), encoding="utf-8")
+    except Exception:
+        pass
     (vdir / "result.json").write_text(json.dumps(
         {"game": gid, "date": date_key, "solved": solved, "evidence": evidence,
          "video": str(final), "modes": per_mode, "answers": answers,
-         "chapters": chapters}, indent=1))
+         "chapters": chapters, "qc": _fqc}, indent=1))
     _db_save(date_key, gid, {"game": gid, "date": date_key, "solved": solved,
                              "evidence": evidence, "video": str(final)})
     _report_game(gid, date_key,
@@ -5060,7 +5209,7 @@ def run_one(gid):
         ctx = b.new_context(record_video_dir=str(vdir),
                             record_video_size={"width": _vw, "height": _vh},
                             viewport={"width": _vw, "height": _vh},
-                            timezone_id=os.environ.get("BROWSER_TZ", "Asia/Kolkata"),
+                            timezone_id=os.environ.get("BROWSER_TZ", "Pacific/Kiritimati"),
                             locale="en-US",
                             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36")
         # Pin EVERY game to the target date. Contexto and semantle used to be
@@ -5244,44 +5393,12 @@ def run_one(gid):
                                 f"{date_key}; deferred to its cron window")
                     _dbg(gid, evidence)
                 if not solved and not _defer_stale:
-                    # Server-keyed sites can lag a day behind the publish
-                    # date: replay once with yesterday's answer and re-key.
-                    try:
-                        _prev = tgt - timedelta(days=1)
-                        _ans2 = getattr(A, key)(_prev)
-                        _aval2 = (_ans2.get("answer") or _ans2.get("name")
-                                  or str(_ans2.get("colors")))
-                        if str(_aval2) != str(aval):
-                            _dbg(gid, f"no win; retrying with {_prev} answer "
-                                      f"{_aval2!r}")
-                            # the cached plan still holds the WRONG day's
-                            # guesses - drop it or the retry replays them
-                            _PLANS.pop(gid, None)
-                            _HEX.pop(gid, None)
-                            _COLORS.pop(gid, None)
-                            # purge the attempt-1 rows from site storage or
-                            # the reload restores them and the board is full
-                            try:
-                                pg.evaluate(
-                                    "() => { try { localStorage.clear(); }"
-                                    " catch (e) {} try { sessionStorage.clear(); }"
-                                    " catch (e) {} }")
-                            except Exception:
-                                pass
-                            pg.reload(wait_until="domcontentloaded")
-                            pg.wait_for_timeout(6000)
-                            if gid in ("colordle", "colorfle"):
-                                solved, evidence = solver(pg, _ans2)
-                            else:
-                                solved, evidence = solver(pg, str(_aval2), gid)
-                            if solved:
-                                date_key = _prev.isoformat()
-                                today = _prev.strftime("%B %d, %Y")
-                                short = _prev.strftime("%b %d")
-                                ans, aval = _ans2, _aval2
-                                evidence += f" (day-lag retry: board={_prev})"
-                    except Exception as _e2:
-                        _dbg(gid, f"day-lag retry failed: {str(_e2)[:100]}")
+                    # FIX-LOOP: day-lag retry REMOVED. Never solve the
+                    # previous-day board and re-key it as today (that
+                    # produced marveldle_final_2026-10-16 labelled as
+                    # 2026-10-17). If the target board is not winnable,
+                    # leave solved=False and defer - do not guess yesterday.
+                    _dbg(gid, "no win; day-lag retry removed - will NOT solve previous-day board")
         except SystemExit as _se:
             evidence = f"SystemExit in solver: {_se}"
             _dbg(gid, evidence)
@@ -5452,6 +5569,11 @@ def run_one(gid):
             clip.write_videofile(out, codec="libx264", audio_codec="aac",
                                  fps=24, verbose=False, logger=None)
             final = out
+            try:
+                _ok_ch = _embed_chapters(out, chapters)
+                _dbg(gid, f"chapters embedded={_ok_ch} n={len(chapters)}")
+            except Exception:
+                pass
             srt = DP.build_captions_srt(chapters, total, today, g["name"],
                                          out_path=vdir / "captions.srt")
         except Exception as e:
@@ -5499,8 +5621,10 @@ def run_one(gid):
            "frame_mode": (QP.LAST_POLISH or {}).get("mode"),
            "guesses": len(_steps(gid, aval))}
     _pr = _qc["probe"] or {}
-    _qc["ok"] = bool(final and str(final).endswith(".mp4") and _pr.get("ok")
-                     and _pr.get("duration_s", 0) >= 40)
+    _qc["ok"] = bool(solved and final and str(final).endswith(".mp4") and _pr.get("ok")
+                     and _pr.get("duration_s", 0) >= 40
+                     and _pr.get("width") == 1920 and _pr.get("height") == 1080)
+    # Fix-loop: QC PASS must NOT print for solved=False. solved is part of ok.
     _dbg(gid, f"QC {'PASS' if _qc['ok'] else 'FAIL'}: mp4={_qc['video']} "
               f"size={_pr.get('size_mb')}MB res={_pr.get('width')}x{_pr.get('height')} "
               f"dur={_pr.get('duration_s')}s cursor_events={_qc['cursor_events']} "

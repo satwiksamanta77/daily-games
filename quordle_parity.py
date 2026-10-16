@@ -884,7 +884,10 @@ def _cursor_clips(base_clip, events, ox=0.0, oy=0.0, scx=1.0, scy=1.0):
 
 
 def polish_gameplay(src, out_path, crf=17):
-    """Full-frame 1920x1080 polish + the cursor overlay.
+    """Full-frame 1920x1080 polish. Cursor overlay is OFF by default.
+
+    Set CURSOR_OVERLAY=on explicitly to re-enable the drawn cursor.
+    Default off: final videos must not contain a drawn cursor.
 
     GAMEPLAY_FRAME=card (default) keeps the wallpaper + rounded-frame look the
     other games use; GAMEPLAY_FRAME=fullbleed scales the capture edge-to-edge
@@ -894,7 +897,7 @@ def polish_gameplay(src, out_path, crf=17):
     out_path = str(out_path)
     src = str(src)
     mode = os.environ.get("GAMEPLAY_FRAME", "card").lower()
-    if os.environ.get("CURSOR_OVERLAY", "on").lower() in ("off", "0", "false"):
+    if os.environ.get("CURSOR_OVERLAY", "off").lower() in ("off", "0", "false"):
         evs = []
     else:
         evs = ev_all()
