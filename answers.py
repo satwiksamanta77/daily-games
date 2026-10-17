@@ -201,6 +201,57 @@ FRAMED_URLS = {
 _FRAMED_STATIC_KEY = {"classic": "daily"}
 
 
+# The site's own challenge fetcher (frontend _app.js `b()`) uses the CORE
+# API for titleshot/poster ONLY:
+#   https://core.framed.wtf/{titleshot|poster}/challenges/day/{N}
+# and takes title = asset.framed_title || asset.title. Classic/one-frame use
+# bundled lists in the frontend, and /daily/ + /one-frame/ challenge paths
+# 404 on the core API (verified 2026-10-17) — do NOT guess other paths.
+_FRAMED_CORE_MODES = ("titleshot", "poster")
+
+
+def _framed_core_title(payload):
+    """Answer title from a core-API challenge payload, or None.
+
+    Mirrors the site: framed_title wins when non-empty, else title.
+    """
+    if not isinstance(payload, dict):
+        return None
+    asset = payload.get("asset") or {}
+    if not isinstance(asset, dict):
+        return None
+    title = (asset.get("framed_title") or asset.get("title") or "").strip()
+    return title or None
+
+
+def framed_core(mode, num):
+    """Authoritative answer for a titleshot/poster puzzle number.
+
+    Returns the title string, or None when the core API cannot answer.
+    This is the ONLY correct source for these two modes: the titles
+    top-ten API counts player GUESSES per frame, not correct answers, so
+    its last-frame leader is wrong whenever the answer has a
+    confusingly-similar sibling. Proven 2026-10-17: titleshot #501
+    (2026-10-18) top-ten frame-6 leader is "Despicable Me" (5 logged
+    guesses) but the core API says the asset is "Despicable Me 2"
+    (framed_title "", title "Despicable Me 2") — the site scored the
+    bot's "Despicable Me" as a wrong guess twice (counters 5→4, then
+    4→3→2 on retry) because it IS wrong.
+    """
+    import requests
+    if mode not in _FRAMED_CORE_MODES:
+        return None
+    try:
+        r = requests.get(
+            f"https://core.framed.wtf/{mode}/challenges/day/{int(num)}",
+            timeout=20, headers={"User-Agent": "WordSolverX Video"})
+        if not r.ok:
+            return None
+        return _framed_core_title(r.json())
+    except Exception:
+        return None
+
+
 def _framed_number(mode, d):
     _, newest, num = FRAMED_MODES[mode]
     return num + _days(d, newest)
@@ -224,9 +275,22 @@ def framed(d=None, mode="classic"):
     except Exception as ex:
         print(f"[framed] static read failed: {ex}")
 
-    # static is stale (it stops in May 2026) -> live titles API.
-    # answer = LAST frame's items[0].title
+    # static is stale (it stops in May 2026) -> live APIs.
+    # Titleshot/poster: CORE API FIRST — it is the same source the site
+    # itself scores against (asset.framed_title || asset.title). The titles
+    # top-ten API is only a guess-count leaderboard: its last-frame leader
+    # is the most-GUESSED title, which is wrong when the answer has a
+    # similar sibling (titleshot #501: leader "Despicable Me", real
+    # answer "Despicable Me 2"). Titles API stays as fallback if core
+    # fails, and is the only source for classic/one-frame (their core
+    # challenge paths 404).
     num = _framed_number(mode, d)
+    if mode in _FRAMED_CORE_MODES:
+        core_title = framed_core(mode, num)
+        if core_title:
+            return {"answer": core_title, "mode": mode,
+                    "puzzle": num, "date": key,
+                    "url": FRAMED_URLS[mode], "via": "core"}
     try:
         r = requests.get(f"https://titles.framed.wtf/v1/titles/top-ten/{num}",
                          params={"gameType": FRAMED_MODES[mode][0]}, timeout=20,

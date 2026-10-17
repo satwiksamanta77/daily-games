@@ -248,18 +248,22 @@ def _close_dbg_handles():
     _DBG_FH.clear()
 
 
-def _write_preliminary_result(gid, date_key, solved, evidence, video=None):
+def _write_preliminary_result(gid, date_key, solved, evidence, video=None,
+                              answer=None):
     """Write result.json IMMEDIATELY (fix-loop iter 11): the old code
     wrote result.json ONLY after polish + QC, so a SIGTERM during the
     tail (exit 143, ~108s after the final log line, runs 39038172088 /
     39039561115) left no result.json and no Upload. The preliminary
     record (qc: pending) is overwritten by the final record after
-    polish/QC. Never raises."""
+    polish/QC. Never raises. `answer` is the verified winning word
+    when solved, else None — a solved record must never carry
+    answer=None (run 39043936480 Betweenle: solved=True, answer None)."""
     try:
         vdir = HERE / "videos" / gid
         vdir.mkdir(parents=True, exist_ok=True)
         (vdir / "result.json").write_text(json.dumps(
             {"game": gid, "date": date_key, "solved": bool(solved),
+             "answer": (str(answer) if solved and answer else None),
              "evidence": str(evidence)[:500],
              "video": str(video) if video else None,
              "guesses": ([str(x) for x in _PLAYED[gid]]
@@ -295,42 +299,49 @@ def _fast_copy_gameplay(src, out_path):
         return str(src)
 
 
-def _install_signal_handlers():
-    """SIGTERM/SIGINT handler (fix-loop iter 11): on runner shutdown,
-    flush + write the in-flight result.json (evidence += " [terminated
-    by SIGTERM during <stage>]"), flush/close debug handles, kill
-    ffmpeg children, and exit promptly (~5s grace, never block on
+def _signal_handler(signum, _frame):
+    """SIGTERM/SIGINT handler (fix-loop iter 11, extracted iter 12 so
+    tests can invoke it directly): on runner shutdown, flush + write
+    the in-flight result.json (evidence += " [terminated by SIGTERM
+    during <stage>]"), flush/close debug handles, kill ffmpeg children
+    (and the nerdle solver subprocess, which _sp.run would otherwise
+    leave orphaned), and exit promptly (~5s grace, never block on
     ffmpeg). The handler never waits on a child process."""
-    import signal as _signal
-
-    def _handler(signum, _frame):
-        _gid = _CURRENT_RUN.get("gid")
-        if _gid:
-            try:
-                _write_preliminary_result(
-                    _gid, _CURRENT_RUN.get("date_key") or "",
-                    solved=bool(_CURRENT_RUN.get("solved")),
-                    evidence=(str(_CURRENT_RUN.get("evidence") or "")
-                              + " [terminated by SIGTERM during "
-                              + str(_CURRENT_RUN.get("stage") or "run")
-                              + "]"))
-            except Exception:
-                pass
-            try:
-                _close_dbg_handles()
-            except Exception:
-                pass
+    _gid = _CURRENT_RUN.get("gid")
+    if _gid:
         try:
-            import subprocess as _sp
-            _sp.run(["pkill", "-f", "ffmpeg"], timeout=3,
-                    capture_output=True)
+            _write_preliminary_result(
+                _gid, _CURRENT_RUN.get("date_key") or "",
+                solved=bool(_CURRENT_RUN.get("solved")),
+                evidence=(str(_CURRENT_RUN.get("evidence") or "")
+                          + " [terminated by SIGTERM during "
+                          + str(_CURRENT_RUN.get("stage") or "run")
+                          + "]"))
         except Exception:
             pass
-        raise SystemExit(143)
-
+        try:
+            _close_dbg_handles()
+        except Exception:
+            pass
     try:
-        _signal.signal(_signal.SIGTERM, _handler)
-        _signal.signal(_signal.SIGINT, _handler)
+        import subprocess as _sp
+        _sp.run(["pkill", "-f", "ffmpeg"], timeout=3,
+                capture_output=True)
+        # The nerdle path blocks in subprocess.run; SIGTERM to the
+        # runner must not orphan the solver + its Chromium.
+        _sp.run(["pkill", "-f", "nerdle_solver.py"], timeout=3,
+                capture_output=True)
+    except Exception:
+        pass
+    raise SystemExit(143)
+
+
+def _install_signal_handlers():
+    """Register _signal_handler for SIGTERM/SIGINT."""
+    import signal as _signal
+    try:
+        _signal.signal(_signal.SIGTERM, _signal_handler)
+        _signal.signal(_signal.SIGINT, _signal_handler)
     except Exception:
         pass
 
@@ -1445,6 +1456,13 @@ def _result_steps(gid, aval):
         except Exception:
             pass
         return steps
+    # Betweenle (iter-12 (e)): NO plan fallback. Cards/chapters/counts
+    # must reflect ONLY actually-submitted guesses — falling back to the
+    # plan fabricated "HOW EACH GUESS SCORED" for 6 planned words when
+    # real submitted = 3 (SLATE, DINER, BIKER, run 39043936480). With no
+    # confirmed-submitted ledger there are zero true steps, not 6.
+    if gid == "betweenle":
+        return []
     # Plan fallback: strip planner patterns for no-letter-scoring games
     # (same fabricated-scoring rule as the played-steps merge above).
     _planned = _steps(gid, aval) or []
@@ -1982,6 +2000,10 @@ def _type_betweenle_word(page, gid, word, used):
 
 
 def solve_betweenle(page, ans):
+    # DEAD CODE (fix-loop iter 12 note): no caller — SOLVERS routes
+    # betweenle to _s_betweenle, which uses _plan_for + _daily_opener.
+    # Left in place only so history stays readable; the fixed "about"
+    # opener below is NOT the opener any run plays.
     _close_modals(page)
     try:
         # handler is on span#menupanel-mode-daily itself
@@ -2791,7 +2813,24 @@ def _framed_live_answer(page, mode, fallback):
                 return cand["answer"]
     except Exception as e:
         print(f"[framed] {mode}: live re-resolve failed: {str(e)[:110]}")
-    # Last resort: ask the titles API for the board's own number directly.
+    # Last resort: ask the site's own source for the board's own number
+    # directly. Titleshot/poster: the CORE API (asset.framed_title ||
+    # asset.title) — the titles top-ten API counts guesses, not correct
+    # answers, so its last-frame leader is the WRONG answer when the
+    # puzzle is a sequel/sibling (titleshot #501: leader "Despicable Me",
+    # real answer "Despicable Me 2"). Classic/one-frame keep the titles
+    # API (their core challenge paths 404).
+    if mode in ("titleshot", "poster"):
+        try:
+            _core = A.framed_core(mode, shown)
+        except Exception:
+            _core = None
+        if _core:
+            print(f"[framed] {mode}: direct core API for #{shown} "
+                  f"-> {_core!r}")
+            return _core
+        print(f"[framed] {mode}: core API for #{shown} gave nothing; "
+              f"falling back to titles API")
     try:
         import requests as _rq
         # Explicit API mapping: the titles API's gameType for the
@@ -3398,6 +3437,49 @@ _SEMANTIC_MAX_TYPED = 5
 _SEMANTIC_MAX_PROBES = _SEMANTIC_MAX_TYPED - 1
 
 
+def _semantic_dup(word, used, rejected):
+    """True if `word` is already in played[] ∪ rejected[] (case-insensitive).
+
+    Fix-loop iter 12: the iter-11 guard compared the rejected set only
+    exact-case, so a rejected "CRY" did not block a later "cry". Both
+    sets are compared lower-cased here, and every pick path (queue
+    guard, replacement pick, feedback swap) uses this one helper.
+    """
+    w = str(word).lower()
+    return (w in {str(u).lower() for u in used}
+            or w in {str(r).lower() for r in rejected})
+
+
+def _searchle_opener(bank, n, seed, answer):
+    """Date-seeded Searchle opener that the site will actually accept.
+
+    Fix-loop iter 12 (carry-forward item 1): the iter-11 opener list
+    (CRANE/SLATE/TRACE/...) is NOT in Searchle's own guess bank for ANY
+    length (verified: zero of the 4/5/6-letter candidates are in
+    words_searchle()), so plan_sequence silently dropped the opener and
+    played an entropy pick (STARE) instead. The opener is now chosen
+    FROM the bank: a generic candidate when one is legal, else a
+    date-seeded high-information bank word (all distinct letters).
+    The answer is never the opener. Returns None only when the bank
+    is empty.
+    """
+    import random as _r2
+    a = str(answer or "").upper()
+    pool = [str(w).upper() for w in (bank or []) if str(w).isalpha()]
+    if not pool:
+        return None
+    _generic = {4: ["RATE", "CARE", "LATE", "TARE", "TEAR"],
+                5: ["CRANE", "SLATE", "TRACE", "ADIEU", "ROAST", "AUDIO"],
+                6: ["CRANES", "SLATES", "TRACES", "ROASTS"]}.get(n) or []
+    _bank_set = set(pool)
+    _legal = [o for o in _generic if o in _bank_set and o != a]
+    if _legal:
+        return _r2.Random(seed).choice(_legal)
+    _hi = sorted(w for w in pool if len(set(w)) == len(w) and w != a)
+    _choices = _hi or sorted(w for w in pool if w != a) or pool
+    return _r2.Random(seed).choice(_choices)
+
+
 def solve_semantle(page, ans, gid="semantle"):
     """Semantle: play a real semantic guess path, answer last.
 
@@ -3423,15 +3505,24 @@ def solve_semantle(page, ans, gid="semantle"):
     while _qi < len(gs):
         w = gs[_qi]
         _qi += 1
-        # Dedupe guard (fix-loop iter 11): NEVER type a word already in
-        # played[] or rejected[] (case-insensitive) — Contexto typed
-        # the same word twice. A duplicate is skipped, not retyped.
-        if (w in rejected or w in used
-                or str(w).lower() in {str(u).lower() for u in used}):
+        # Dedupe guard (fix-loop iter 11, hardened iter 12): NEVER type
+        # a word already in played[] ∪ rejected[] (case-insensitive) —
+        # Contexto typed the same word twice. A duplicate is skipped,
+        # not retyped.
+        if _semantic_dup(w, used, rejected):
             _dbg(gid, f"duplicate {w!r} skipped (already played/rejected)")
             continue
-        # HARD CAP: probes stop at 4 so the answer stays the 5th typed
-        # word; a 6th typed word is never allowed.
+        # HARD CAP: probes stop at 4 TYPED attempts so the answer stays
+        # the 5th typed word; a 6th typed word is never allowed.
+        # Fix-loop iter 12: the old check counted only ACCEPTED words
+        # (len(used)), so under a rejection storm every rejected probe
+        # was replaced and retyped without bound (reproduced: 4157
+        # Enters on an all-rejected page). _attempted counts every
+        # probe actually typed, accepted or not.
+        if _attempted >= _SEMANTIC_MAX_PROBES:
+            _dbg(gid, f"probe cap hit ({_SEMANTIC_MAX_PROBES} typed); "
+                      f"stopping probes for the answer")
+            break
         if len(used) >= _SEMANTIC_MAX_PROBES:
             _dbg(gid, f"probe cap hit ({_SEMANTIC_MAX_PROBES}); "
                       f"stopping probes for the answer")
@@ -3456,17 +3547,19 @@ def solve_semantle(page, ans, gid="semantle"):
                       f"(rejected={sorted(rejected)})")
             # Replacement counts against the cap and must differ
             # from ALL previously typed words (used + rejected + queue).
-            _can_replace = (len(used) + (len(gs) - _qi)
+            # Fix-loop iter 12: the old formula counted ACCEPTED words
+            # (len(used)), so a rejected probe always left "room" for a
+            # replacement and the queue grew without bound. Count
+            # TYPED probes (_attempted) instead: the invariant is
+            # typed + queued <= 4, so at most 4 probes are ever typed.
+            _can_replace = (_attempted + (len(gs) - _qi)
                             < _SEMANTIC_MAX_PROBES)
             for alt in list(spare):
                 if (not _can_replace):
                     break
-                if (alt not in rejected and alt not in gs
-                        and alt not in used
+                if (not _semantic_dup(alt, used, rejected)
                         and str(alt).lower() not in
-                        {str(u).lower() for u in used}
-                        and str(alt).lower() not in
-                        {str(r).lower() for r in rejected}):
+                        {str(q).lower() for q in gs}):
                     gs.append(alt)
                     spare.remove(alt)
                     _dbg(gid, f"replacement queued: {alt!r} "
@@ -3491,7 +3584,13 @@ def solve_semantle(page, ans, gid="semantle"):
                 _next_q = gs[_qi]
                 _best = spare[0]
                 _close = _semantic_closeness(gid, score)
-                if _best != _next_q and _close in ("high", "low"):
+                # Fix-loop iter 12: never swap in a word already in
+                # played[] ∪ rejected[] or already queued — the swap
+                # bypassed the dedupe guard (it writes straight into gs).
+                if (_best != _next_q and _close in ("high", "low")
+                        and not _semantic_dup(_best, used, rejected)
+                        and str(_best).lower() not in
+                        {str(q).lower() for q in gs}):
                     gs[_qi] = _best
                     spare[0] = _next_q
                     _dbg(gid, f"feedback-driven next: queue "
@@ -3574,15 +3673,22 @@ def solve_contexto(page, ans, gid="contexto"):
     while _qi < len(gs):
         w = gs[_qi]
         _qi += 1
-        # Dedupe guard (fix-loop iter 11): NEVER type a word already in
-        # played[] or rejected[] (case-insensitive) — Contexto typed
-        # the same word twice. A duplicate is skipped, not retyped.
-        if (w in rejected or w in used
-                or str(w).lower() in {str(u).lower() for u in used}):
+        # Dedupe guard (fix-loop iter 11, hardened iter 12): NEVER type
+        # a word already in played[] ∪ rejected[] (case-insensitive) —
+        # Contexto typed the same word twice. A duplicate is skipped,
+        # not retyped.
+        if _semantic_dup(w, used, rejected):
             _dbg(gid, f"duplicate {w!r} skipped (already played/rejected)")
             continue
-        # HARD CAP: probes stop at 4 so the answer stays the 5th typed
-        # word; a 6th typed word is never allowed.
+        # HARD CAP: probes stop at 4 TYPED attempts so the answer stays
+        # the 5th typed word; a 6th typed word is never allowed.
+        # Fix-loop iter 12: count TYPED probes (_attempted), not just
+        # accepted ones — see solve_semantle (rejection-storm repro:
+        # 4157 Enters on an all-rejected page under the old formula).
+        if _attempted >= _SEMANTIC_MAX_PROBES:
+            _dbg(gid, f"probe cap hit ({_SEMANTIC_MAX_PROBES} typed); "
+                      f"stopping probes for the answer")
+            break
         if len(used) >= _SEMANTIC_MAX_PROBES:
             _dbg(gid, f"probe cap hit ({_SEMANTIC_MAX_PROBES}); "
                       f"stopping probes for the answer")
@@ -3605,17 +3711,17 @@ def solve_contexto(page, ans, gid="contexto"):
                       f"(rejected={sorted(rejected)})")
             # Replacement counts against the cap and must differ
             # from ALL previously typed words (used + rejected + queue).
-            _can_replace = (len(used) + (len(gs) - _qi)
+            # Fix-loop iter 12: count TYPED probes (_attempted) — the
+            # invariant is typed + queued <= 4, so at most 4 probes
+            # are ever typed even under a rejection storm.
+            _can_replace = (_attempted + (len(gs) - _qi)
                             < _SEMANTIC_MAX_PROBES)
             for alt in list(spare):
                 if (not _can_replace):
                     break
-                if (alt not in rejected and alt not in gs
-                        and alt not in used
+                if (not _semantic_dup(alt, used, rejected)
                         and str(alt).lower() not in
-                        {str(u).lower() for u in used}
-                        and str(alt).lower() not in
-                        {str(r).lower() for r in rejected}):
+                        {str(q).lower() for q in gs}):
                     gs.append(alt)
                     spare.remove(alt)
                     _dbg(gid, f"replacement queued: {alt!r} "
@@ -3640,7 +3746,13 @@ def solve_contexto(page, ans, gid="contexto"):
                 _next_q = gs[_qi]
                 _best = spare[0]
                 _close = _semantic_closeness(gid, score)
-                if _best != _next_q and _close in ("high", "low"):
+                # Fix-loop iter 12: never swap in a word already in
+                # played[] ∪ rejected[] or already queued — the swap
+                # bypassed the dedupe guard (it writes straight into gs).
+                if (_best != _next_q and _close in ("high", "low")
+                        and not _semantic_dup(_best, used, rejected)
+                        and str(_best).lower() not in
+                        {str(q).lower() for q in gs}):
                     gs[_qi] = _best
                     spare[0] = _next_q
                     _dbg(gid, f"feedback-driven next: queue "
@@ -3792,16 +3904,13 @@ def _plan_for(gid, answer):
             p = _honest_fallback(a, "RATE" if n == 4 else "CRANE",
                               seed=_day_seed(gid))
         else:
-            # Date-seeded opener among length-appropriate openers, never
-            # a fixed RATE/CRANE (fix-loop iter 11): the opener varies
-            # daily while staying a valid high-information guess.
-            import random as _r2
-            _openers = {4: ["RATE", "CARE", "LATE", "TARE", "TEAR"],
-                        5: ["CRANE", "SLATE", "TRACE", "ADIEU", "ROAST",
-                            "AUDIO"],
-                        6: ["CRANES", "SLATES", "TRACES", "ROASTS"]}.get(n)
-            opener = (_r2.Random(_day_seed(gid)).choice(_openers)
-                      if _openers else None)
+            # Date-seeded opener chosen FROM the bank (fix-loop iter 12):
+            # the old generic openers (CRANE/SLATE/TRACE/...) are not in
+            # Searchle's own guess bank for any length, so plan_sequence
+            # silently dropped the opener and played an entropy pick
+            # (STARE) as guess 1. _searchle_opener guarantees the opener
+            # is a legal guess, so it is actually played first.
+            opener = _searchle_opener(bank, n, _day_seed(gid), a)
             p = S.plan_sequence(a, bank, bank, opener=opener)
     elif gid == "phrazle":
         # Use the SITE's own phrase list (phrazle_live.json, extracted from the
@@ -3977,15 +4086,27 @@ def _betweenle_rejected_showing(page):
 
 
 def _betweenle_pick_in_bounds(gs, bank, bounds, used, answer):
-    """Next guess strictly inside bounds: prefer the planned word, else the
-    bank word closest to the alphabetical middle of (lo, hi). Either
-    bound may be None (unknown side = unbounded)."""
+    """Back-compat wrapper: pick excluding `used` only.
+
+    The solver itself must pass used ∪ rejected (see
+    _betweenle_pick_excluding) — iter-11 passed only `used`, so a word
+    misclassified as rejected (BIKER, run 39043936480) was re-picked
+    and the loop never reached a new word."""
+    return _betweenle_pick_excluding(gs, bank, bounds, used, answer)
+
+
+def _betweenle_pick_excluding(gs, bank, bounds, excluded, answer):
+    """Next guess strictly inside bounds, excluding `excluded`
+    (= used ∪ rejected): prefer the planned word, else the bank word
+    closest to the alphabetical middle of (lo, hi). Either bound may
+    be None (unknown side = unbounded)."""
     lo, hi = bounds if bounds else (None, None)
     lo = lo or "AAAAA"
     hi = hi or "ZZZZZ"
+    excl = {str(w).upper() for w in (excluded or [])}
     def inside(w):
         w = str(w).upper()
-        return lo < w < hi and w not in used
+        return lo < w < hi and w not in excl
     for g in gs:
         if inside(g):
             return str(g).upper()
@@ -3993,6 +4114,227 @@ def _betweenle_pick_in_bounds(gs, bank, bounds, used, answer):
     if mid:
         return mid[len(mid) // 2]
     return str(answer).upper() if inside(answer) else None
+
+
+# Rejection-banner markers for Betweenle: the game's per-guess refusal
+# notices ("not a word" family + out-of-bounds "placed in dictionary
+# before/after X"). A banner that was ALREADY showing before this guess
+# was submitted is a STANDING banner, not a notice about this guess.
+_BETWEENLE_REJECTION_MARKERS = (
+    "not a word", "not valid", "invalid word", "not in the word list",
+    "unknown word", "word not in list",
+    "placed in dictionary before", "placed in dictionary after")
+
+
+def _betweenle_extract_banner(text):
+    """Pure: the rejection-banner excerpt(s) inside raw page text.
+
+    Returns the normalized text around each rejection marker (or ""
+    when no marker is present). Comparing the BEFORE-submit and
+    AFTER-submit excerpts is what distinguishes a fresh rejection of
+    this guess from a stale standing banner left by an earlier guess.
+    """
+    import re as _re
+    t = _re.sub(r"\s+", " ", str(text or "")).strip()
+    if not t:
+        return ""
+    low = t.lower()
+    parts = []
+    for m in _BETWEENLE_REJECTION_MARKERS:
+        i = low.find(m)
+        while i != -1:
+            parts.append(t[max(0, i - 40):i + 90].strip().lower())
+            i = low.find(m, i + 1)
+    return " | ".join(sorted(set(parts)))
+
+
+def _betweenle_rejection_banner(page):
+    """Current rejection-banner excerpt from the live page ("" if none)."""
+    try:
+        return _betweenle_extract_banner(
+            page.evaluate("() => document.body.innerText") or "")
+    except Exception:
+        return ""
+
+
+def _betweenle_new_rejection(before_banner, after_banner):
+    """Pure: True only when the AFTER snapshot carries rejection content
+    the BEFORE snapshot did not. An unchanged (standing) banner is NOT
+    a fresh rejection — iter-11 classified BIKER rejected from a stale
+    standing banner alone, then re-picked it forever."""
+    if not after_banner:
+        return False
+    if not before_banner:
+        return True
+    before_parts = {p.strip() for p in str(before_banner).split("|")}
+    return any(p.strip() and p.strip() not in before_parts
+               for p in str(after_banner).split("|"))
+
+
+def _betweenle_classify_submit(before_banner, after_banner,
+                               before_n, after_counters, word):
+    """Pure submit classifier (banner BEFORE/AFTER + game counters).
+
+    Returns "submitted" when the game's own counters confirm this word
+    (GUESS counter advanced, or the stats panel names this word — the
+    winning guess never advances the counter, ANALYSIS8 §1);
+    "rejected" when a NEW rejection banner appeared for this guess;
+    "no_change" otherwise (no counter move, no fresh banner: the Enter
+    was never delivered — focus/enter-delivery failure, NOT a refusal).
+    A standing banner alone can never yield "rejected".
+    """
+    after = after_counters or {}
+    if ((after.get("guess_n") or 0) > (before_n or 0) or
+            (word and word.lower() in
+             (after.get("stats_word") or "").lower())):
+        return "submitted"
+    if _betweenle_new_rejection(before_banner, after_banner):
+        return "rejected"
+    return "no_change"
+
+
+# Synthetic Enter delivery: dispatch keydown/keypress/keyup Enter on
+# the document AND on the focused element (same primitive the worgle
+# solver uses). Last link of the submit retry chain — it proves the
+# Enter reached the game even when clicks/physical keys are swallowed.
+_BETWEENLE_SYNTHETIC_ENTER_JS = (
+    "() => { for (const t of ['keydown', 'keypress', 'keyup']) {"
+    " document.dispatchEvent(new KeyboardEvent(t, {key: 'Enter',"
+    " code: 'Enter', keyCode: 13, bubbles: true}));"
+    " (document.activeElement || document.body).dispatchEvent("
+    " new KeyboardEvent(t, {key: 'Enter', code: 'Enter', keyCode: 13,"
+    " bubbles: true})); } return true; }")
+
+
+def _betweenle_synthetic_enter(page):
+    """Deliver Enter via synthetic KeyboardEvents. Returns True when
+    the dispatch ran (delivery to the game is NOT guaranteed by the
+    return value — counters arbitrate, as everywhere else)."""
+    try:
+        return bool(page.evaluate(_BETWEENLE_SYNTHETIC_ENTER_JS))
+    except Exception:
+        return False
+
+
+def _betweenle_submit_retry_chain(page, gid, word, before_n):
+    """Multi-mechanism submit retry for the no-banner-change case.
+
+    Restores the chain that DELIVERED BIKER in run 39043936480 and
+    that iter-11 removed ("ONE Enter resend only"): dismiss+resend →
+    canvas sweep → synthetic key dispatch. Every mechanism resends
+    ENTER ONLY — the typed letters are never retyped, so if the word
+    was already accepted (counters lagging) the extra Enters land on
+    an empty buffer and are no-ops; if it was never delivered, one of
+    the mechanisms delivers it. Counters arbitrate after each step.
+    Returns (submitted, counters, mechanism-or-None)."""
+    # 1. dismiss+resend: clear help/tooltip overlays, reclaim focus from
+    #    ad iframes, click the canvas centre, resend Enter (keycap first).
+    try:
+        _close_betweenle_help(page)
+    except Exception:
+        pass
+    try:
+        page.evaluate(
+            "() => { const a = document.activeElement; "
+            "if (a && a !== document.body) a.blur(); "
+            "if (a && a.tagName === 'IFRAME') { try { a.contentWindow.blur(); } "
+            "catch (e) {} } try { window.top.focus(); } catch (e) {} "
+            "window.focus(); }")
+    except Exception:
+        pass
+    try:
+        page.mouse.click(960, 600)
+        QP.ev_push(960, 600, "click")
+        page.wait_for_timeout(300)
+    except Exception:
+        pass
+    try:
+        if not _click_on_screen_key(page, "enter"):
+            page.keyboard.press("Enter")
+    except Exception:
+        pass
+    submitted, cnt = _betweenle_submitted(page, before_n, word)
+    _dbg(gid, f"retry chain {word!r}: dismiss+resend -> submitted={submitted}")
+    if submitted:
+        return True, cnt, "dismiss+resend"
+    # 2. canvas sweep: click a sweep of points across the canvas/board
+    #    (a single centre click can land on a dead overlay pixel), then
+    #    resend Enter via the on-screen keycap / physical key.
+    try:
+        for _x, _y in ((960, 500), (760, 500), (1160, 500),
+                       (960, 620), (960, 420), (960, 500)):
+            try:
+                page.mouse.click(_x, _y)
+                QP.ev_push(_x, _y, "click")
+                page.wait_for_timeout(120)
+            except Exception:
+                continue
+        if not _click_on_screen_key(page, "enter"):
+            page.keyboard.press("Enter")
+    except Exception:
+        pass
+    submitted, cnt = _betweenle_submitted(page, before_n, word)
+    _dbg(gid, f"retry chain {word!r}: canvas sweep -> submitted={submitted}")
+    if submitted:
+        return True, cnt, "canvas-sweep"
+    # 3. synthetic key dispatch: JS KeyboardEvents on document + focus.
+    _betweenle_synthetic_enter(page)
+    submitted, cnt = _betweenle_submitted(page, before_n, word)
+    _dbg(gid, f"retry chain {word!r}: synthetic dispatch -> "
+              f"submitted={submitted}")
+    if submitted:
+        return True, cnt, "synthetic-dispatch"
+    return False, cnt, None
+
+
+def _betweenle_seed_restored_state(page, gid):
+    """Seed (used, submitted, rejected) from restored state BEFORE
+    replaying after a reboot/restore.
+
+    Sources: this run's in-process ledgers (_PLAYED/_REJECTED, kept
+    across run_one's reboot retry) + the live game's own counters
+    (GUESS n/14, stats-panel word). Legacy rejected entries suffixed
+    " (not submitted)" are cleaned to the plain word. When the live
+    counter shows MORE submitted guesses than the ledger names, the
+    unknown ones are logged, never invented — the bounds read will
+    still constrain the remaining picks, and already-submitted plan
+    words are skipped, never retyped. Returns (used set, submitted
+    list, rejected list); also syncs _PLAYED/_REJECTED."""
+    import re as _re
+    def _clean(words):
+        out = []
+        for w in (words or []):
+            c = str(w).split(" (")[0].strip().upper()
+            if c and _re.fullmatch(r"[A-Z]+", c) and c not in out:
+                out.append(c)
+        return out
+    submitted = _clean(_PLAYED.get(gid))
+    rejected = _clean(_REJECTED.get(gid))
+    try:
+        cnt = _betweenle_counters(page) or {}
+    except Exception:
+        cnt = {}
+    guess_n = cnt.get("guess_n") or 0
+    stats_word = str(cnt.get("stats_word") or "").strip().upper()
+    if guess_n > 0 and stats_word and _re.fullmatch(r"[A-Z]+", stats_word) \
+            and stats_word not in submitted and stats_word not in rejected:
+        # The game's own stats panel names a submitted word the ledger
+        # does not (e.g. a word submitted before the reboot): the
+        # panel is the same evidence _betweenle_submitted trusts.
+        submitted.append(stats_word)
+        _dbg(gid, f"restore seed: stats panel adds submitted {stats_word!r} "
+                  f"(GUESS {guess_n})")
+    if guess_n > len(submitted):
+        _dbg(gid, f"restore seed: live GUESS counter={guess_n} but ledger "
+                  f"names {len(submitted)} submitted; "
+                  f"{guess_n - len(submitted)} submitted word(s) unknown — "
+                  f"not inventing them; remaining picks stay bounds-bound")
+    _PLAYED[gid] = list(submitted)
+    _REJECTED[gid] = list(rejected)
+    used = set(submitted) | set(rejected)
+    _dbg(gid, f"restore seed: used={sorted(used)} submitted={submitted} "
+              f"rejected={rejected}")
+    return used, submitted, rejected
 
 
 def _s_betweenle(page, ans, gid):
@@ -4022,14 +4364,16 @@ def _s_betweenle(page, ans, gid):
     # Must come after the mode click: the How-to-Play panel is raised by
     # starting the daily game, and it swallows all keyboard input until closed.
     _close_betweenle_help(page)
-    _used_bl = set()
     # Submitted-guess ledger: chapters/cards/evidence count SUBMITTED
     # guesses only (game counters), never planned/rejected words (run
     # 39039561115: RATIO was counted as guess 3 though the game
     # rejected it — "Full solve (4 guesses)" was false; real submitted
     # = 3). _PLAYED is updated as each guess is confirmed submitted.
-    _submitted_bl = []
-    _rejected_bl = []
+    # Seeded from restored state BEFORE replaying (iter-12 (d)): after a
+    # reboot/restore, already-submitted plan words are skipped, never
+    # retyped, and rejected words stay excluded.
+    _used_bl, _submitted_bl, _rejected_bl = \
+        _betweenle_seed_restored_state(page, gid)
     gs = _guesses(gid, ans)
     try:
         _bank, _ = S.words_betweenle()
@@ -4096,6 +4440,15 @@ def _s_betweenle(page, ans, gid):
             pass
     _rows_before = 0
     for gi, g in enumerate(gs):
+        # Pick excludes used ∪ rejected (iter-12 (c)): a word already
+        # attempted or rejected is never re-picked — iter-11 excluded
+        # only `used`, so BIKER was re-picked after its stale-banner
+        # misclassification and the loop never reached a new word.
+        _excluded_bl = set(_used_bl) | set(_rejected_bl)
+        if str(g).upper() in _excluded_bl:
+            _dbg(gid, f"skipping {g!r}: already used/rejected "
+                      f"(used ∪ rejected)")
+            continue
         _rows_before = (_betweenle_state(page) or {}).get("rows") or 0
         # The game's own GUESS n/14 counter, read fresh before this guess.
         # Submission is verified against THIS counter, never against a
@@ -4107,8 +4460,8 @@ def _s_betweenle(page, ans, gid):
         _blo, _bhi = _bd if _bd else (None, None)
         if (_blo or _bhi) and not (
                 (_blo or "AAAAA") < str(g).upper() < (_bhi or "ZZZZZ")):
-            _alt = _betweenle_pick_in_bounds(gs[gi:], _bank, _bd,
-                                             _used_bl, ans)
+            _alt = _betweenle_pick_excluding(gs[gi:], _bank, _bd,
+                                             _excluded_bl, ans)
             _dbg(gid, f"{g!r} outside bounds {_bd}; playing {_alt!r}")
             g = _alt or g
         _used_bl.add(str(g).upper())
@@ -4143,6 +4496,10 @@ def _s_betweenle(page, ans, gid):
         page.wait_for_timeout(300)
         _type_like_a_person(page, str(g), base_delay=170)
         page.wait_for_timeout(300)
+        # Banner BEFORE submit (iter-12 (b)): a rejection banner already
+        # showing here belongs to an EARLIER guess. Only a banner that is
+        # NEW after this submit may classify this word rejected.
+        _banner_before = _betweenle_rejection_banner(page)
         page.keyboard.press("Enter")
         _settle(page, base=3000)
         try:
@@ -4150,63 +4507,59 @@ def _s_betweenle(page, ans, gid):
         except Exception:
             _st = {}
         _cnt1 = _betweenle_counters(page) or {}
-        _submitted1 = ((_cnt1.get("guess_n") or 0) > _cnt_before or
-                       str(g).lower() in (_cnt1.get("stats_word") or "").lower())
+        _banner_after = _betweenle_rejection_banner(page)
+        _verdict = _betweenle_classify_submit(
+            _banner_before, _banner_after, _cnt_before, _cnt1, g)
         _dbg(gid, f"submit check {g!r}: counters GUESS "
                   f"{_cnt1.get('guess_n')}/{_cnt1.get('guess_total')} "
                   f"(was {_cnt_before}) stats={_cnt1.get('stats_word')!r} "
-                  f"submitted={_submitted1}")
-        if _submitted1:
+                  f"banner new={_betweenle_new_rejection(_banner_before, _banner_after)} "
+                  f"verdict={_verdict}")
+        if _verdict == "submitted":
             _submitted_bl.append(str(g).upper())
             _PLAYED[gid] = list(_submitted_bl)
             _dbg(gid, f"{g!r} submitted (game counters GUESS "
                       f"{_cnt1.get('guess_n')}/{_cnt1.get('guess_total')})")
-        else:
-            # NOT submitted. First ask the game WHY: a rejection
-            # banner ("not a word" / "placed in dictionary before/after
-            # X") means the word was REJECTED — never retype it, move
-            # to the next candidate at once. The old code replayed the
-            # rejected word through resend + key-retype + synthetic
-            # dispatch (~38s stuck loop on RATIO, run 39039561115).
-            if _betweenle_rejected_showing(page):
-                _dbg(gid, f"{g!r} REJECTED by the game; never retyping "
-                          f"(moving to next candidate)")
+        elif _verdict == "rejected":
+            # Fresh rejection banner for THIS guess — never retype it,
+            # move to the next candidate at once.
+            _dbg(gid, f"{g!r} REJECTED by the game (new banner); "
+                      f"never retyping (moving to next candidate)")
+            if str(g).upper() not in _rejected_bl:
                 _rejected_bl.append(str(g).upper())
-                _REJECTED[gid] = list(_rejected_bl)
-                continue
-            # No rejection banner: a focus stall (ad stole input).
-            # STALL BREAKER: ONE Enter resend only (the typed letters
-            # may still be sitting in the input — resending Enter
-            # submits them without retyping). Then the game's own
-            # counters arbitrate; if still not submitted, advance —
-            # never retype, never sweep-and-retype, never synthetic
-            # dispatch. Max cost of a stall: one resend, not 38s.
-            _dbg(gid, f"{g!r} did not submit (no rejection banner); "
-                      f"stall breaker: ONE Enter resend, then advance")
-            try:
-                page.evaluate(
-                    "() => { const a = document.activeElement; "
-                    "if (a && a !== document.body) a.blur(); "
-                    "try { window.top.focus(); } catch (e) {} "
-                    "window.focus(); }")
-            except Exception:
-                pass
-            page.wait_for_timeout(1200)
-            page.keyboard.press("Enter")
-            _settle(page, base=2500)
-            _submitted_f, _cntf = _betweenle_submitted(page, _cnt_before, g)
+            _REJECTED[gid] = list(_rejected_bl)
+            continue
+        else:
+            # No counter move + no FRESH banner: the Enter was never
+            # delivered (focus/enter-delivery failure), NOT a refusal.
+            # Run the restored multi-mechanism retry chain (iter-12
+            # (a)): dismiss+resend → canvas sweep → synthetic key
+            # dispatch. Enter-only retries — letters are never retyped.
+            # The old code replayed rejected words through resend +
+            # key-retype (~38s stuck loop on RATIO, run 39039561115);
+            # this chain is Enter-only, so that loop cannot recur.
+            _dbg(gid, f"{g!r} no banner change + counters unmoved; "
+                      f"submit retry chain (Enter-only, never retype)")
+            _submitted_f, _cntf, _mech = \
+                _betweenle_submit_retry_chain(page, gid, g, _cnt_before)
             if _submitted_f:
                 _submitted_bl.append(str(g).upper())
                 _PLAYED[gid] = list(_submitted_bl)
                 _dbg(gid, f"{g!r} confirmed submitted by game counters "
-                          f"(GUESS {_cntf.get('guess_n')}/"
+                          f"via {_mech} (GUESS {_cntf.get('guess_n')}/"
                           f"{_cntf.get('guess_total')})")
             else:
-                _dbg(gid, f"{g!r} still not submitted after ONE resend; "
-                          f"advancing (game counters: GUESS "
+                # Terminal: Enter was delivered three ways (incl.
+                # synthetic dispatch) and the counters still never
+                # moved — the game received it and refused it. Treat
+                # as rejected, never retype, move on.
+                _dbg(gid, f"{g!r} still not submitted after full retry "
+                          f"chain (game counters: GUESS "
                           f"{_cntf.get('guess_n')}/{_cntf.get('guess_total')}, "
-                          f"was {_cnt_before}); never retyping")
-                _rejected_bl.append(str(g).upper() + " (not submitted)")
+                          f"was {_cnt_before}); classifying rejected, "
+                          f"never retyping")
+                if str(g).upper() not in _rejected_bl:
+                    _rejected_bl.append(str(g).upper())
                 _REJECTED[gid] = list(_rejected_bl)
                 continue
         try:
@@ -4645,6 +4998,49 @@ def _s_worldle_norm(s):
     return t.lower()
 
 
+def _s_worldle_strip_emoji(s):
+    """Strip leading/trailing emoji/symbol runs (e.g. the round-emoji
+    prefix the game renders before a mode label: '📍 Capital',
+    '🌍 Country', 'Country ✅'). Letters, digits, '&' and inner spaces
+    survive; a bare-emoji string becomes ''. Pure function."""
+    import re as _re
+    t = str(s or "")
+    t = _re.sub(r"^[^\w& ]+", "", t)
+    t = _re.sub(r"[^\w& ]+$", "", t)
+    return t.strip()
+
+
+def _s_worldle_label_key(s):
+    """Dropdown-label key: emoji-strip, then the bundle normalizer.
+    '📍 Capital' and 'Capital' map to the same key. Pure function."""
+    return _s_worldle_norm(_s_worldle_strip_emoji(s))
+
+
+def _s_worldle_cmp_key(s):
+    """Comparison-option key: lowercase, whitespace-collapsed (the same
+    key form answers.py uses for gdp_lookup / size_lookup). Pure."""
+    return " ".join(str(s or "").lower().split())
+
+
+# Normalized (_s_worldle_label_key form) chrome strings that may appear
+# as leaves inside the open round dropdown but are NOT rounds: tab /
+# action / banner text. Fix-loop iter 12: expanded from the iter-11
+# set (which missed 'give up', 'next round', 'remove ads', 'share',
+# 'guess', 'submit', ...) — any of those leaking into the raw list
+# used to BLOCK the run as 'unmapped'. The dropdown-scope fix (below)
+# is the primary protection; this set is the second line.
+_WORLDLE_DROPDOWN_CHROME = {
+    "close", "done", "cancel", "back", "menu", "rounds",
+    "selectround", "choosearound", "allrounds", "selectaround",
+    "chooseround", "round", "giveup", "nextround", "previousround",
+    "prevround", "removeads", "play", "playnextround", "share",
+    "guess", "submit", "check", "confirm", "continue", "next",
+    "save", "skip", "tryagain", "howtoplay", "settings", "sound",
+    "language", "new", "gotit", "ok", "learnmore", "teuteufeduishere",
+    "teuteufedu", "all",
+}
+
+
 def _s_worldle_ls(page, key):
     """Read one localStorage key as parsed JSON ({} / None on any error)."""
     try:
@@ -4919,11 +5315,20 @@ def _s_worldle_trivia_norm(s):
     return t
 
 
-def _s_worldle_trivia_match(db_q, shown_q):
+def _s_worldle_trivia_match(db_q, shown_q, extra_stop=()):
     """True when a facts-DB question matches a displayed question:
     normalized equality / containment, or the distinctive substring
     (first 40 + last 20 chars of the DB question) present in the
-    displayed text. Blank runs are stripped by _s_worldle_trivia_norm."""
+    displayed text. Blank runs are stripped by _s_worldle_trivia_norm.
+
+    Fix-loop iter 12: token-overlap fallback for paraphrased displayed
+    questions (country name inserted, word order changed): >=0.75
+    Jaccard over content tokens, with >=2 shared content tokens or
+    one shared distinctive token (len>=6). `extra_stop` strips
+    caller-known tokens (e.g. the day country's name words) from both
+    sides before the overlap, so a displayed question with the
+    country name inserted still matches.
+    The ANSWER still comes from the DB — matching never invents one."""
     a = _s_worldle_trivia_norm(db_q)
     b = _s_worldle_trivia_norm(shown_q)
     if not a or not b:
@@ -4932,6 +5337,24 @@ def _s_worldle_trivia_match(db_q, shown_q):
         return True
     if len(a) > 60 and a[:40] in b and a[-20:] in b:
         return True
+    import re as _re2
+    stop = {"the", "a", "an", "is", "are", "was", "were", "has", "have",
+            "had", "of", "in", "on", "to", "for", "with", "by", "which",
+            "what", "when", "where", "does", "do", "did", "its", "it",
+            "and", "or", "about", "known", "country", "following"}
+    stop |= {str(x).lower() for x in (extra_stop or ())}
+    ta = {t for t in _re2.findall(r"[a-z]+", a) if t not in stop}
+    tb = {t for t in _re2.findall(r"[a-z]+", b) if t not in stop}
+    if ta and tb:
+        inter = ta & tb
+        union = ta | tb
+        # >=2 shared content tokens, or one long distinctive token:
+        # a single shared short token ('true') is not evidence, but
+        # two shared tokens at >=0.75 Jaccard is.
+        if union and len(inter) / len(union) >= 0.75 \
+                and (len(inter) >= 2
+                     or any(len(t) >= 6 for t in inter)):
+            return True
     return False
 
 
@@ -5729,16 +6152,28 @@ def _s_worldle_switch_mode(page, gid, mode, day_string):
 
 
 def _s_worldle_live_round_modes(page, gid):
-    """Read the live round list from the open dropdown.
+    """Read the live round list from the OPEN dropdown.
 
     Returns {"mapped": set of mode ids, "raw": [all visible dropdown
     entry texts], "unmapped": [raw entries matching no known label and
-    no chrome string]}, or None when the dropdown cannot be read.
-    Rounds the game removed for missing data are ABSENT here — that is
-    the authoritative availability signal. The RAW list is returned
-    too: the old code filtered inside page JS and dropped unknown
-    labels before Python ever saw them, so a renamed round would be
-    silently lost (fix-loop iter 11)."""
+    no chrome string], "scope": "dropdown"}, or None when the dropdown
+    cannot be read. Rounds the game removed for missing data are ABSENT
+    here — that is the authoritative availability signal. The RAW list
+    is returned too: the old code filtered inside page JS and dropped
+    unknown labels before Python ever saw them, so a renamed round
+    would be silently lost (fix-loop iter 11).
+
+    Fix-loop iter 12 (G4 BLOCKED false positive): the iter-11 reader
+    fell back to a WHOLE-PAGE scan when no menu container was found,
+    so page chrome / banner / widget text ('Give up', 'Teuteuf Edu is
+    here!', ...) entered the raw list as 'unmapped' and BLOCKED the
+    run. The probe is now scoped to the OPEN dropdown container ONLY:
+    no identifiable open container => None (unreadable, no block),
+    never a page-wide scan. Mapping strips emoji prefixes ('📍
+    Capital' == 'Capital') and the chrome set is expanded. The reader
+    itself logs the RAW entry texts (iter-11 carry-forward: the
+    TOTAL=13 reconciliation must be auditable from the log), so the
+    caller does not have to re-log them."""
     try:
         labels = list(_WORLDLE_MODE_LABELS.values())
         opened = page.evaluate("""(labels) => {
@@ -5761,10 +6196,13 @@ def _s_worldle_live_round_modes(page, gid):
         if not opened:
             return None
         page.wait_for_timeout(700)
-        # RAW: every visible entry in the open dropdown — NO label
-        # filter in JS. Mapping to known labels happens in Python so
-        # an unknown/renamed label survives as `unmapped`.
-        raw = page.evaluate("""() => {
+        # RAW, OPEN-DROPDOWN-ONLY: every visible leaf entry inside an
+        # identified open menu/listbox/dropdown container — NO label
+        # filter in JS, NO whole-page fallback. Mapping to known labels
+        # happens in Python so an unknown/renamed label survives as
+        # `unmapped`. A list return is accepted for back-compat with
+        # the iter-11 unit-test FakePage (which scripts a plain list).
+        raw_ev = page.evaluate("""() => {
           const vis = e => e && e.offsetParent !== null;
           const norm = s => (s||'').replace(/\\s+/g,' ').trim();
           const out = [];
@@ -5772,44 +6210,58 @@ def _s_worldle_live_round_modes(page, gid):
           const push = t => { const n = norm(t);
             if (n && n.length < 80 && !seen.has(n.toLowerCase())) {
               seen.add(n.toLowerCase()); out.push(n); } };
-          // Prefer the open menu/listbox container when identifiable.
-          const menus = Array.from(document.querySelectorAll(
+          // OPEN-dropdown containers only: role menu/listbox, a
+          // dropdown/menu class wrapper, or the listbox/menu inside an
+          // aria-expanded=true toggle. Never the whole page; never
+          // nav/header/footer; never BODY/HTML (a wrapper that big is
+          // the page, not the dropdown).
+          const cands = Array.from(document.querySelectorAll(
             '[role=menu], [role=listbox], [class*=dropdown i], ' +
-            '[class*=menu i]')).filter(vis);
+            '[class*=menu i]')).filter(vis)
+            .filter(e => !e.closest('nav, header, footer'))
+            .filter(e => !/^(BODY|HTML)$/.test(e.tagName));
+          for (const e of Array.from(document.querySelectorAll(
+              '[aria-expanded="true"]')).filter(vis)) {
+            const inner = e.querySelector('[role=menu], [role=listbox]');
+            if (inner && !cands.includes(inner)) cands.push(inner);
+          }
           let scope = null;
-          for (const m of menus) {
+          for (const m of cands) {
             const leaves = Array.from(m.querySelectorAll(
               'button, [role=option], [role=menuitem], ' +
               '[role=menuitemradio], a, li, span, div'))
               .filter(vis).filter(e => e.children.length === 0);
             if (leaves.length >= 3) { scope = leaves; break; }
           }
-          if (scope) {
-            for (const e of scope) push(e.innerText);
-          } else {
-            for (const e of Array.from(document.querySelectorAll(
-                'button, [role=option], [role=menuitem], ' +
-                '[role=menuitemradio], a, li')).filter(vis))
-              push(e.innerText);
-          }
-          return out;
-        }""") or []
+          if (!scope) return {entries: [], container: false};
+          for (const e of scope) push(e.innerText);
+          return {entries: out, container: true};
+        }""") or {}
         try:
             page.keyboard.press("Escape")
         except Exception:
             pass
-        inv = {_s_worldle_norm(v): k
+        if isinstance(raw_ev, dict):
+            if not raw_ev.get("container"):
+                return None
+            raw = list(raw_ev.get("entries") or [])
+        elif isinstance(raw_ev, list):
+            raw = list(raw_ev)
+        else:
+            return None
+        inv = {_s_worldle_label_key(v): k
                for k, v in _WORLDLE_MODE_LABELS.items()}
-        mapped = {inv[_s_worldle_norm(f)] for f in (raw or [])
-                  if _s_worldle_norm(f) in inv}
-        chrome = {"close", "done", "cancel", "back", "menu", "rounds",
-                  "select round", "choose a round", "all rounds",
-                  "select a round", "choose round", "round"}
+        mapped = {inv[_s_worldle_label_key(f)] for f in (raw or [])
+                  if _s_worldle_label_key(f) in inv}
         unmapped = [f for f in (raw or [])
-                    if _s_worldle_norm(f) not in inv
-                    and _s_worldle_norm(f) not in chrome]
+                    if _s_worldle_label_key(f) not in inv
+                    and _s_worldle_label_key(f) not in _WORLDLE_DROPDOWN_CHROME
+                    and _s_worldle_label_key(f)]
+        _dbg(gid, f"worldle live rounds raw (open dropdown only): {raw}")
+        _dbg(gid, f"worldle live rounds mapped: {sorted(mapped)}")
+        _dbg(gid, f"worldle live rounds unmapped (in-scope): {unmapped}")
         return {"mapped": mapped, "raw": list(raw or []),
-                "unmapped": unmapped}
+                "unmapped": unmapped, "scope": "dropdown"}
     except Exception as e:
         _dbg(gid, f"worldle live round list unreadable: {str(e)[:90]}")
         return None
@@ -5938,6 +6390,27 @@ def _worldle_pin_probe(page, px, py):
             'svg [class*=marker i], svg [class*=pin i], ' +
             '.leaflet-marker-icon, .maplibregl-marker, [data-marker], ' +
             '[class*=marker i], [class*=pin i]');
+          // Fix-loop iter 12: the map is the `teuteuf-geo-map` WEB
+          // COMPONENT (bundled main.js modules 91041/87375: registered
+          // via customElements from web-components.teuteuf.fr), so
+          // its SVG + pin live in SHADOW DOM — light-DOM queries see
+          // neither. Count markers inside every shadow root too, and
+          // report the shadow-host count, or a real pin renders as
+          // 'markers 4->4' and the solver bails on a landed pin.
+          let markersShadow = 0, shadowHosts = 0;
+          const countShadow = root => {
+            for (const el of root.querySelectorAll('*')) {
+              if (el.shadowRoot) {
+                shadowHosts += 1;
+                markersShadow += el.shadowRoot.querySelectorAll(
+                  'svg circle, svg ellipse, svg [class*=marker i], ' +
+                  'svg [class*=pin i], [data-marker], ' +
+                  '[class*=marker i], [class*=pin i]').length;
+                countShadow(el.shadowRoot);
+              }
+            }
+          };
+          try { countShadow(document); } catch (e) {}
           let sig = '';
           const host = top ? (top.closest(
             'svg, teuteuf-geo-map, [data-projection]') || top) : null;
@@ -5971,7 +6444,7 @@ def _worldle_pin_probe(page, px, py):
                   topId: top ? (top.id || '') : '',
                   topTestId: top ? (top.getAttribute('data-testid') || '')
                     : '',
-                  inMap: inMap, markers: markers, sig: sig,
+                  inMap: inMap, sig: sig,
                   chain: chain,
                   pickedTag: picked ? picked.tagName : null,
                   pickedCls: picked ?
@@ -5980,7 +6453,11 @@ def _worldle_pin_probe(page, px, py):
                   pickedId: picked ? (picked.id || '') : '',
                   topInPicked: topInPicked,
                   topIsCanvas: !!(top && top.tagName === 'CANVAS'),
-                  topInSvg: !!(top && top.closest('svg'))};
+                  topInSvg: !!(top && top.closest('svg')),
+                  markers: markers + markersShadow,
+                  markers_light: markers,
+                  markers_shadow: markersShadow,
+                  shadow_hosts: shadowHosts};
         }""", {"x": float(px), "y": float(py)}) or {}
     except Exception:
         return {}
@@ -6197,8 +6674,18 @@ def _s_worldle_play_capital(page, gid, day):
                 try:
                     _path = page.evaluate("""() => {
                       const vis = e => e && e.offsetParent !== null;
-                      const paths = Array.from(document.querySelectorAll(
-                        'svg path')).filter(vis);
+                      // Shadow-piercing (iter 12): the country outline
+                      // lives inside the teuteuf-geo-map web
+                      // component's shadow DOM, not light DOM.
+                      const allPaths = [];
+                      const collect = root => {
+                        for (const p of root.querySelectorAll(
+                            'svg path')) allPaths.push(p);
+                        for (const el of root.querySelectorAll('*'))
+                          if (el.shadowRoot) collect(el.shadowRoot);
+                      };
+                      collect(document);
+                      const paths = allPaths.filter(vis);
                       let best = null, bestArea = 0;
                       for (const pth of paths) {
                         const r = pth.getBoundingClientRect();
@@ -6262,7 +6749,11 @@ def _s_worldle_play_capital(page, gid, day):
                   f"inMap={before.get('inMap')} topInPicked={before.get('topInPicked')} "
                   f"picked={before.get('pickedTag')}#{before.get('pickedId')} "
                   f"canvas={before.get('topIsCanvas')} svg={before.get('topInSvg')} "
-                  f"markers={before_markers} chain={before.get('chain')}")
+                  f"markers={before_markers} "
+                  f"(light={before.get('markers_light')} "
+                  f"shadow={before.get('markers_shadow')} "
+                  f"shadow_hosts={before.get('shadow_hosts')}) "
+                  f"chain={before.get('chain')}")
         # Click the VERIFIED target with a real mouse click
         # (page.mouse.click, not move/down/up, not a JS dispatch).
         _landed = bool(before.get("inMap"))
@@ -6772,6 +7263,11 @@ def _s_worldle_play_trivia(page, gid, day):
     facts = day.get("facts") or {}
     boolean_facts = day.get("boolean_facts") or {}
     boolean_texts = day.get("boolean_texts") or {}
+    # Tokens of the day country's name, stripped before trivia
+    # question matching (iter 12): the displayed question may insert
+    # the country name ("Which fact about Kuwait is true?") while the
+    # DB question does not, which used to break every match.
+    _strip = set(_s_worldle_trivia_norm(day.get("name") or "").split())
     per_q = []
     answered_norm, skipped_norm = set(), set()
     # Fix-loop iter 6: the round is TAB-structured (FACTS / GENERAL /
@@ -6887,7 +7383,8 @@ def _s_worldle_play_trivia(page, gid, day):
             # ---- fillFacts ----
             hit = None
             for _code, f in sorted(facts.items()):
-                if _s_worldle_trivia_match(f.get("question") or "", q_text):
+                if _s_worldle_trivia_match(f.get("question") or "", q_text,
+                                           extra_stop=_strip):
                     hit = (_code, f)
                     break
             if hit is not None:
@@ -6940,7 +7437,8 @@ def _s_worldle_play_trivia(page, gid, day):
                 bkey, bval = None, None
                 for _k, _v in boolean_facts.items():
                     _txt = boolean_texts.get(_k)
-                    if _txt and _s_worldle_trivia_match(_txt, q_text):
+                    if _txt and _s_worldle_trivia_match(_txt, q_text,
+                                                       extra_stop=_strip):
                         bkey, bval = _k, _v
                         break
                 if bkey is None:
@@ -6980,8 +7478,19 @@ def _s_worldle_play_trivia(page, gid, day):
             # not True/False buttons — so the branch above never fires.
             # Map each statement to its boolean key, then click the one
             # whose truth value matches the question polarity.
+            # Fix-loop iter 12: the old trigger required the words
+            # 'true'/'false' in the question, but the FACTS prompt can
+            # ask for the 'correct' statement / 'which fact' / 'select'
+            # without either word — every such question NO-MATCHed.
+            # The branch still only fires AFTER fillFact + boolean
+            # matching failed, and only clicks on exactly one mapped
+            # candidate, so a fill-in question with word options
+            # (no statement maps) still falls through to NO-MATCH.
             _qlow = _s_worldle_trivia_norm(q_text)
-            if "true" in _qlow or "false" in _qlow:
+            if "true" in _qlow or "false" in _qlow \
+                    or "correct" in _qlow or "statement" in _qlow \
+                    or ("which" in _qlow and "fact" in _qlow) \
+                    or "select" in _qlow:
                 _want_true = not ("not true" in _qlow
                                    or "false" in _qlow
                                    or "incorrect" in _qlow)
@@ -7262,9 +7771,11 @@ def _worldle_phrase_drag(page, gid, picked, codes, names, prompts, ds):
     language label, unlabelled ordered slots by prompt/day.languages
     order, else partial with the full probe (no drag); (4) drag per
     pair: attempt 1 = Playwright mouse drag in 10 steps + verify;
-    attempt 2 = in-page DragEvent sequence with a real DataTransfer
-    (dragstart/dragover/drop/dragend) + verify; (5) submit via
-    _s_worldle_submit_guarded, arbitrate with the store win check.
+    attempt 2 = smooth mouse drag (25 intermediate mousemove events +
+    hover) + verify; attempt 3 = in-page DragEvent sequence with a
+    real DataTransfer (dragstart/dragover/drop/dragend) + verify;
+    (5) submit via _s_worldle_submit_guarded, arbitrate with the store
+    win check.
     Returns (status, detail); status "click-fallback" when no
     draggable chips exist (caller falls back to the click path).
     Needs live-browser verification for the slot DOM + which drag
@@ -7277,7 +7788,11 @@ def _worldle_phrase_drag(page, gid, picked, codes, names, prompts, ds):
     try:
         _probe = page.evaluate("""(picked) => {
           const vis = e => e && e.offsetParent !== null;
+          // Punctuation-insensitive (iter 12): a chip reading
+          // 'Nɔɔyɛ la me.' must match the day phrase without its
+          // trailing period, and vice versa.
           const norm = s => (s||'').toLowerCase()
+            .replace(/[.,!?;:"'«»“”‘’()\\-]/g, '')
             .replace(/\\s+/g,' ').trim();
           const chips = [];
           for (const [code, phrase] of Object.entries(picked || {})) {
@@ -7391,7 +7906,11 @@ def _worldle_phrase_drag(page, gid, picked, codes, names, prompts, ds):
         try:
             return bool(page.evaluate("""(args) => {
               const vis = e => e && e.offsetParent !== null;
+              // Punctuation-insensitive (iter 12): a chip reading
+              // 'Nɔɔyɛ la me.' must match the day phrase without
+              // its trailing period, and vice versa.
               const norm = s => (s||'').toLowerCase()
+                .replace(/[.,!?;:"'«»“”‘’()\\-]/g, '')
                 .replace(/\\s+/g,' ').trim();
               const slots = Array.from(document.querySelectorAll(args.sel))
                 .filter(vis)
@@ -7427,12 +7946,32 @@ def _worldle_phrase_drag(page, gid, picked, codes, names, prompts, ds):
         _dbg(gid, f"worldle phrase drag mouse {_code} -> slot "
                   f"{_slot_idx} placed={_placed}")
         if not _placed:
-            # Attempt 2: in-page DragEvent sequence with a real
+            # Attempt 2: smooth mouse drag — one move call with 25
+            # intermediate mousemove events + a hover pause over the
+            # slot before release. Some DnD widgets only fire dragover
+            # on a continuous move stream, which the 10 discrete
+            # moves of attempt 1 do not produce.
+            try:
+                page.mouse.move(_chip["x"], _chip["y"])
+                page.mouse.down()
+                page.mouse.move(_slot["x"], _slot["y"], steps=25)
+                page.wait_for_timeout(400)
+                page.mouse.up()
+                page.wait_for_timeout(800)
+            except Exception as e:
+                _dbg(gid, "worldle phrase smooth drag failed for "
+                          f"{_code}: {str(e)[:80]}")
+            _placed = _verify(_slot_idx, _phrase)
+            _dbg(gid, f"worldle phrase drag smooth {_code} -> slot "
+                      f"{_slot_idx} placed={_placed}")
+        if not _placed:
+            # Attempt 3: in-page DragEvent sequence with a real
             # DataTransfer (dragstart/dragover/drop/dragend).
             try:
                 page.evaluate("""(args) => {
                   const vis = e => e && e.offsetParent !== null;
                   const norm = s => (s||'').toLowerCase()
+                    .replace(/[.,!?;:"'«»“”‘’()\\-]/g, '')
                     .replace(/\\s+/g,' ').trim();
                   const leaves = Array.from(
                     document.querySelectorAll('body *')).filter(vis)
@@ -7475,7 +8014,7 @@ def _worldle_phrase_drag(page, gid, picked, codes, names, prompts, ds):
                       f"{_slot_idx} placed={_placed}")
         if not _placed:
             return ("partial", f"phrase drag failed for {_code} "
-                    f"({_phrase!r} -> slot {_slot_idx}); both drag "
+                    f"({_phrase!r} -> slot {_slot_idx}); all drag "
                     f"primitives failed; probe={_probe}")
     _s_worldle_submit_guarded(page, gid, "spokenLanguages", ds)
     _settle(page, base=1500)
@@ -7904,6 +8443,25 @@ def _s_worldle_play_gdp(page, gid, day):
                 f"GDP number set failed ({detail}); DOM dump logged"
         _s_worldle_submit_guarded(page, gid, "gdp", ds)
         _settle(page, base=2000)
+    # Q1 comparison: DELIBERATE branch first (fix-loop iter 12) —
+    # probe the live comparison widget (image cards + text buttons),
+    # resolve every shown country's GDP from the day lookup (+ the
+    # game's own CDN), click the max. The old code only read button
+    # innerText, so an image-card option ('Saudi Arabia' in the iter
+    # runs) was 'not found' even though the lookup held its GDP.
+    # When the deliberate branch does not click (prompt absent /
+    # options unresolvable), fall through to the legacy
+    # visible-options path and then the day-prediction fallback —
+    # both of which still refuse to click an unresolved option.
+    lookup = day.get("gdp_lookup") or {}
+    cst, cpick, cdet = _s_worldle_play_comparison(
+        page, gid, day, "gdp", ds,
+        ("highest", "per capita gdp"), lookup, "gdpPerCapita", "gdp")
+    if cst == "attempted":
+        return "attempted", [str(number), cpick], cdet
+    _dbg(gid, "worldle gdp comparison deliberate branch "
+              f"{cst}: {cdet}; falling back to visible-options path")
+
     # Q1: re-derive from the shown options.
     lookup = day.get("gdp_lookup") or {}
 
@@ -8357,6 +8915,285 @@ def _area_stepper_boxes(page):
         return []
 
 
+def _s_worldle_comparison_probe(page, prompt_substrs):
+    """Probe the live comparison widget (Area / GDP): returns
+    {prompt_found, options: [{name, x, y, has_img, text, aria, alt}]}.
+
+    The prompt must match ALL of `prompt_substrs` (Area: 'larger
+    surface area'; GDP: 'highest' + 'per capita gdp') — a single
+    substring would also match the round's TAB label ('Size
+    Comparison'), which is present even when the comparison
+    sub-question is not showing. Options are visible clickable
+    candidates in the prompt's container: image cards (silhouette /
+    flag with a country-name label) AND text buttons — the old code
+    only read button innerText, so image-card options ('Saudi Arabia'
+    in the GDP comparison) were 'not found'. Numbered tab labels
+    ('2. Size Comparison'), tab elements, and submit/give-up chrome
+    are excluded, so tabs can never be mistaken for options."""
+    try:
+        return page.evaluate("""/* worldle-comparison-probe */
+          (subs) => {
+          const vis = e => e && e.offsetParent !== null;
+          const norm = s => (s||'').toLowerCase().replace(/\\s+/g,' ').trim();
+          const bodyText = norm(document.body.innerText || '');
+          const promptFound = subs.every(s => bodyText.includes(norm(s)));
+          if (!promptFound) return {prompt_found: false, options: []};
+          let container = document.body;
+          const holders = Array.from(document.querySelectorAll(
+            'section, form, div, fieldset'))
+            .filter(vis).filter(e => !e.closest('nav, header, footer'))
+            .filter(e => subs.every(s => norm(e.innerText || '')
+              .includes(norm(s))));
+          holders.sort((a, b) => (a.innerText || '').length -
+            (b.innerText || '').length);
+          for (const h of holders) {
+            const n = h.querySelectorAll(
+              'button, [role=option], [role=radio], [role=button], a, ' +
+              'label, [data-value]').length;
+            if (n >= 2) { container = h; break; }
+          }
+          const chrome = new Set(['guess', 'submit', 'check', 'confirm',
+            'continue', 'next', 'save', 'give up', 'next round',
+            'remove ads', 'try again', 'skip']);
+          // Mode labels are never country options: when the prompt
+          // and the options live in sibling containers, the probe
+          // falls back to document.body, and the round-nav toggle
+          // (showing the current mode label, e.g. 'Area') would
+          // otherwise be collected as a bogus option and force a
+          // false partial. Toggles (aria-expanded/haspopup) are
+          // excluded for the same reason.
+          const modeLabels = new Set(['country', 'neighbours', 'capital',
+            'orientation', 'flag', 'trivia', 'landmark', 'emblem',
+            'spoken languages', 'gdp per capita',
+            'population & currency', 'populous cities', 'area',
+            'summary']);
+          const out = []; const seen = new Set();
+          const cands = Array.from(container.querySelectorAll(
+            'button, [role=option], [role=radio], [role=button], a, ' +
+            'label, [data-value]'))
+            .filter(vis).filter(e => !e.closest('nav, header, footer'))
+            .filter(e => e.getAttribute('role') !== 'tab')
+            .filter(e => !e.closest('[role=tablist]'))
+            .filter(e => e.getAttribute('aria-selected') === null)
+            .filter(e => e.getAttribute('aria-expanded') === null)
+            .filter(e => e.getAttribute('aria-haspopup') === null);
+          for (const e of cands) {
+            const img = e.querySelector('img');
+            const firstLine = (e.innerText || '').split('\\n')
+              .map(s => s.trim()).filter(Boolean)[0] || '';
+            const aria = e.getAttribute('aria-label') || '';
+            const dval = e.getAttribute('data-value') || '';
+            const title = e.getAttribute('title') || '';
+            const alt = img ? (img.getAttribute('alt') || '') : '';
+            const name = firstLine || aria || dval || title || alt;
+            if (!name || name.length > 80) continue;
+            if (chrome.has(norm(name))) continue;
+            if (modeLabels.has(norm(name))) continue;
+            // Numbered tab labels ('2. Size Comparison') and any
+            // label mentioning the comparison/guess prompt are tabs
+            // or prompts, never country options.
+            if (/^\\s*\\d+\\s*\\./.test(name)) continue;
+            if (/(comparison|guess the)/i.test(name)) continue;
+            if (name.split(/\\s+/).length > 5) continue;
+            const key = norm(name);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const r = e.getBoundingClientRect();
+            out.push({name: name, x: r.x + r.width / 2,
+                      y: r.y + r.height / 2, has_img: !!img,
+                      text: (e.innerText || '').slice(0, 120),
+                      aria: aria.slice(0, 80), alt: alt.slice(0, 80)});
+          }
+          return {prompt_found: true, options: out};
+        }""", list(prompt_substrs)) or {}
+    except Exception:
+        return {}
+
+
+def _s_worldle_click_comparison_option(page, want):
+    """Click a comparison option by country name, matching first-line
+    innerText, aria-label, data-value, title, or a descendant img alt
+    (image-card options carry the name in alt, not in button text).
+    Returns (ok, detail)."""
+    try:
+        hit = page.evaluate("""/* worldle-comparison-click */
+          (want) => {
+          const vis = e => e && e.offsetParent !== null;
+          const norm = s => (s||'').toLowerCase().replace(/\\s+/g,' ').trim();
+          const normDiac = s => norm(s).normalize('NFD')
+            .replace(/[\\u0300-\\u036f]/g, '');
+          const w = normDiac(want);
+          const els = Array.from(document.querySelectorAll(
+            'button, [role=option], [role=radio], [role=button], a, ' +
+            'label, [data-value]')).filter(vis)
+            .filter(e => !e.closest('nav, header, footer'));
+          const match = e => {
+            const firstLine = (e.innerText || '').split('\\n')
+              .map(s => s.trim()).filter(Boolean)[0] || '';
+            const img = e.querySelector('img');
+            const vals = [firstLine, e.getAttribute('aria-label') || '',
+              e.getAttribute('data-value') || '',
+              e.getAttribute('title') || '',
+              img ? (img.getAttribute('alt') || '') : ''];
+            return vals.some(v => normDiac(v) === w);
+          };
+          const hit = els.find(match);
+          if (!hit) return [false, 'not found'];
+          hit.click();
+          return [true, (hit.innerText || '').trim().slice(0, 80)];
+        }""", str(want))
+        return bool(hit and hit[0]), str((hit or [None, ""])[1] or "")
+    except Exception as e:
+        return False, "exception: " + str(e)[:80]
+
+
+def _s_worldle_comparison_pick(options, values):
+    """Pick the max-stat comparison option. `options`: [{name, ...}]
+    in display order; `values`: {_s_worldle_cmp_key(name): number}.
+    Returns (best_display_name, detail) or (None, reason). Pure —
+    never clicks, never guesses: EVERY option must resolve to a
+    number, or the pick refuses (a tie keeps the first shown, logged).
+    """
+    normed = []
+    for o in (options or []):
+        k = _s_worldle_cmp_key(o.get("name") or "")
+        if k and all(k != x[0] for x in normed):
+            normed.append((k, o.get("name")))
+    if len(normed) < 2:
+        return None, (f"need >=2 distinct options, have {len(normed)}")
+    missing = [name for k, name in normed
+               if values.get(k) is None]
+    if missing:
+        return None, f"unresolved options: {missing}"
+    best = max(normed, key=lambda kv: values[kv[0]])
+    mx = values[best[0]]
+    tie = sum(1 for k, _ in normed if values[k] == mx) > 1
+    return best[1], ("tie, first shown kept" if tie
+                     else f"max={values[best[0]]}")
+
+
+def _s_worldle_fetch_country_stat(page, names, stat):
+    """Resolve `stat` ('size' | 'gdpPerCapita') for country `names`
+    from the game's own CDN: the countries list (name -> code), then
+    each per-country record — the same endpoints answers.py uses.
+    Returns {_s_worldle_cmp_key(name): value} for names that resolved.
+    A fetch failure returns {} (caller records partial), never a
+    guessed value. The Area comparison can pair the day country with
+    a NON-neighbour (frame-proven: Kuwait vs Qatar), so the day
+    lookup (own + borders) cannot cover every shown name."""
+    try:
+        pairs = page.evaluate("""/* worldle-country-stat-fetch */
+          (args) => fetch('https://cdn-assets.teuteuf.fr/data/common/countries.json')
+            .then(r => r.ok ? r.json() : null)
+            .then(list => {
+              if (!Array.isArray(list)) return [];
+              const norm = s => (s||'').toLowerCase().normalize('NFD')
+                .replace(/[\\u0300-\\u036f]/g, '')
+                .replace(/\\s+/g, ' ').trim();
+              const want = {};
+              for (const n of args.names) want[norm(n)] = n;
+              const codes = {};
+              for (const c of list) {
+                const k = norm(c.name);
+                if (k in want) codes[k] = c.code;
+              }
+              return Promise.all(Object.entries(codes).map(([k, code]) =>
+                fetch('https://cdn-assets.teuteuf.fr/data/common/countries/' +
+                  String(code).toLowerCase() + '.json')
+                  .then(r => r.ok ? r.json() : null)
+                  .then(rec => [want[k], rec ? rec[args.stat] : null])));
+            }).catch(() => [])""",
+            {"names": list(names or []), "stat": str(stat)}) or []
+    except Exception:
+        return {}
+    out = {}
+    for pair in (pairs or []):
+        try:
+            name, val = pair[0], pair[1]
+        except Exception:
+            continue
+        if val is not None:
+            out[_s_worldle_cmp_key(name)] = val
+    return out
+
+
+def _s_worldle_play_comparison(page, gid, day, mode, ds, prompt_substrs,
+                               lookup, stat, label):
+    """Deliberate comparison branch (Area / GDP): probe the live
+    comparison widget (image cards + text buttons), resolve EVERY
+    shown country's stat from `lookup` (+ the game's own CDN for any
+    shown name the day lookup does not cover), click the max, submit
+    once. Returns (status, picked_name_or_None, detail) with status in
+    {attempted, partial, not-present}. 'not-present' = the comparison
+    prompt is not showing (caller falls through to the number path);
+    'partial' = prompt showing but options unresolvable / unclickable
+    — NOTHING was clicked in that case. The caller arbitrates with the
+    game's win check; this helper never claims a win itself."""
+    probe = _s_worldle_comparison_probe(page, prompt_substrs)
+    if not probe.get("prompt_found"):
+        # The comparison may live on a COMPARISON tab that needs
+        # opening (GDP after the number; Area after the number).
+        # A disabled tab is skipped, never forced.
+        try:
+            opened = page.evaluate("""() => {
+              const vis = e => e && e.offsetParent !== null;
+              const hit = Array.from(document.querySelectorAll(
+                'button, [role=tab]')).filter(vis)
+                .find(e => (e.innerText || '').toUpperCase()
+                  .includes('COMPARISON'));
+              if (hit && !hit.disabled &&
+                  hit.getAttribute('aria-disabled') !== 'true') {
+                hit.click(); return true;
+              }
+              return false;
+            }""")
+        except Exception:
+            opened = False
+        if opened:
+            _settle(page, base=1200)
+            probe = _s_worldle_comparison_probe(page, prompt_substrs)
+    if not probe.get("prompt_found"):
+        return ("not-present", None,
+                "comparison prompt not showing (tabs tried)")
+    options = probe.get("options") or []
+    if len(options) < 2:
+        return ("partial", None,
+                f"comparison prompt showing but only {len(options)} "
+                f"option(s) probed: {options}; NOT clicked")
+    values = {}
+    missing = []
+    for o in options:
+        k = _s_worldle_cmp_key(o.get("name") or "")
+        v = (lookup or {}).get(k)
+        if v is not None:
+            values[k] = v
+        else:
+            missing.append(o.get("name") or "")
+    if missing:
+        _dbg(gid, f"worldle {mode} comparison: {missing} not in day "
+                  "lookup; resolving via the game's own CDN")
+        values.update(_s_worldle_fetch_country_stat(page, missing, stat))
+    best, pick_detail = _s_worldle_comparison_pick(options, values)
+    if best is None:
+        return ("partial", None,
+                f"comparison options unresolvable: {pick_detail}; "
+                f"options={options}; values={values}; NOT clicked")
+    _dbg(gid, f"worldle {mode} comparison: options="
+              + str([(o.get("name"), values.get(_s_worldle_cmp_key(
+                  o.get("name") or ""))) for o in options])
+              + f" larger={best!r} ({pick_detail})")
+    ok, detail = _s_worldle_click_comparison_option(page, best)
+    if not ok:
+        ok, detail = _s_worldle_click_option_loose(page, best)
+    if not ok:
+        return ("partial", None,
+                f"comparison option {best!r} not clickable ({detail})")
+    _s_worldle_submit_guarded(page, gid, mode, ds)
+    _settle(page, base=2000)
+    return ("attempted", best,
+            f"{label} comparison: clicked larger {best!r} ({pick_detail})")
+
+
 def _s_worldle_play_area_stepper(page, gid, size):
     """Area fallback: stepper buttons + displayed value, no input.
 
@@ -8627,16 +9464,50 @@ def _s_worldle_play_area_stepper(page, gid, size):
 
 
 def _s_worldle_play_area(page, gid, day):
-    """Area: number = country.size EXACTLY (integer as-is). If a
-    size-comparison sub-question appears after the number ("Which
-    country has a larger surface area?"), read the two shown
-    countries, look up each size, click the larger (tie -> log +
-    click first). Unresolvable comparison countries -> log, do not
-    click, partial. Win check: guesses[0].correct == guesses[0].answer."""
+    """Area: number = country.size EXACTLY (integer as-is) + the
+    size-comparison sub-question ('Which country has a larger surface
+    area?').
+
+    Fix-loop iter 12 (ANALYSIS8 §4, frame-proven): the comparison
+    widget is TWO silhouette image buttons labeled with country names
+    + 'Give up' — NOT a stepper. The old code ran the stepper probe
+    FIRST, whose probe-click accidentally answered the comparison,
+    then reported FAILED because no stepper display moved (even
+    though correct=True). Order now: (1) DELIBERATE comparison branch
+    first — detect the comparison prompt + two labeled image buttons,
+    look up BOTH sizes (day lookup + the game's own CDN for a
+    non-neighbour pair, never a guess), click the larger, submit +
+    arbitrate; (2) if the win check still fails, the number
+    sub-question is still open — play it (input / stepper), then (3)
+    run the comparison branch again. The stepper probe NEVER runs
+    while the comparison widget is showing. Win check:
+    guesses[0].correct == guesses[0].answer (caller arbitrates)."""
     ds = day.get("date") or ""
     size = day.get("size")
     if size is None:
         return "skipped", [], "no size in day data"
+    lookup = day.get("size_lookup") or {}
+
+    def _comparison():
+        return _s_worldle_play_comparison(
+            page, gid, day, "area", ds,
+            ("larger surface area",), lookup, "size", "area")
+
+    # (1) Comparison FIRST — deliberate, never probe-click rescue.
+    st, pick, det = _comparison()
+    if st == "partial":
+        return "partial", [str(size)], det
+    picked = []
+    if st == "attempted":
+        picked.append(pick)
+        _win_now = _s_worldle_win_check(page, "area", day, ds)
+        if _win_now[0]:
+            return "attempted", [str(size), pick], \
+                det + f"; win_check={_win_now[2]}"
+        _dbg(gid, "worldle area: comparison answered but win check not "
+                  "yet passing; playing the number sub-question too")
+    # (2) Number path: input/slider, else stepper, else
+    # submit-and-arbitrate (iter 11) when the display is unreadable.
     if not _s_worldle_pick_input(page, ["size", "area", "km", "surface"],
                                  include_range=True):
         # The widget may render late: one settle, then re-check, before
@@ -8659,7 +9530,7 @@ def _s_worldle_play_area(page, gid, day):
             _settle(page, base=2000)
             _win = _s_worldle_win_check(page, "area", day, ds)
             if _win[0]:
-                return "attempted", [str(size)], \
+                return "attempted", [str(size)] + picked, \
                     f"area {size} km2 via submit-arbitrate ({_win[2]}; " \
                     f"stepper path failed: {detail})"
             dump = _s_worldle_dom_dump(page, gid, "area")
@@ -8679,7 +9550,7 @@ def _s_worldle_play_area(page, gid, day):
             _settle(page, base=2000)
             _win = _s_worldle_win_check(page, "area", day, ds)
             if _win[0]:
-                return "attempted", [str(size)], \
+                return "attempted", [str(size)] + picked, \
                     f"area {size} km2 via submit-arbitrate ({_win[2]}; " \
                     f"set path failed: {detail})"
             dump = _s_worldle_dom_dump(page, gid, "area")
@@ -8688,48 +9559,16 @@ def _s_worldle_play_area(page, gid, day):
                 f"win_check={_win[2]}; DOM dump logged"
     _s_worldle_submit_guarded(page, gid, "area", ds)
     _settle(page, base=2000)
-    try:
-        body = (page.evaluate("() => document.body.innerText") or "")
-    except Exception:
-        body = ""
-    if "larger surface area" in body.lower() \
-            or "larger area" in body.lower():
-        lookup = day.get("size_lookup") or {}
-
-        def _nm(s):
-            return " ".join(str(s or "").lower().split())
-
-        opts = _s_worldle_visible_options(page)
-        shown = [o for o in opts if _nm(o) in lookup]
-        # De-duplicate, keep order.
-        shown = list(dict.fromkeys(shown))
-        if len(shown) < 2:
-            return "partial", [str(size)], \
-                "number played; area-comparison shown countries " \
-                f"unresolvable: options={opts}; NOT clicked"
-        vals = [(o, lookup[_nm(o)]) for o in shown[:2]]
-        if any(v is None for _, v in vals):
-            return "partial", [str(size)], \
-                "number played; area-comparison sizes unresolvable: " \
-                f"{vals}; NOT clicked"
-        vals_sorted = sorted(vals, key=lambda kv: kv[1], reverse=True)
-        best = vals_sorted[0][0]
-        if len(vals_sorted) > 1 and vals_sorted[0][1] == vals_sorted[1][1]:
-            _dbg(gid, "worldle area comparison TIE: " + str(vals)
-                 + "; clicking first shown")
-        _dbg(gid, "worldle area comparison: shown=" + str(vals)
-             + " larger=" + str(best))
-        okc, dc = _s_worldle_click_option_text(page, best)
-        if not okc:
-            okc, dc = _s_worldle_click_option_loose(page, best)
-        if not okc:
-            return "partial", [str(size)], \
-                f"number played; comparison option {best!r} not clickable"
-        _s_worldle_submit_guarded(page, gid, "area", ds)
-        _settle(page, base=2000)
-        return "attempted", [str(size), best], \
-            f"area {size} km2 + larger-area comparison played"
-    return "attempted", [str(size)], f"area {size} km2 played"
+    # (3) Comparison again after the number (the normal order when the
+    # round is number-first: the comparison appears once the number is
+    # answered).
+    st2, pick2, det2 = _comparison()
+    if st2 == "partial":
+        return "partial", [str(size)] + picked, det2
+    if st2 == "attempted":
+        return "attempted", [str(size)] + picked + [pick2], \
+            f"area {size} km2 + {det2}"
+    return "attempted", [str(size)] + picked, f"area {size} km2 played"
 
 
 def _s_worldle_play_bonus(page, gid, day, mode):
@@ -8868,10 +9707,8 @@ def _s_worldle(page, ans, gid):
     # three lines so a renamed round can never be silently dropped.
     live_ev = _s_worldle_live_round_modes(page, gid)
     live = (live_ev or {}).get("mapped") if live_ev else None
-    if live_ev is not None:
-        _dbg(gid, f"worldle live rounds raw: {live_ev.get('raw')}")
-        _dbg(gid, f"worldle live rounds mapped: {sorted(live or [])}")
-        _dbg(gid, f"worldle live rounds unmapped: {live_ev.get('unmapped')}")
+    # Raw / mapped / unmapped are logged by the live-reader itself
+    # (iter 12, task 5) — the caller does not re-log them.
     avail = day.get("available") or {}
     for mode in _WORLDLE_PLAY_ORDER[1:]:
         label = _WORLDLE_MODE_LABELS.get(mode, mode)
@@ -8987,7 +9824,11 @@ def _s_worldle(page, ans, gid):
         if n_offered + n_removed != 13:
             _xcheck_fail = (f"offered({n_offered}) + removed({n_removed}) "
                             f"!= 13 total")
-        elif _unmapped:
+        # Fix-loop iter 12: BLOCK only on IN-SCOPE unmapped entries
+        # (scope == "dropdown"). The reader returns None when no open
+        # dropdown container is identifiable, so an out-of-scope read
+        # can never block the run (iter-11 false positive).
+        elif live_ev.get("scope") == "dropdown" and _unmapped:
             _xcheck_fail = f"unmapped live entries: {_unmapped}"
     if _xcheck_fail:
         _blocked_ev = (f"worldle classification BLOCKED: {_xcheck_fail}; "
@@ -11408,6 +12249,14 @@ def run_nerdle_external(g, tgt, date_key, today, short):
                 "evidence": "skipped: database already solved"}
     vdir = HERE / "videos" / "nerdle"
     vdir.mkdir(parents=True, exist_ok=True)
+    # Fix-loop iter 12: preliminary result BEFORE the hour-long
+    # subprocess — a crash/kill during the solver must still leave
+    # an auditable result.json (previously only the post-solve
+    # normalization wrote one).
+    _CURRENT_RUN.update({"gid": "nerdle", "date_key": date_key,
+                         "solved": False, "evidence": "",
+                         "stage": "answer"})
+    _write_preliminary_result("nerdle", date_key, False, "started")
     env = dict(os.environ)
     env.setdefault("HEADLESS", "true")
     env.setdefault("TZ_OFFSET_MINUTES", "540")
@@ -11420,6 +12269,10 @@ def run_nerdle_external(g, tgt, date_key, today, short):
         if r.returncode != 0:
             print((r.stderr or "")[-2000:])
     except Exception as e:
+        # Fix-loop iter 12: the old path returned here with NO
+        # result.json at all (subprocess launch/timeout failure).
+        _write_preliminary_result("nerdle", date_key, False,
+                                  f"subprocess: {e}")
         return {"game": "nerdle", "solved": False, "video": None, "evidence": f"subprocess: {e}"}
     # nerdle_solver writes videos/result_{date}.json + nerdle_final_{date}.mp4
     # (flat) — normalize into videos/nerdle/ + database/{date}/nerdle/.
@@ -11532,6 +12385,13 @@ def run_framed_all(gid, g, tgt, date_key, today, short):
     mode plus a results card listing every answer.
     """
     answers = {}
+    # Fix-loop iter 12: register in-flight state + preliminary result
+    # at the START of the framed path (it bypasses run_one's post-solve
+    # write), so a crash/kill during the four-mode solve still leaves
+    # an auditable result.json.
+    _CURRENT_RUN.update({"gid": gid, "date_key": date_key, "solved": False,
+                         "evidence": "", "stage": "answer"})
+    _write_preliminary_result(gid, date_key, False, "started")
     for mid, mname, _u in FRAMED_MODES:
         try:
             a = A.framed(tgt, mode=mid).get("answer")
@@ -11642,9 +12502,52 @@ def run_framed_all(gid, g, tgt, date_key, today, short):
                             solved, evidence, vpath)
 
 
+def _framed_segment_bounds(per_mode, duration):
+    """Segment bounds for the Framed assembly, from card-anchored marks.
+
+    `t_start` stamps are RECORDING-relative (time.time() - _REC_T0) and
+    the polished gameplay clip starts at recording 0 with autocrop OFF,
+    so the bounds are the RAW t_start values clamped to [0, duration] —
+    NOT rebased by the first mark. The old code subtracted the first
+    mark (`lead`) from every bound, shifting every mode segment ~20s
+    early: each segment showed the previous mode's tail / menu footage
+    and dropped its own mode's final seconds (where the win screen
+    lives), while the card still claimed the segment was that mode.
+    Marks within 2s of the previous kept mark are dropped (same rule as
+    before). Returns (bounds, kept) with bounds strictly increasing,
+    one segment per kept mark, every segment >= 2s (short trailing
+    segments are dropped from BOTH lists).
+    """
+    gd = float(duration or 0)
+    marks = sorted(
+        (d for d in (per_mode or []) if d.get("t_start") is not None),
+        key=lambda d: d["t_start"])
+    kept, starts = [], []
+    for d in marks:
+        st = min(max(float(d["t_start"]), 0.0), gd)
+        if not starts or st - starts[-1] > 2.0:
+            starts.append(st)
+            kept.append(d)
+    bounds = [(starts[i],
+               starts[i + 1] if i + 1 < len(starts) else gd)
+              for i in range(len(starts))]
+    # Drop a trailing segment shorter than 2s (a mark that landed in
+    # the last moments of the recording has no footage to show).
+    while bounds and bounds[-1][1] - bounds[-1][0] < 2.0:
+        bounds.pop()
+        kept.pop()
+    assert all(bounds[i][1] > bounds[i][0] >= 0
+               for i in range(len(bounds))), \
+        f"framed bounds not increasing: {bounds}"
+    assert len(bounds) == len(kept), \
+        f"framed bounds/marks mismatch: {len(bounds)} vs {len(kept)}"
+    return bounds, kept
+
+
 def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
                      solved, evidence, vpath):
     """Cut the four Framed modes into one captioned, bordered video."""
+    vdir = HERE / "videos" / gid
     if not solved:
         # Single-mode games gate assembly on solved ("skipping final
         # assembly: not solved"); framed assembled anyway, and its end
@@ -11658,7 +12561,12 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
         _dbg(gid, "skipping final assembly: not solved "
                   "(no publishable video)")
         # Fast-copy the raw recording for diagnosis (no re-encode,
-        # no autocrop) — same unsolved-tail rule as run_one.
+        # no autocrop) — same unsolved-tail rule as run_one. This copy
+        # is a DIAGNOSIS artifact only: vpath is set to None right
+        # below, so it can never become the final or be uploaded.
+        # (Fix-loop iter 12: vdir used to be assigned AFTER this block,
+        # so the copy raised UnboundLocalError, was swallowed by the
+        # except, and unsolved runs silently got no gameplay file.)
         try:
             if vpath:
                 _dbg(gid, "unsolved: fast-copy gameplay (no re-encode)")
@@ -11666,7 +12574,6 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
         except Exception:
             pass
         vpath = None
-    vdir = HERE / "videos" / gid
     solved_modes = [d["mode"] for d in per_mode if d.get("solved")]
     final = vpath
     if final and HAS and HAS_MOVIEPY and HAS_PIL:
@@ -11723,33 +12630,13 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
             if len(marks) >= 2 and gd > 0:
                 # Card-anchored marks: t_start is recorded AFTER the
                 # board is ready, just before the first guess, so the
-                # card still goes at t_start and footage follows it.
-                # Clean bounds: [start_i, start_{i+1}) + [start_last,
-                # gd) — the old builder emitted a duplicate boundary
-                # (bounds.append(prev) then bounds.append(gd)) and
-                # indexed marks[] by segment position, misaligning
-                # mode ids whenever a mark was dropped.
-                lead = float(marks[0].get("t_start") or 0.0)
-                kept, starts = [], []
-                for d in marks:
-                    st = min(max(float(d["t_start"]) - lead, 0.0), gd)
-                    if not starts or st - starts[-1] > 2.0:
-                        starts.append(st)
-                        kept.append(d)
-                bounds = [(starts[i],
-                           starts[i + 1] if i + 1 < len(starts) else gd)
-                          for i in range(len(starts))]
-                # Assembly-time assertion: bounds strictly increasing,
-                # one segment per kept mark, every segment >= 2s.
-                assert all(bounds[i][1] > bounds[i][0] >= 0
-                           for i in range(len(bounds))), \
-                    f"framed bounds not increasing: {bounds}"
-                assert len(bounds) == len(kept), \
-                    f"framed bounds/marks mismatch: {len(bounds)} vs {len(kept)}"
+                # card goes at t_start and footage follows it. Bounds
+                # come from _framed_segment_bounds (raw recording-
+                # relative t_starts, NO lead rebase: the polished clip
+                # starts at recording 0 with autocrop OFF).
+                bounds, kept = _framed_segment_bounds(per_mode, gd)
                 _dbg(gid, f"framed bounds (card-anchored): {bounds}")
                 for i, (a, b) in enumerate(bounds):
-                    if b - a < 2.0:
-                        continue
                     d = kept[i]
                     mid = d.get("mode", str(i))
                     # per_mode stores the mode ID; the display name lives in
@@ -11940,6 +12827,14 @@ def run_one(gid):
               f"tzoff={os.environ.get('TZ_OFFSET_MINUTES')} "
               f"fake={os.environ.get('FAKE_DATE_ISO', '') or 'auto'} "
               f"headless={HEADLESS} url={g['url']}")
+    # Fix-loop iter 12: write the preliminary result.json BEFORE any
+    # work that can crash (answer fetch, browser launch, solver). The
+    # old code wrote it only after the solver returned, so a crash in
+    # browser/context setup left no result.json at all — the SIGTERM
+    # handler covers kills, but nothing covered a plain crash here.
+    # Placed after the per-run state pops above so the preliminary
+    # record never carries a previous run's guesses.
+    _write_preliminary_result(gid, date_key, False, "started")
     if gid == "nerdle" or g.get("external") == "nerdle_solver.py":
         return run_nerdle_external(g, tgt, date_key, today, short)
     # No-duplicate guard: skip if database/{date}/{game} already solved.
@@ -12352,7 +13247,8 @@ def run_one(gid):
     _CURRENT_RUN.update({"solved": bool(solved),
                          "evidence": str(evidence)[:500],
                          "stage": "polish"})
-    _write_preliminary_result(gid, date_key, solved, evidence)
+    _write_preliminary_result(gid, date_key, solved, evidence,
+                              answer=(aval if solved else None))
     if _defer_stale:
         _report_game(gid, date_key, answer=str(aval), guesses=[],
                      verify=evidence, video=None, upload="deferred-dawn")
@@ -12596,9 +13492,15 @@ def run_one(gid):
         pass
     (vdir / "result.json").write_text(json.dumps(
         {"game": gid, "date": date_key, "solved": solved, "evidence": evidence,
+         # Verified winning word when solved (iter-12 (e)): a solved
+         # record must never carry answer=None (run 39043936480).
+         "answer": (str(aval) if solved else None),
          "video": str(final) if final else None,
+         # Betweenle: submitted-only guesses, never the plan fallback
+         # (plan fallback fabricated 6 "played" words, real = 3).
          "guesses": ([str(x) for x in _PLAYED[gid]] if _PLAYED.get(gid)
-                     else _guesses(gid, aval)),
+                     else ([] if gid == "betweenle"
+                           else _guesses(gid, aval))),
          "rejected": _REJECTED.get(gid, []),
          "steps": _result_steps(gid, aval), "chapters": chapters, "qc": _qc,
          "modes": ([dict(r) for r in _WORLDLE_MODES]
@@ -12611,7 +13513,8 @@ def run_one(gid):
                              "youtube_url": vid if 'vid' in dir() else None})
     _report_game(gid, date_key, answer=f"{aval} ({ans.get('via', '?')})",
                  guesses=([str(x) for x in _PLAYED[gid]] if _PLAYED.get(gid)
-                          else _guesses(gid, aval)),
+                          else ([] if gid == "betweenle"
+                                else _guesses(gid, aval))),
                  rejected=_REJECTED.get(gid, []),
                  reloads=_RELOADS.get(gid, 0),
                  verify=f"solved={solved} evidence={evidence}",
