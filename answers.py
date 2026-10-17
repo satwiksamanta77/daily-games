@@ -640,6 +640,32 @@ def worldle(d=None):
             "date": d.isoformat()}
 
 
+def _worldle_phrase_map(languages_doc, codes):
+    """{languageCode.lower(): phrases.myNameIs} for `codes` from the
+    game's own common/languages.json [{languageCode, names, phrases:
+    {myNameIs}, link, group}, ...] — the endpoint the bundled main.js
+    references ('common/languages.json'), verified live: all 344
+    entries carry phrases.myNameIs (e.g. ewe -> 'Nɔɔyɛ la me',
+    kbp -> 'Éwá mí kɛ́'). This is the PHRASE sub-round's data source:
+    the day/country JSON has NO phrase data (languageData carries only
+    codes + percentages). Pure function (unit-tested). Returns only
+    codes present in the doc with a non-empty myNameIs."""
+    out = {}
+    try:
+        _want = {str(x).lower() for x in (codes or [])}
+        for e in (languages_doc or []):
+            if not isinstance(e, dict):
+                continue
+            c = str(e.get("languageCode") or "").lower()
+            if c in _want:
+                v = (e.get("phrases") or {}).get("myNameIs") or ""
+                if v:
+                    out[c] = v
+    except Exception:
+        pass
+    return out
+
+
 def worldle_all_modes(d=None):
     """Worldle ALL daily rounds, derived from the day's countryCode.
 
@@ -663,6 +689,12 @@ def worldle_all_modes(d=None):
                    translations:{en:{question, answer, answers[]}}}]}
       landmarks: data/common/landmarks.json
                  [{landmarkCode, names:{en}, images:[...]}]
+      languages: data/common/languages.json
+                 [{languageCode, names:{en,...},
+                   phrases:{myNameIs}, ...}] — the PHRASE sub-round's
+                 data source (fix-loop iter 9): the day/country JSON
+                 has no phrase data, but every entry here carries
+                 phrases.myNameIs for its language.
       flags:     data/common/flags/<code>.svg (flag round images)
       shields:   data/common/shields/<code>.svg (emblem round images)
 
@@ -681,8 +713,10 @@ def worldle_all_modes(d=None):
     capital}], populous [{name,population,lat,lon}] (population desc),
     landmark {landmarkCode,imageCode,name,image_url} | None,
     facts {factCode:{category,question,answer,answers}},
-    languages [{languageCode,percentage}], gdp {number, compare_answer,
-    compare_candidates}, currency {code,name,nameChoices}, population,
+    languages [{languageCode,percentage}],
+    phrases {languageCode.lower(): myNameIs translation} for the day's
+    languages (from common/languages.json; {} when that fetch failed),
+    gdp {number, compare_answer, compare_candidates}, currency {code,name,nameChoices}, population,
     size, flags [codes], available {mode: True | reason-string} with
     ONE canonical key set (spokenLanguages, populationCurrency, area -
     the same ids the runner's _WORLDLE_PLAY_ORDER uses; a previous
@@ -728,6 +762,11 @@ def worldle_all_modes(d=None):
     facts_doc = _get(f"{base}/common/facts/{code.lower()}.json",
                      required=False) or {}
     landmarks_doc = _get(f"{base}/common/landmarks.json", required=False)
+    # Phrase data source (iter 9): common/languages.json, the endpoint
+    # the bundled main.js references. Non-required: a fetch failure
+    # leaves phrases={} and the solver records the phrase round partial
+    # with the exact missing source named, instead of guessing.
+    languages_doc = _get(f"{base}/common/languages.json", required=False)
     # Geogrid (boolean trivia question): try the geogrid path first,
     # then the common/ variants — the exact prefix is not pinned by
     # static source, so record which URL actually served the doc.
@@ -862,6 +901,10 @@ def worldle_all_modes(d=None):
     languages = [{"languageCode": str(x.get("languageCode") or ""),
                   "percentage": x.get("percentage")}
                  for x in langs if x.get("languageCode")]
+    # PHRASE sub-round answers: {code.lower(): "My name is" translation}
+    # from the game's own common/languages.json (see _worldle_phrase_map).
+    phrases = _worldle_phrase_map(
+        languages_doc, [x["languageCode"] for x in languages])
 
     # Availability: the game's own removal rules (see docstring). True =
     # available; a string = removed + reason. Emblem/landmark need the live
@@ -948,6 +991,7 @@ def worldle_all_modes(d=None):
             "borders": borders,
             "populous": populous, "landmark": landmark, "facts": facts,
             "languages": languages,
+            "phrases": phrases,
             "gdp": {"number": rec.get("gdpPerCapita"),
                     "compare_answer": gdp_compare,
                     "compare_candidates": cands},
@@ -1089,6 +1133,44 @@ def _globle_tz_order(d, browser_tz=None):
     for tz in _local_is_d + _other:
         _add(tz)
     return out
+
+
+def _globle_page_tz(d, browser_tz=None):
+    """Timezone for the Globle BROWSER context (iter 9).
+
+    The page sends day=<faked target> + timeZone=<context tz>, and the
+    server only serves day == real-today-in-timeZone. Iter 7 fixed OUR
+    direct fetch (multi-tz fallback) but NOT the page's own request: in
+    rerun #8 the page's own `answer?day=2026-10-17&timeZone=Kiritimati`
+    404'd at 11:47 UTC (= 01:47 Oct 18 real Kiritimati), the guesser
+    input never mounted, and the game deferred — the board can never
+    mount while the page tz is one whose REAL local date has already
+    rolled past the target day. The page tz must therefore be a zone
+    whose REAL local date == the target date. Prefer BROWSER_TZ when
+    it already satisfies that; else scan _GLOBLE_TZ_CANDIDATES in
+    order; fall back to BROWSER_TZ when no zone matches (e.g. a
+    far-future FAKE_DATE_ISO — then the page will 404 honestly).
+    Pure except for clock reads (unit-tested)."""
+    from datetime import datetime as _dt
+    try:
+        from zoneinfo import ZoneInfo as _ZI
+    except Exception:
+        return browser_tz or "Pacific/Kiritimati"
+    _bt = browser_tz or "Pacific/Kiritimati"
+    try:
+        if _dt.now(_ZI(_bt)).date() == d:
+            return _bt
+    except Exception:
+        pass
+    for tz in _GLOBLE_TZ_CANDIDATES:
+        if tz == _bt:
+            continue
+        try:
+            if _dt.now(_ZI(tz)).date() == d:
+                return tz
+        except Exception:
+            continue
+    return _bt
 
 
 def globle(d=None):
