@@ -1047,14 +1047,66 @@ def countryle(d=None):
 
 
 # ---------- globle ----------
+_GLOBLE_TZ_CANDIDATES = (
+    "Pacific/Kiritimati", "Pacific/Auckland", "Australia/Sydney",
+    "Asia/Tokyo", "Asia/Shanghai", "Asia/Kolkata", "Europe/London",
+    "Europe/Paris", "UTC", "America/New_York", "America/Chicago",
+    "America/Denver", "America/Los_Angeles", "Pacific/Honolulu",
+    "America/Anchorage",
+)
+
+
+def _globle_tz_order(d, browser_tz=None):
+    """Order the Globle /answer timezones for day `d`: BROWSER_TZ first
+    (existing behaviour when it works), then every zone whose LOCAL
+    date is `d` (the endpoint serves day == today-in-timeZone, so a
+    zone that has already rolled past midnight 404s for `d`), then
+    the remaining zones. Deduped, order-preserving. Pure function
+    (unit-tested)."""
+    from datetime import datetime as _dt
+    try:
+        from zoneinfo import ZoneInfo as _ZI
+    except Exception:
+        return [browser_tz or "Pacific/Kiritimati"]
+    out, seen = [], set()
+
+    def _add(tz):
+        if tz and tz not in seen:
+            seen.add(tz)
+            out.append(tz)
+
+    _add(browser_tz or "Pacific/Kiritimati")
+    _local_is_d, _other = [], []
+    for tz in _GLOBLE_TZ_CANDIDATES:
+        if tz in seen:
+            continue
+        try:
+            _local = _dt.now(_ZI(tz)).date()
+        except Exception:
+            _other.append(tz)
+            continue
+        (_local_is_d if _local == d else _other).append(tz)
+    for tz in _local_is_d + _other:
+        _add(tz)
+    return out
+
+
 def globle(d=None):
     """Globle: /answer?day=...&timeZone=... returns an AES-passphrase country index.
 
-    The site only serves day == today-in-timeZone. Send timeZone=
-    BROWSER_TZ (Pacific/Kiritimati) and request exactly the target day.
-    On 404 / "Puzzle is not available" raise SystemExit so the runner
-    DEFERS to the game cron window. NEVER fall back to date.today() -
-    that silently returned the previous-day puzzle.
+    The site only serves day == today-in-timeZone. The old code sent
+    timeZone=BROWSER_TZ (Pacific/Kiritimati) alone and deferred on any
+    404 — but once Kiritimati rolls past midnight, Kiritimati's "today"
+    is the NEXT day, so the CURRENT day 404s there while it still 200s
+    in zones where the local date is still the target day (verified
+    2026-10-17: Kiritimati+Oct17 -> 404, UTC+Oct17 -> 200). The answer
+    is keyed by `day` ALONE, and the browser board is unaffected (faked
+    clock), so an answer fetched via another tz for the SAME day is
+    still the correct day's answer. Fix (iter 7): try the timezones in
+    _globle_tz_order (BROWSER_TZ, then zones whose local date == the
+    target day, then the rest) with the SAME day param, use the first
+    200, and only defer if ALL fail. NEVER change the day param, NEVER
+    fall back to a previous day.
     """
     import requests
     d = d or target_date()
@@ -1063,10 +1115,9 @@ def globle(d=None):
         (ZAI / "src/lib/data/globle-countries.json").read_text("utf-8"))
     K = "ee53e68c3074206a002bf01333b047d5"
 
-    def _decode(day):
-        _tz = os.environ.get("BROWSER_TZ", "Pacific/Kiritimati")
+    def _decode(day, tz):
         r = requests.get(f"https://globle-game.com/answer?day={day}",
-                         params={"list": len(countries), "timeZone": _tz},
+                         params={"list": len(countries), "timeZone": tz},
                          headers={"User-Agent": "WordSolverX Video"},
                          timeout=20)
         r.raise_for_status()
@@ -1076,12 +1127,16 @@ def globle(d=None):
         idx = int(_cryptojs_decrypt(enc, K))
         c = countries[idx]
         return {"answer": c["name"], "code": c.get("code"), "index": idx,
-                "date": day, "via": "api"}
+                "date": day, "via": f"api:{tz}"}
 
-    try:
-        return _decode(key)
-    except Exception as e:
-        raise SystemExit(f"globle: no answer for {key} (defer, do not fallback: {str(e)[:110]})")
+    errors = []
+    for tz in _globle_tz_order(d, os.environ.get("BROWSER_TZ")):
+        try:
+            return _decode(key, tz)
+        except Exception as e:
+            errors.append(f"{tz}:{str(e)[:60]}")
+    raise SystemExit(f"globle: no answer for {key} (defer, do not fallback: "
+                     f"all timezones failed: {'; '.join(errors)[:220]})")
 
 
 # ---------- worgle ----------

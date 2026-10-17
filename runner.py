@@ -2166,6 +2166,55 @@ def _framed_submit(page, title):
     return False, f"guess {title!r} never registered (still {before} guesses)"
 
 
+def _framed_reward_ad_state(page):
+    """Snapshot the rewarded-ad UI state (iter 7): ad containers /
+    overlays, close/skip/claim controls in the main frame AND child
+    frames, and the googletag rewarded-slot state if exposed. Pure
+    probe (no clicks) — the unlock poll uses it to see WHAT the ad is
+    doing instead of polling board_ready blindly for 45s."""
+    out = {"overlays": [], "close": [], "googletag": None, "frames": 0}
+    try:
+        out["frames"] = len(page.frames or [])
+    except Exception:
+        pass
+    try:
+        out.update(page.evaluate("""() => {
+          const vis = e => e && e.offsetParent !== null;
+          const ov = Array.from(document.querySelectorAll(
+            'iframe, [id*=reward i], [class*=reward i], ' +
+            '[id*=goog_rewarded i], [class*=goog_rewarded i], ' +
+            '[id*=ad-container i], [class*=ad-container i]'))
+            .filter(vis).map(e => ({tag: e.tagName,
+              id: (e.id || '').slice(0, 60),
+              cls: String(e.className || '').slice(0, 80),
+              src: (e.getAttribute('src') || '').slice(0, 100),
+              w: Math.round(e.getBoundingClientRect().width),
+              h: Math.round(e.getBoundingClientRect().height)}));
+          const close = Array.from(document.querySelectorAll(
+            'button, a, [role=button]')).filter(vis)
+            .map(e => (e.innerText || e.getAttribute('aria-label') || ''))
+            .map(t => t.trim().toLowerCase())
+            .filter(t => /close|skip|claim|reward|continue|done|got it/.test(t));
+          let gt = null;
+          try {
+            const g = window.googletag;
+            if (g && g.pubads) {
+              const slots = (g.pubads().getSlots() || []).map(s => ({
+                path: (s.getAdUnitPath && s.getAdUnitPath()) || '',
+                sizes: String((s.getSizes && s.getSizes()) || ''),
+              }));
+              gt = {slots: slots};
+            }
+          } catch (e) {}
+          return {overlays: ov.slice(0, 8),
+                  close: Array.from(new Set(close)).slice(0, 8),
+                  googletag: gt};
+        }""") or {})
+    except Exception:
+        pass
+    return out
+
+
 def _framed_try_unlock_poster(page):
     """Poster mode hides its board behind a reward ad. Try to unlock it.
 
@@ -2237,6 +2286,46 @@ def _framed_try_unlock_poster(page):
             _dbg("framed", f"unlock: board ready after ~{_i * 0.5:.0f}s "
                             f"(via={_via}); gate_up={_framed_poster_gate_up(page)}")
             return True
+        # Iter 7: the old poll only watched board_ready, so a stuck /
+        # never-filled rewarded ad ran out the clock in silence. Every
+        # ~5s, inspect the ad UI: if the ad offers a close/skip/claim
+        # control (no-fill close, countdown finished), click it the
+        # way a real viewer would, then keep polling for the board.
+        # The board itself is still the only unlock proof.
+        if _i % 10 == 9:
+            try:
+                _ad = _framed_reward_ad_state(page)
+            except Exception:
+                _ad = {}
+            _dbg("framed", f"unlock: ad-state @{(_i + 1) * 0.5:.0f}s "
+                            f"frames={_ad.get('frames')} "
+                            f"overlays={str(_ad.get('overlays'))[:300]} "
+                            f"close={_ad.get('close')} "
+                            f"googletag={str(_ad.get('googletag'))[:200]}")
+            _close_hit = False
+            for _fr in (page.frames or []):
+                try:
+                    _hit = _fr.evaluate("""() => {
+                      const vis = e => e && e.offsetParent !== null;
+                      const els = Array.from(document.querySelectorAll(
+                        'button, a, [role=button]')).filter(vis);
+                      const hit = els.find(e => /^(close|skip|skip ad|claim|continue|done|got it|x)$/i
+                        .test((e.innerText || e.getAttribute('aria-label') || '').trim()));
+                      if (!hit || hit.disabled) return false;
+                      hit.click(); return true;
+                    }""")
+                except Exception:
+                    _hit = False
+                if _hit:
+                    _close_hit = True
+                    _dbg("framed", "unlock: ad close/skip control "
+                                    "clicked; re-polling for board")
+                    break
+            if _close_hit:
+                page.wait_for_timeout(1500)
+                if _framed_board_ready(page):
+                    _dbg("framed", "unlock: board ready after ad close")
+                    return True
         if _i % 20 == 19:
             try:
                 _tail = (page.evaluate(
@@ -2247,8 +2336,13 @@ def _framed_try_unlock_poster(page):
             _dbg("framed", f"unlock: poll {_i + 1}/90 (~{(_i + 1) * 0.5:.0f}s) "
                             f"board_ready=False gate_up={_framed_poster_gate_up(page)} "
                             f"url={page.url[:60]} tail={_tail[:140]!r}")
+    try:
+        _ad_final = _framed_reward_ad_state(page)
+    except Exception:
+        _ad_final = {}
     _dbg("framed", "unlock: TIMEOUT after ~45s; board never ready; "
-                    f"gate_up={_framed_poster_gate_up(page)} url={page.url[:70]}")
+                    f"gate_up={_framed_poster_gate_up(page)} url={page.url[:70]} "
+                    f"ad_state={str(_ad_final)[:400]}")
     return False
 
 
@@ -2502,8 +2596,18 @@ def solve_framed_modes(page, answers):
                 _on_poster = "/poster" in (page.url or "")
             if mid == "poster" and (_on_poster
                                     or _framed_poster_gate_up(page)):
+                # Iter 7: name the exact gate + the rewarded-ad state
+                # the unlock poll observed (ad containers / close
+                # controls / googletag slots), so a still-blocked
+                # poster is blocked-with-evidence, not a vague fail.
+                try:
+                    _ad_ev = _framed_reward_ad_state(page)
+                except Exception:
+                    _ad_ev = {}
                 _ev = ("poster reward unlock never completed "
-                       "(WATCH AD gate still up)")
+                       "(WATCH AD gate still up); Google rewarded-ad "
+                       f"flow at {page.url[:60]}; ad_state="
+                       f"{str(_ad_ev)[:300]}")
             else:
                 _ev = "mode menu never opened into a game board"
             per_mode.append({"mode": mid, "answer": ans, "solved": False,
@@ -5152,6 +5256,46 @@ def _worldle_capital_fit_px(path_bbox, bounds, lat, lon):
         return None
 
 
+def _worldle_pin_probe(page, px, py):
+    """Probe the pin state at (px, py): which element is topmost at the
+    point (and whether it is inside the map), plus a BROAD marker count.
+
+    Fix-loop iter 7: the old check counted only [class*=marker/pin] /
+    [data-marker] — if the game renders its pin as an SVG circle/g (or
+    a Leaflet/MapLibre marker), a real pin was invisible to it and the
+    solver bailed before ever submitting. The broad count covers SVG
+    circles/ellipses/marker classes + Leaflet/MapLibre markers, and the
+    map-host HTML signature catches a newly added pin node. The topmost
+    element answers the other failure mode: an overlay/ad covering the
+    point swallows the real mouse click. Pure probe (no clicks)."""
+    try:
+        return page.evaluate("""(pt) => {
+          const top = document.elementFromPoint(pt.x, pt.y);
+          const inMap = top ? !!top.closest(
+            'teuteuf-geo-map, [data-projection], svg, canvas, ' +
+            '[class*=map i]') : false;
+          const q = s => document.querySelectorAll(s).length;
+          const markers = q('svg circle, svg ellipse, ' +
+            'svg [class*=marker i], svg [class*=pin i], ' +
+            '.leaflet-marker-icon, .maplibregl-marker, [data-marker], ' +
+            '[class*=marker i], [class*=pin i]');
+          let sig = '';
+          const host = top ? (top.closest(
+            'svg, teuteuf-geo-map, [data-projection]') || top) : null;
+          if (host) sig = String((host.outerHTML || '').length) + ':' +
+            String(host.childElementCount || 0);
+          return {topTag: top ? top.tagName : null,
+                  topCls: top ? (top.getAttribute('class') || '')
+                    .slice(0, 100) : '',
+                  topId: top ? (top.id || '') : '',
+                  topTestId: top ? (top.getAttribute('data-testid') || '')
+                    : '',
+                  inMap: inMap, markers: markers, sig: sig};
+        }""", {"x": float(px), "y": float(py)}) or {}
+    except Exception:
+        return {}
+
+
 def _s_worldle_play_capital(page, gid, day):
     """Capital: Q0 text/autosuggest name + Q1 map pinpoint.
 
@@ -5337,12 +5481,12 @@ def _s_worldle_play_capital(page, gid, day):
                 + (north - lat) / (north - south) * h
         _dbg(gid, f"worldle capital pin {c.get('name')} ({lat},{lon}) "
                   f"-> px=({px:.1f},{py:.1f}) projection={proj or 'equirect(bounds)'}")
-        try:
-            before_markers = page.evaluate(
-                "() => document.querySelectorAll("
-                "'[class*=marker i], [class*=pin i], [data-marker]').length")
-        except Exception:
-            before_markers = 0
+        before = _worldle_pin_probe(page, px, py)
+        before_markers = int(before.get("markers") or 0)
+        _dbg(gid, "worldle capital pin probe before: top="
+                  f"{before.get('topTag')} cls={str(before.get('topCls'))[:60]!r} "
+                  f"inMap={before.get('inMap')} markers={before_markers} "
+                  f"sig={before.get('sig')}")
         try:
             page.mouse.move(px, py)
             page.wait_for_timeout(200)
@@ -5353,16 +5497,63 @@ def _s_worldle_play_capital(page, gid, day):
             return "partial", [name], \
                 f"pin click failed ({str(e)[:80]}); name played"
         _settle(page, base=1200)
-        try:
-            after_markers = page.evaluate(
-                "() => document.querySelectorAll("
-                "'[class*=marker i], [class*=pin i], [data-marker]').length")
-        except Exception:
-            after_markers = before_markers
-        if after_markers <= before_markers:
+        after = _worldle_pin_probe(page, px, py)
+        after_markers = int(after.get("markers") or 0)
+
+        def _marker_appeared(b, a):
+            if int(a.get("markers") or 0) > int(b.get("markers") or 0):
+                return True
+            _sig_changed = bool(a.get("sig") and b.get("sig")
+                                 and a.get("sig") != b.get("sig"))
+            _top_marker = ("marker" in str(a.get("topCls") or "").lower()
+                           or "pin" in str(a.get("topCls") or "").lower()
+                           or a.get("topTag") in ("CIRCLE", "ELLIPSE"))
+            return bool(_sig_changed and _top_marker)
+
+        if not _marker_appeared(before, after) and not before.get("inMap"):
+            # The click point is covered by a NON-map element (overlay /
+            # ad / decorative layer): the real mouse click went to the
+            # cover, not the map. Fallback: dispatch a
+            # coordinate-carrying click on the picked map element
+            # itself (its handler reads clientX/clientY). Still only
+            # believed if a marker appears afterwards — never assumed.
+            _dbg(gid, "worldle capital pin: point covered by non-map "
+                      f"top={before.get('topTag')} cls="
+                      f"{str(before.get('topCls'))[:60]!r}; dispatching "
+                      "coordinate-carrying click on the map element")
+            try:
+                _dispatched = bool(page.evaluate("""(pt) => {
+                  const vis = e => e && e.offsetParent !== null;
+                  const els = Array.from(document.querySelectorAll(
+                    'teuteuf-geo-map, [data-projection], svg, canvas'))
+                    .filter(vis);
+                  if (!els.length) return false;
+                  let best = els[0], bestArea = -1;
+                  for (const el of els) {
+                    const r = el.getBoundingClientRect();
+                    const a = r.width * r.height;
+                    if (a > bestArea) { bestArea = a; best = el; }
+                  }
+                  for (const t of ['mousedown', 'mouseup', 'click'])
+                    best.dispatchEvent(new MouseEvent(t, {bubbles: true,
+                      cancelable: true, clientX: pt.x, clientY: pt.y,
+                      view: window}));
+                  return true;
+                }""", {"x": float(px), "y": float(py)}))
+            except Exception:
+                _dispatched = False
+            _dbg(gid, "worldle capital pin: fallback dispatch="
+                      f"{_dispatched}")
+            _settle(page, base=1200)
+            after = _worldle_pin_probe(page, px, py)
+            after_markers = int(after.get("markers") or 0)
+        if not _marker_appeared(before, after):
             return "partial", [name], \
                 "pin click produced no marker (markers " \
-                f"{before_markers}->{after_markers}); name played"
+                f"{before_markers}->{after_markers}); name played; " \
+                f"top={after.get('topTag')} cls=" \
+                f"{str(after.get('topCls'))[:60]!r} " \
+                f"inMap={after.get('inMap')} sig={after.get('sig')}"
         _s_worldle_submit_guarded(page, gid, "capital", ds)
         _settle(page, base=2000)
         try:
@@ -5800,6 +5991,13 @@ def _s_worldle_play_trivia(page, gid, day):
     _tabs_deferred = set()
 
     def _displayed():
+        # Fix-loop iter 7: the old scanner only saw questions ending in
+        # "?" — but the GENERAL/HISTORY fill-in-the-blank facts are
+        # STATEMENTS ending in "." ("...known by the nickname the
+        # _______."), so after the FACTS tab was answered the scan
+        # returned [] and the loop broke with 1/3 questions. Also match
+        # a line carrying a blank run (_{3,}) and return the question
+        # LINE (not the first "?" in the whole container text).
         try:
             return page.evaluate("""() => {
               const vis = e => e && e.offsetParent !== null;
@@ -5807,9 +6005,11 @@ def _s_worldle_play_trivia(page, gid, day):
               for (const e of Array.from(document.querySelectorAll(
                   'section, div, fieldset, form, li')).filter(vis)) {
                 const t = (e.innerText || '');
-                const qm = t.match(/[^\\n]{10,300}\\?/);
-                if (!qm) continue;
-                const q = qm[0].trim();
+                const lines = t.split('\\n').map(s => s.trim())
+                  .filter(s => s.length >= 10);
+                const q = lines.find(s => s.includes('?')) ||
+                  lines.find(s => /_{3,}/.test(s));
+                if (!q) continue;
                 if (seen.has(q)) continue;
                 const btns = Array.from(e.querySelectorAll(
                   'button, [role=option], [role=radio], label'))
@@ -5832,6 +6032,15 @@ def _s_worldle_play_trivia(page, gid, day):
 
     for _pass in range(6):
         shown = _displayed()
+        # The game auto-advances tabs after an answer; the scan can
+        # hit a transient empty state mid-transition. Retry a few
+        # times before concluding there is nothing to answer (iter 6
+        # broke immediately here, abandoning GENERAL/HISTORY).
+        _empty_retries = 0
+        while not shown and _empty_retries < 3:
+            _settle(page, base=1200)
+            shown = _displayed()
+            _empty_retries += 1
         if not shown:
             break
         handled_new = False
@@ -5853,9 +6062,16 @@ def _s_worldle_play_trivia(page, gid, day):
                 db_opts = {_s_worldle_trivia_norm(x)
                            for x in (f.get("answers") or [])}
                 shown_opts = {_s_worldle_trivia_norm(x) for x in opts}
-                if db_opts and shown_opts != db_opts:
+                # Iter 7: the old check demanded EXACT set equality,
+                # but the scanned container also carries chrome
+                # buttons (tabs, Give up, Next round), so a real
+                # GENERAL/HISTORY question would always "NOT click".
+                # The correct check is SUBSET: every DB answer must be
+                # among the shown options; extra chrome is ignored.
+                # The click still targets the DB answer's exact text.
+                if db_opts and not db_opts <= shown_opts:
                     _dbg(gid, "worldle trivia: displayed options "
-                              f"{opts} != DB answers[] "
+                              f"{opts} lack DB answers[] "
                               f"{f.get('answers')} for factCode={_code}; "
                               "NOT clicked")
                     skipped_norm.add(qn)
@@ -6104,7 +6320,106 @@ def _worldle_language_phrase_check(page):
             bool(_tab.get("has")), prompts, _s_worldle_visible_options(page))
 
 
-def _s_worldle_play_language(page, gid, day):
+def _worldle_language_phrase_evidence(page):
+    """Full-DOM evidence for the PHRASE sub-round (iter 7).
+
+    The old code only looked at BUTTON texts — but the phrase tab
+    shows NO buttons, so its options were invisible and the round was
+    abandoned with "no phrases source findable". The options may be
+    div/span cards, audio buttons, or aria-labelled controls. This
+    probe returns: (a) every visible text-bearing / aria-labelled /
+    media element outside nav/header/footer (tag, class, role,
+    aria-label, text, data-*), (b) the performance resource URLs the
+    game ITSELF fetched containing 'phrase' or 'language' (the
+    endpoint the game used — never a guessed URL), and (c) the parsed
+    JSON of a fetched phrase-data resource, if one exists. Pure probe
+    (no clicks)."""
+    try:
+        return page.evaluate("""() => {
+          const vis = e => e && e.offsetParent !== null;
+          const els = Array.from(document.querySelectorAll(
+            'body *:not(nav *):not(header *):not(footer *)'))
+            .filter(vis).filter(e => !e.closest('nav, header, footer'));
+          const opts = [];
+          for (const e of els) {
+            const t = (e.innerText || '').trim();
+            const aria = e.getAttribute('aria-label') || '';
+            const ds = {};
+            for (const k of Object.keys(e.dataset || {}))
+              ds[k] = e.dataset[k];
+            const isLeaf = e.children.length === 0;
+            if ((isLeaf && t && t.length < 200) || aria ||
+                /^(AUDIO|VIDEO)$/.test(e.tagName) ||
+                (e.tagName === 'BUTTON' && !t)) {
+              opts.push({tag: e.tagName,
+                         cls: String(e.className || '').slice(0, 80),
+                         role: e.getAttribute('role') || '',
+                         aria: aria.slice(0, 120), text: t.slice(0, 200),
+                         testid: e.getAttribute('data-testid') || '',
+                         data: ds});
+            }
+            if (opts.length >= 120) break;
+          }
+          let fetched = [];
+          try {
+            fetched = performance.getEntriesByType('resource')
+              .map(r => r.name || '')
+              .filter(u => /phrase|language/i.test(u));
+          } catch (e) {}
+          return {options: opts, fetched: Array.from(new Set(fetched))};
+        }""") or {}
+    except Exception:
+        return {}
+
+
+def _worldle_phrase_pick(phrase_json, prompt, lang_codes, lang_names,
+                         shown_texts):
+    """Match the displayed phrase options against phrase data the game
+    itself fetched (see _worldle_language_phrase_evidence).
+
+    Generic, never hardcoded: recursively search the JSON for an entry
+    that pairs the English prompt phrase (e.g. "My name is") with a
+    translation per target language (keyed by language code or English
+    name), where at least one translation equals a displayed option
+    text. Returns {lang_code: expected_option_text} or None when no
+    such entry exists — never a guess. Pure function (unit-tested).
+    """
+    import re as _re
+
+    def _norm(s):
+        return _re.sub(r"\s+", " ", str(s or "")).strip().lower()
+
+    _prompt_norm = _norm(prompt)
+    _shown = {_norm(t): t for t in (shown_texts or [])}
+    _found = {}
+
+    def _walk(node):
+        if isinstance(node, dict):
+            _vals = {str(k).lower(): v for k, v in node.items()}
+            _en = None
+            for _k in ("phrase", "english", "en", "text", "question"):
+                if isinstance(_vals.get(_k), str) and _vals[_k]:
+                    _en = _vals[_k]
+                    break
+            if _en and (_norm(_en) == _prompt_norm
+                        or _prompt_norm in _norm(_en)
+                        or _norm(_en) in _prompt_norm):
+                for _code, _name in zip(lang_codes or [],
+                                        lang_names or []):
+                    for _k in (str(_code).lower(), str(_name).lower()):
+                        _v = _vals.get(_k)
+                        if isinstance(_v, str) and _norm(_v) in _shown:
+                            _found[str(_code).lower()] = _shown[_norm(_v)]
+            for _v in node.values():
+                _walk(_v)
+        elif isinstance(node, list):
+            for _v in node:
+                _walk(_v)
+
+    _walk(phrase_json or {})
+    if _found and len(_found) == len(lang_codes or []):
+        return _found
+    return None
     """Spoken languages: round exists iff exactly 2 languages. Q0/Q1
     each need isCorrect count == #languages. Option clicks use the
     DISPLAY names from Intl.DisplayNames(['en'], {type:'language'})
@@ -6223,13 +6538,85 @@ def _s_worldle_play_language(page, gid, day):
     _phrase, _has_tab, _prompts, _opts = \
         _worldle_language_phrase_check(page)
     if _phrase:
+        # Iter 7: the phrase tab shows no BUTTON options, so the old
+        # code gave up here. Gather full-DOM evidence (div/span cards,
+        # audio buttons, aria labels) + the phrase/language resources
+        # the game itself fetched, and only click when the game's own
+        # fetched phrase data maps the prompt to the shown options.
+        # No mapping -> partial with the full evidence, never a guess.
+        _ev = _worldle_language_phrase_evidence(page)
+        _ev_opts = _ev.get("options") or []
+        _ev_fetched = _ev.get("fetched") or []
         _dbg(gid, "worldle language Q1 PHRASE branch: prompts="
-                  f"{_prompts} options={_opts}; NOT clicked (no phrases "
-                  "source findable)")
+                  f"{_prompts} dom_options={str(_ev_opts)[:1200]} "
+                  f"game_fetched={_ev_fetched}")
+        _picked = None
+        for _url in _ev_fetched:
+            if "phrase" not in _url.lower():
+                continue
+            try:
+                _pj = page.evaluate(
+                    "(u) => fetch(u).then(r => r.ok ? r.json() : null)"
+                    ".catch(() => null)", _url)
+            except Exception:
+                _pj = None
+            if not isinstance(_pj, (dict, list)):
+                continue
+            _picked = _worldle_phrase_pick(
+                _pj, _prompts[0] if _prompts else "", codes, names,
+                [str(o.get("text") or "") for o in _ev_opts])
+            if _picked:
+                _dbg(gid, "worldle language Q1 phrase: game-fetched "
+                          f"data {_url[:80]} maps prompt to {_picked}")
+                break
+        if _picked:
+            _all_ok = True
+            for _code in codes:
+                _want = _picked.get(str(_code).lower())
+                if not _want:
+                    _all_ok = False
+                    break
+                try:
+                    _hit = bool(page.evaluate("""(want) => {
+                      const vis = e => e && e.offsetParent !== null;
+                      const norm = s => (s||'').toLowerCase()
+                        .replace(/\\s+/g,' ').trim();
+                      const els = Array.from(document.querySelectorAll(
+                        'body *')).filter(vis).filter(
+                        e => !e.closest('nav, header, footer'));
+                      const hit = els.find(e => norm(e.innerText) === norm(want) &&
+                        e.children.length === 0) ||
+                        els.find(e => norm(e.innerText) === norm(want));
+                      if (!hit) return false;
+                      hit.click(); return true;
+                    }""", _want))
+                except Exception:
+                    _hit = False
+                _dbg(gid, f"worldle language Q1 phrase option {_want!r} "
+                          f"clicked={_hit}")
+                if not _hit:
+                    _all_ok = False
+                    break
+                _settle(page, base=800)
+            if _all_ok:
+                _s_worldle_submit_guarded(page, gid, "spokenLanguages", ds)
+                _settle(page, base=1500)
+                _gs = _s_worldle_day_guesses(page, "language-guesses", ds)
+                _t1, _c1 = _s_worldle_language_counts(_gs, 1)
+                if _c1 == len(names):
+                    return "attempted", list(names), \
+                        "Q0 language-pick + Q1 phrase played from the " \
+                        f"game's own fetched phrase data ({_picked})"
+                return "partial", list(names), \
+                    "Q1 phrase options clicked from the game's own " \
+                    f"fetched phrase data ({_picked}) but store shows " \
+                    f"q1 correct={_c1}/{len(names)}"
         return "partial", list(names), \
             "Q0 language-pick played; Q1 is a phrase question " \
-            f"(prompts={_prompts} options={_opts}); recorded partial " \
-            "without clicking"
+            f"(prompts={_prompts}); full-DOM options={str(_ev_opts)[:800]}; " \
+            f"game-fetched phrase/language resources={_ev_fetched}; " \
+            "no game-fetched phrase mapping found — recorded partial " \
+            "without clicking (no phrases data source verified)"
     ok1, det1 = _pick_question(1)
     _dbg(gid, f"worldle language Q1: ok={ok1} ({det1})")
     if not ok1:
@@ -6638,18 +7025,25 @@ def _s_worldle_play_populous(page, gid, day):
 
 def _worldle_area_parse_display(texts):
     """Parse the area stepper's displayed value from the candidate
-    texts {common, between, roleBtn, store, body}.
+    texts {common, between, roleBtn, store, body} plus the iter-7
+    keys {commonText, betweenText, pure, aria}.
 
     Priority: the COMMON ANCESTOR of both steppers (the widget
     container), then the element BETWEEN the steppers in DOM order,
-    then the DIV role=button, then the game store, then the body.
-    Unit-qualified numbers ("56,785 km2") win over bare numbers; bare
-    numbers must be >= 100 (tab labels "1."/"2." and other small
-    counters are not the display). Returns (value, source) or
+    then the DIV role=button, then the textContent variants (catch
+    SVG <text> / CSS-hidden numbers innerText misses), then the
+    PURE-number leaf elements inside the widget and aria/data values,
+    then the game store, then the body. Unit-qualified numbers
+    ("56,785 km2") win over bare numbers; bare numbers must be >= 100
+    (tab labels "1."/"2." and other small counters are not the
+    display) — EXCEPT the pure/aria widget candidates, whose elements'
+    whole text IS a number inside the widget, so any magnitude counts
+    (the display may start at 0). Returns (value, source) or
     (None, None). Pure function (unit-tested on fixture DOM texts).
     """
     import re as _re
-    for src in ("common", "between", "roleBtn", "store", "body"):
+    for src in ("common", "between", "roleBtn", "commonText",
+                "betweenText", "pure", "aria", "store", "body"):
         txt = str((texts or {}).get(src) or "")
         if not txt:
             continue
@@ -6663,7 +7057,20 @@ def _worldle_area_parse_display(texts):
                 pass
         if units:
             return max(units), src + ":unit"
-        if src in ("common", "between", "roleBtn"):
+        if src in ("pure", "aria"):
+            bare = []
+            for _line in txt.split("\n"):
+                _line = _line.strip()
+                if _re.fullmatch(r"\d[\d,]*", _line):
+                    try:
+                        bare.append(int(_line.replace(",", "")))
+                    except Exception:
+                        pass
+            if bare:
+                return max(bare), src + ":pure"
+            continue
+        if src in ("common", "between", "roleBtn", "commonText",
+                   "betweenText"):
             bare = []
             for _x in _re.findall(r"\b\d[\d,]{2,}\b", txt):
                 try:
@@ -6699,11 +7106,26 @@ def _s_worldle_play_area_stepper(page, gid, size):
             e => !(e.innerText || '').trim() && !skip.test(e.innerText || ''));
           const parent = steppers.length ?
             (steppers[0].closest('div, section, form') || null) : null;
+          // Iter 7: capture the widget container's full HTML so a
+          // still-unreadable display leaves real evidence, not just
+          // the two button tags.
+          let widgetHtml = '';
+          if (steppers.length >= 2) {
+            const anc = el => { const a = []; let n = el;
+              while (n) { a.push(n); n = n.parentElement; } return a; };
+            const a0 = anc(steppers[0]);
+            for (const n of anc(steppers[1]))
+              if (a0.includes(n)) {
+                widgetHtml = (n.outerHTML || '').slice(0, 3000);
+                break;
+              }
+          }
           return {n: steppers.length,
                   html: steppers.map(e => (e.outerHTML || '').slice(0, 300)),
                   boxes: steppers.map(e => { const r = e.getBoundingClientRect();
                     return {x: r.x, y: r.y, w: r.width, h: r.height}; }),
                   parentText: parent ? (parent.innerText || '') : '',
+                  widgetHtml: widgetHtml,
                   body: (document.body.innerText || '')};
         }""") or {}
     except Exception:
@@ -6762,10 +7184,53 @@ def _s_worldle_play_area_stepper(page, gid, size):
                     store += k + ':' + localStorage.getItem(k) + ';';
                 }
               } catch (e) {}
+              // Iter 7: innerText misses numbers rendered as SVG
+              // <text> or in CSS-hidden nodes, and a display that
+              // starts at 0 / below 100 never passed the bare >=100
+              // filter. Also collect textContent variants, the
+              // pure-number LEAF elements inside the widget, and
+              // aria/data values on widget elements.
+              let commonText = '', betweenText = '', pure = [],
+                aria = [];
+              const lca2 = (() => {
+                if (st.length < 2) return null;
+                const anc = el => { const a = []; let n = el;
+                  while (n) { a.push(n); n = n.parentElement; } return a; };
+                const a0 = anc(st[0]);
+                for (const n of anc(st[1])) if (a0.includes(n)) return n;
+                return null;
+              })();
+              if (lca2) {
+                commonText = lca2.textContent || '';
+                const p = st[0].parentElement;
+                if (p && p === st[1].parentElement) {
+                  const kids = Array.from(p.children);
+                  const i0 = kids.indexOf(st[0]), i1 = kids.indexOf(st[1]);
+                  if (i0 >= 0 && i1 >= 0)
+                    betweenText = kids.slice(Math.min(i0, i1) + 1,
+                      Math.max(i0, i1)).map(e => e.textContent || '')
+                      .join('\\n');
+                }
+                for (const el of lca2.querySelectorAll('*')) {
+                  const t = (el.textContent || '').trim();
+                  if (el.children.length === 0 &&
+                      /^[\\d,]+(\\.\\d+)?\\s*(km²|km2|sq\\.?\\s*km|square km|km)?$/.test(t) &&
+                      t.replace(/[^\\d]/g, '').length)
+                    pure.push(t);
+                  for (const a of ['aria-valuenow', 'aria-valuetext',
+                                   'data-value', 'value']) {
+                    const v = el.getAttribute(a);
+                    if (v && /^[\\d,]+$/.test(v.trim())) aria.push(v.trim());
+                  }
+                }
+              }
               return {common: common, between: between,
                       roleBtn: rb ? (rb.innerText || rb.textContent || '') : '',
                       store: store,
-                      body: (document.body.innerText || '')};
+                      body: (document.body.innerText || ''),
+                      commonText: commonText, betweenText: betweenText,
+                      pure: Array.from(new Set(pure)).join('\\n'),
+                      aria: Array.from(new Set(aria)).join('\\n')};
             }""") or {}
         except Exception:
             texts = {}
@@ -6777,10 +7242,29 @@ def _s_worldle_play_area_stepper(page, gid, size):
 
     start = _read_display()
     if start is None:
+        # The display may only render after the first interaction
+        # (lazy widget): click each stepper once and re-read before
+        # giving up. The drive logic below re-derives direction from
+        # the (new) start, so the moved value is still handled.
+        for _bi in (0, 1):
+            try:
+                _b = steppers[_bi]
+                page.mouse.click(_b["x"] + _b["w"] / 2,
+                                 _b["y"] + _b["h"] / 2)
+                page.wait_for_timeout(600)
+            except Exception:
+                pass
+            start = _read_display()
+            if start is not None:
+                _dbg(gid, "worldle area display appeared after "
+                          f"probe-click {_bi}: {start}")
+                break
+    if start is None:
         return False, ("area stepper: no numeric display found; "
                        f"html={probe.get('html')}; parentText="
                        f"{(probe.get('parentText') or '')[:300]!r}; body="
-                       f"{(probe.get('body') or '')[:400]!r}")
+                       f"{(probe.get('body') or '')[:400]!r}; widgetHtml="
+                       f"{(probe.get('widgetHtml') or '')[:1500]!r}")
     # Probe-click candidate 0: watch which way the display moves.
     plus_idx = None
     try:
