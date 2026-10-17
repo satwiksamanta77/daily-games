@@ -276,6 +276,69 @@ async def block_ads(route):
 FILLERS = {5: "1+2=3", 6: "12/4=3", 7: "1+23=24", 8: "12+34=46", 10: "1+23+45=69"}
 CUT_MODES = set()   # modes that failed verify; their chapters are cut
 
+# --- Iteration 3: artifact debug log / served-date / chapter helpers ---
+# play_mode runs in the solver subprocess; the runner only prints the last
+# 2000 chars of its stdout (one buffered dump, no timing). Per-mode guess
+# lines therefore go through _nlog: timestamped, flushed to stdout AND
+# appended to videos/nerdle/debug_<date>.log, which the runner opens in
+# append mode — the two writers coexist in the one artifact log.
+VIDEO_DIR = None    # set by main() to videos/nerdle (play_mode's scope)
+_DEBUG_LOG = None   # Path to videos/nerdle/debug_<date>.log
+_REC_T0 = None      # time.time() when the recording/mode loop started
+_FIRST_TYPE_T = None  # seconds from _REC_T0 to the first successful typing
+SERVED = {}         # mode_id -> served-date evidence (see SERVED_JS)
+
+
+def _nlog(msg):
+    """Timestamped line -> stdout (flushed, not buffered) + artifact debug log."""
+    import datetime as _dt
+    line = f"[{_dt.datetime.now().isoformat(timespec='seconds')}] [nerdle] {msg}"
+    print(line, flush=True)
+    try:
+        if _DEBUG_LOG is not None:
+            with open(_DEBUG_LOG, "a", encoding="utf-8") as _fh:
+                _fh.write(line + "\n")
+    except Exception:
+        pass
+
+
+def _mark_first_type():
+    """Record the first successful typing (for autocrop's first_typing_s)."""
+    global _FIRST_TYPE_T
+    if _FIRST_TYPE_T is None and _REC_T0 is not None:
+        _FIRST_TYPE_T = time.time() - _REC_T0
+
+
+def compute_nerdle_chapter_starts(segments):
+    """Chapter start (pre-intro timeline) per kept mode.
+
+    segments: [(card_dur, gameplay_dur), ...] in final-video order.
+    chapter[i] = sum_{j<i} (card_dur_j + gameplay_dur_j) — the accumulator
+    fix for the iteration-2 bug where `cursor` never advanced per mode and
+    all nine mode chapters landed at 20–40 s of a ~442 s video.
+    """
+    starts, t = [], 0.0
+    for card_dur, seg_dur in segments:
+        starts.append(t)
+        t += float(card_dur) + float(seg_dur)
+    return starts
+
+
+SERVED_JS = """
+() => { try {
+  const gs = JSON.parse(localStorage.getItem('gameState') || 'null');
+  const keys = (gs && typeof gs === 'object') ? Object.keys(gs) : [];
+  const dateish = {};
+  for (const k of keys) {
+    if (/date|day|puzzle|number|seed/i.test(k)) dateish[k] = gs[k];
+  }
+  return { page_local: new Date().toString(),
+           page_iso: new Date().toISOString(),
+           tz_offset_min: new Date().getTimezoneOffset(),
+           gameState_keys: keys, dateish: dateish };
+} catch (e) { return { error: String(e) }; } }
+"""
+
 WIN_JS = """
 ({cols, boards}) => {
   const t = document.body.innerText || '';
@@ -757,9 +820,12 @@ def _seed_history(state):
 async def play_mode(page, mode, script_dir, official=None):
     """Solve ONE mode: algorithm first (solver-worker entropy guesses);
     official day's answer only when rows_left <= 2 (or solver is empty).
-    Returns (typed_count, expected_count, signal)."""
-    print(f"\n=== {mode['name']} ({mode['url']}) ===")
+    Returns (typed_count, expected_count, signal). typed counts probes +
+    official guesses; expected counts official equations only — they are
+    NOT comparable (see the counts_note in result.json)."""
+    _nlog(f"=== {mode['name']} ({mode['url']}) ===")
     eqs = list((official or {}).get(mode["id"]) or [])
+    official_eqs = list(eqs)  # target-date official list, BEFORE site merge
     cols = mode["len"]
     boards_n = mode.get("boards", 1)
     typed = 0
@@ -771,7 +837,7 @@ async def play_mode(page, mode, script_dir, official=None):
     _seed = int(os.environ.get("NERDLE_SEED", "0") or 0) or classic_puzzle_number(
         _target_date())
     min_probes = 2 + (_seed % 2) + (1 if boards_n > 1 else 0)
-    print(f"[{mode['id']}] min_probes={min_probes}")
+    _nlog(f"[{mode['id']}] min_probes={min_probes}")
     try:
         async def on_resp(r):
             try:
@@ -858,12 +924,14 @@ async def play_mode(page, mode, script_dir, official=None):
                     await page.keyboard.type(eqs[0], delay=200)
                     await page.keyboard.press("Enter")
                     await page.wait_for_timeout(3000)
+                _mark_first_type()
                 typed = 1
         elif not state:
             print(f"[{mode['id']}] no pb-grid found, legacy direct typing")
             await focus_grid(page)
             for eq in eqs:
                 await page.keyboard.type(eq, delay=200)
+                _mark_first_type()
                 await page.keyboard.press("Enter")
                 await page.wait_for_timeout(2500)
                 typed += 1
@@ -980,6 +1048,8 @@ async def play_mode(page, mode, script_dir, official=None):
                         break
                 prev = list(prev_counts)
                 state, counts, ok = await type_guess(page, nxt, cols, prev)
+                if ok:
+                    _mark_first_type()
                 if not ok:
                     print(f"[{mode['id']}] board did not react to {nxt!r}, stopping")
                     break
@@ -996,7 +1066,7 @@ async def play_mode(page, mode, script_dir, official=None):
                         if last is not None:
                             hists.setdefault(b, []).append((nxt, list(last)))
                 prev_counts = counts
-                print(f"[{mode['id']}] guess {typed}: {nxt} "
+                _nlog(f"[{mode['id']}] guess {typed}: {nxt} "
                       f"rows_left~{rows_left - 1} hist={len(hists.get(first_open, []))}")
             if not signal:
                 fresh = await read_state(page, cols, tries=3)
@@ -1021,11 +1091,44 @@ async def play_mode(page, mode, script_dir, official=None):
             splash_now = bool(await page.evaluate(SPLASH_JS))
         except Exception:
             url_now, splash_now = "?", "?"
-        print(f"[{mode['id']}] shot@ {url_now} splash={splash_now} won={bool(signal)}")
+        _nlog(f"[{mode['id']}] shot@ {url_now} splash={splash_now} won={bool(signal)}")
+        # Served-date evidence: what the SITE served (page clock + any
+        # date-ish gameState fields) and whether the site's own solution
+        # (answer file / gameState) matches the TARGET date's official
+        # equation list. matches_target_official=None means the site
+        # exposed no solution to compare — unknown, NOT verified.
+        # A False means the served solution differs from the target-day
+        # official list (wrong-day board or worker-list error) — it is
+        # evidence, not a verified day claim.
         try:
-            await page.screenshot(path=str(video_dir / f"shot_{mode['id']}.png"))
+            _served = await page.evaluate(SERVED_JS)
         except Exception:
-            pass
+            _served = {"error": "evaluate failed"}
+        _site_only = [e for e in (site_eqs + gs_eqs) if e]
+        _matches = None
+        if _site_only and official_eqs:
+            _matches = any(e in official_eqs for e in _site_only)
+        SERVED[mode["id"]] = {
+            "page_local": _served.get("page_local"),
+            "page_iso": _served.get("page_iso"),
+            "tz_offset_min": _served.get("tz_offset_min"),
+            "gameState_dateish": _served.get("dateish"),
+            "site_solutions": _site_only,
+            "matches_target_official": _matches}
+        _nlog(f"[{mode['id']}] served page_local={_served.get('page_local')} "
+              f"gameState_dateish={_served.get('dateish')} "
+              f"site_solutions={_site_only} matches_target_official={_matches}")
+        try:
+            # VIDEO_DIR is the resolved videos/nerdle dir (set by main).
+            # This used to reference bare `video_dir`, undefined in this
+            # scope — the NameError was swallowed and NO per-mode
+            # screenshot was ever saved.
+            _shot_dir = VIDEO_DIR or (Path(script_dir) / "videos" / "nerdle")
+            _shot_p = _shot_dir / f"shot_{mode['id']}.png"
+            await page.screenshot(path=str(_shot_p))
+            _nlog(f"[{mode['id']}] shot saved: {_shot_p}")
+        except Exception as _e:
+            _nlog(f"[{mode['id']}] shot failed: {str(_e)[:120]}")
         if not signal:
             try:
                 won = await page.evaluate(WIN_JS, {"cols": cols, "boards": boards_n})
@@ -1033,7 +1136,8 @@ async def play_mode(page, mode, script_dir, official=None):
                     signal = "won"
             except Exception as e:
                 print(f"[{mode['id']}] win check failed: {e}")
-        print(f"[{mode['id']}] typed {typed}/{len(eqs)} won={bool(signal)}")
+        _nlog(f"[{mode['id']}] typed {typed} (probes+official guesses) "
+              f"official={len(eqs)} won={bool(signal)}")
         return typed, len(eqs), signal
     except Exception as e:
         print(f"[{mode['id']}] play failed: {e}")
@@ -1043,11 +1147,18 @@ async def play_mode(page, mode, script_dir, official=None):
 
 
 async def main():
+    global VIDEO_DIR, _DEBUG_LOG, _REC_T0
     script_dir = Path(__file__).parent
-    video_dir = script_dir / "videos"
-    video_dir.mkdir(exist_ok=True)
+    # Iteration 3: write into videos/nerdle/ — the dir the workflow uploads
+    # telemetry_*.json / *.mp4 / shot_win.png FROM. The old flat videos/
+    # location is why telemetry + gameplay_1080.mp4 never reached the
+    # artifact: the runner only moves the final + result.json.
+    video_dir = script_dir / "videos" / "nerdle"
+    video_dir.mkdir(parents=True, exist_ok=True)
+    VIDEO_DIR = video_dir
     target = _target_date()
     date_key = target.strftime("%Y-%m-%d")
+    _DEBUG_LOG = video_dir / f"debug_{date_key}.log"
     today = target.strftime("%B %d, %Y")
     date_short = target.strftime("%b %d")
     day_num = target.timetuple().tm_yday
@@ -1113,6 +1224,7 @@ async def main():
 
         page.on("dialog", _dismiss)
         t0 = time.time()
+        _REC_T0 = t0
         starts = []
         results = []
         for i, m in enumerate(NERDLE_MODES):
@@ -1126,6 +1238,24 @@ async def main():
             print("[nerdle] browser_state.json saved")
         except Exception as _e:
             print(f"[nerdle] state save failed: {str(_e)[:120]}")
+        # shot_win.png for the artifact (the workflow uploads shot_win.png):
+        # screenshot the last mode's page while it is still open; fall back
+        # to the last won mode's per-mode shot.
+        try:
+            await page.screenshot(path=str(video_dir / "shot_win.png"))
+            _nlog("[nerdle] shot_win.png saved (last mode page)")
+        except Exception as _e:
+            _nlog(f"[nerdle] shot_win screenshot failed: {str(_e)[:120]}")
+            for _mid in reversed([m["id"] for m in NERDLE_MODES]):
+                _cand = video_dir / f"shot_{_mid}.png"
+                if _cand.exists():
+                    try:
+                        import shutil as _sh
+                        _sh.copy(str(_cand), str(video_dir / "shot_win.png"))
+                        _nlog(f"[nerdle] shot_win.png fallback copied from {_cand.name}")
+                    except Exception:
+                        pass
+                    break
         await context.close()
         await browser.close()
 
@@ -1148,8 +1278,12 @@ async def main():
         if QP_AVAILABLE:
             (video_dir / "telemetry_nerdle.json").write_text(
                 json.dumps(QP.ev_all(), indent=1), encoding="utf-8")
-    except Exception:
-        pass
+            # videos/nerdle/ is the dir the workflow uploads
+            # telemetry_*.json from — this file used to land in flat
+            # videos/ and was never picked up.
+            _nlog(f"[nerdle] telemetry -> {video_dir / 'telemetry_nerdle.json'}")
+    except Exception as _e:
+        _nlog(f"[nerdle] telemetry write failed: {str(_e)[:120]}")
     chapters = []
     # Wordle-parity assembly (moviepy) + uniform music
     if final and MOVIEPY_AVAILABLE and QP_AVAILABLE:
@@ -1157,12 +1291,33 @@ async def main():
             try:
                 if QP_AVAILABLE:
                     _pol = QP.polish_gameplay(
-                        str(final), str(video_dir / "gameplay_1080.mp4"))
+                        str(final), str(video_dir / "gameplay_1080.mp4"),
+                        first_typing_s=_FIRST_TYPE_T)
                     if _pol and str(_pol) != str(final):
                         final = _pol
-                        print(f"[nerdle] gameplay polished -> {_pol}")
+                        _nlog(f"[nerdle] gameplay polished -> {_pol}")
+                    if not (video_dir / "gameplay_1080.mp4").exists():
+                        # Polish returned the raw capture (card composite
+                        # fell back): still produce the artifact gameplay
+                        # file with a plain 1920x1080 re-encode so the
+                        # artifact is not missing it again.
+                        _fb = subprocess.run(
+                            ["ffmpeg", "-y", "-v", "error", "-i", str(final),
+                             "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,"
+                             "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p,fps=24",
+                             "-c:v", "libx264", "-preset", "medium", "-crf", "17",
+                             "-pix_fmt", "yuv420p", "-r", "24", "-c:a", "aac",
+                             str(video_dir / "gameplay_1080.mp4")],
+                            capture_output=True, text=True, timeout=1800)
+                        if _fb.returncode == 0 and (video_dir / "gameplay_1080.mp4").exists():
+                            final = str(video_dir / "gameplay_1080.mp4")
+                            _nlog("[nerdle] gameplay fallback re-encode -> gameplay_1080.mp4")
+                        else:
+                            _nlog(f"[nerdle] gameplay fallback failed: {(_fb.stderr or '')[:160]}")
             except Exception as _e:
-                print(f"[nerdle] polish skipped: {str(_e)[:100]}")
+                # Full message to the debug log — the old [:100] truncation
+                # is what hid the TimeoutExpired root cause last run.
+                _nlog(f"[nerdle] polish skipped: {_e}")
             gameplay = VideoFileClip(str(final))
             gd = float(gameplay.duration or 0)
             parts, cursor = [], 0.0
@@ -1189,31 +1344,42 @@ async def main():
                 cuts.append((acc * gd / tw, (acc + w) * gd / tw))
                 acc += w
 
-            mode_parts, card_sec = [], 0.0
+            # Chapter times (iteration-3 accumulator fix): chapter[i] =
+            # sum over kept modes j<i of (card_dur_j + segment_dur_j).
+            # The old code appended (cursor + card_sec) with `cursor`
+            # stuck at 0.0 for the whole loop, so all nine mode chapters
+            # landed at 20–40 s of a ~442 s video.
+            mode_parts = []
+            emitted = []  # (mode, card_dur, seg_dur) in final-video order
             for i, m in enumerate(NERDLE_MODES):
                 if m["id"] in CUT_MODES:
-                    print(f"[nerdle] cutting unwon mode chapter: {m['id']}")
+                    _nlog(f"[nerdle] cutting unwon mode chapter: {m['id']}")
                     continue
                 a, b = cuts[i]
                 if b - a < 0.5:
                     continue
-                chapters.append((cursor + card_sec, f"{m['name']} Solve"))
+                card_dur = 0.0
                 cp = video_dir / f"mode_{i}.png"
                 try:
                     QP.generate_mode_card(str(cp), "Nerdle",
                                           m.get("name", f"Mode {i + 1}"),
                                           f"Round {i + 1} of {len(NERDLE_MODES)}")
                     mode_parts.append(_img(str(cp), 2.5))
-                    card_sec += 2.5
+                    card_dur = 2.5
                 except Exception as _e:
-                    print(f"[nerdle] mode card failed: {str(_e)[:90]}")
+                    _nlog(f"[nerdle] mode card failed: {str(_e)[:90]}")
                 mode_parts.append(gameplay.subclip(a, b))
+                emitted.append((m, card_dur, b - a))
+            for _s, (_m, _cd, _sd) in zip(
+                    compute_nerdle_chapter_starts(
+                        [(cd, sd) for (_m, cd, sd) in emitted]), emitted):
+                chapters.append((_s, f"{_m['name']} Solve"))
             if mode_parts:
                 parts.extend(mode_parts)
-                cursor += gd + card_sec
+                cursor = sum(cd + sd for (_m, cd, sd) in emitted)
             else:
                 parts.append(gameplay)
-                cursor += gd
+                cursor = gd
             # analysis slides (reuse quordle def/freq/facts with nerdle equations as words)
             # Skipped: they print answers up front and say QUORDLE. The video
             # is mode cards + real solves only.
@@ -1230,6 +1396,7 @@ async def main():
                     print(f"[nerdle] intro prepended ({_ic.duration:.1f}s)")
                 except Exception as e:
                     print(f"[nerdle] intro skipped: {str(e)[:120]}")
+            _nlog(f"[nerdle] chapters: {[(round(float(s), 1), t) for s, t in chapters]}")
             for _mp3 in ("song1.mp3", "song2.mp3"):
                 _sp = script_dir / _mp3
                 if _sp.exists():
@@ -1282,14 +1449,30 @@ async def main():
     # (previously result.json had no chapters, so the runner invented
     # (0, mode) entries) and the official equations per mode (previously
     # nothing recorded the answers). typed counts probes + official guesses;
-    # expected counts official equations only — they are NOT comparable.
-    (video_dir / f"result_{date_key}.json").write_text(_json.dumps(
-        {"game": "nerdle", "date": date_key, "solved": all_solved,
+    # expected counts official equations only — they are NOT comparable,
+    # so the evidence must not present them as a fraction: judge a mode by
+    # signal == "won" only (see counts_note).
+    _res_doc = {"game": "nerdle", "date": date_key, "solved": all_solved,
          "modes": [{"id": mid, "typed": t, "expected": e, "signal": s}
                    for mid, t, e, s in results],
+         "counts_note": ("typed counts probes+official guesses; expected "
+                         "counts official equations only; they are NOT "
+                         "comparable — judge a mode by signal=='won' only."),
          "chapters": [[round(float(s), 1), str(t)] for s, t in chapters],
          "equations": {str(m["id"]): list((official or {}).get(m["id"]) or [])
-                       for m in NERDLE_MODES}}, indent=1))
+                       for m in NERDLE_MODES},
+         "served": SERVED,
+         "first_typing_s": _FIRST_TYPE_T}
+    (video_dir / f"result_{date_key}.json").write_text(_json.dumps(_res_doc, indent=1))
+    # The runner's run_nerdle_external only reads the FLAT
+    # videos/result_<date>.json (it never looks in videos/nerdle/), so
+    # leave an identical copy there for runner pickup — it renames that
+    # copy into videos/nerdle/ afterwards.
+    try:
+        (script_dir / "videos" / f"result_{date_key}.json").write_text(
+            _json.dumps(_res_doc, indent=1))
+    except Exception as _e:
+        _nlog(f"[nerdle] flat result copy failed: {str(_e)[:120]}")
     print("Done!" if all_solved else "NOT SOLVED — see result json")
     import sys as _sys
     _sys.exit(0 if all_solved else 1)

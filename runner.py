@@ -65,6 +65,18 @@ HEADLESS = os.environ.get("HEADLESS", "true").lower() == "true"
 
 _DBG_FH = {}
 _RELOADS = {}
+# Played (actually typed/accepted) guesses per game, set by solvers as they
+# play. run_one builds chapters / result.json `guesses` / report from this
+# when present, so a rejected-and-replaced guess is never reported as played
+# (contexto's 5-vs-6: plan said 6, only 5 were ever accepted).
+_PLAYED = {}
+# Words the site rejected per game, surfaced in evidence/report (was silently
+# dropped: _report_game printed rejected=[] even when a rejection happened).
+_REJECTED = {}
+# run_one START wall-clock per game (for START->first-typing measurement).
+_RUN_T0 = {}
+# gid -> seconds from START to first typed character (logged once per run).
+_FIRST_TYPE = {}
 
 
 def _count_reload(gid, why):
@@ -271,13 +283,16 @@ def thumb(out, game, date_str, answer_txt):
 ENTER_LABELS = ("ENTER", "Enter", "enter", "SUBMIT", "Submit")
 
 
-def _polish_gameplay(src, out_path, crf=17):
+def _polish_gameplay(src, out_path, crf=17, gid=None):
     """Delegate to the shared quordle_parity polish + Recordly-grade cursor
     overlay (native-size spring-smoothed arrow fed by the input-telemetry
     bus). Kept as a thin wrapper so every existing call site - including the
-    framed assembler - gets the new cursor for free."""
+    framed assembler - gets the new cursor for free. Passes the run's
+    first-typing time through for autocrop (leading-idle cut)."""
     try:
-        out = QP.polish_gameplay(str(src), str(out_path), crf=crf)
+        _ft = _FIRST_TYPE.get(gid) if gid else None
+        out = QP.polish_gameplay(str(src), str(out_path), crf=crf,
+                                 first_typing_s=_ft)
         _lp = QP.LAST_POLISH or {}
         print(f"[polish] done mode={_lp.get('mode')} clips={_lp.get('clips')} "
               f"events={_lp.get('events')} out={out}")
@@ -503,7 +518,19 @@ def _human_mouse_to(page, el):
 
 
 def _type_like_a_person(page, text, base_delay=150):
-    """Type `text` one key at a time with human timing and a settled cursor."""
+    """Type `text` one key at a time with human timing and a settled cursor.
+
+    Typing speed / delays are UNCHANGED (user-approved). This only records
+    START->first-typing once per run, for the startup-delay measurement.
+    """
+    try:
+        _gid_ft = getattr(page, "_qp_gid", None)
+        if _gid_ft and _gid_ft not in _FIRST_TYPE and _gid_ft in _RUN_T0:
+            _el = time.time() - _RUN_T0[_gid_ft]
+            _FIRST_TYPE[_gid_ft] = round(_el, 1)
+            _dbg(_gid_ft, f"START->first-typing {_el:.1f}s")
+    except Exception:
+        pass
     try:
         page.evaluate("() => { window.__QP_HOLD = 1; window.__QP_HOLD_T = Date.now(); }")
     except Exception:
@@ -665,7 +692,7 @@ def _dismiss_dialogs(page, rounds=4):
                 for el in page.query_selector_all(sel)[:4]:
                     if el.is_visible():
                         el.evaluate("e => e.click()")
-                        page.wait_for_timeout(500)
+                        page.wait_for_timeout(250)
                         clicked = True
             except Exception:
                 continue
@@ -682,14 +709,14 @@ def _dismiss_dialogs(page, rounds=4):
                 }""")
                 if box:
                     page.mouse.click(box["x"], box["y"])
-                    page.wait_for_timeout(600)
+                    page.wait_for_timeout(300)
                     clicked = True
             except Exception:
                 pass
         if not clicked:
             try:
                 page.keyboard.press("Escape")
-                page.wait_for_timeout(400)
+                page.wait_for_timeout(250)
             except Exception:
                 pass
     return page
@@ -818,9 +845,25 @@ def _enable_flutter_semantics(page):
         return False
 
 
-def _close_modals(page):
-    _enable_flutter_semantics(page)
-    _dismiss_dialogs(page)
+def _close_modals(page, _force=False):
+    """One modal sweep per page state (DEDUP, fix-loop iter 3).
+
+    run_one calls this once after the ready-wait; every solver also calls it
+    first, so without dedup every game paid for TWO full sweeps (the double
+    modal sweep in the startup-delay analysis). Later calls on the same page
+    are no-ops unless _force=True (after a reload, when modals can return).
+    Faster too: fewer rounds, shorter per-click waits, break-early when no
+    dialog is found, canvas-dialog sweep cut to 1 try, and the second
+    semantics activation skipped when the first succeeded. No ad waits:
+    nothing here waits for ads to load.
+    """
+    try:
+        if getattr(page, "_qp_modals_closed", False) and not _force:
+            return page
+    except Exception:
+        pass
+    _sem = _enable_flutter_semantics(page)
+    _dismiss_dialogs(page, rounds=2)
     # colorfle/how-to X is a bare span/div — click top-right corner region
     try:
         for sel in ("text=How to play",):
@@ -832,10 +875,16 @@ def _close_modals(page):
                     page.wait_for_timeout(500)
     except Exception:
         pass
-    _dismiss_dialogs(page, rounds=2)
+    _dismiss_dialogs(page, rounds=1)
     _close_generic_howto(page)
-    _dismiss_canvas_dialog(page)
-    _enable_flutter_semantics(page)
+    _dismiss_canvas_dialog(page, tries=1)
+    if not _sem:
+        _enable_flutter_semantics(page)
+    try:
+        page._qp_modals_closed = True
+    except Exception:
+        pass
+    return page
 
 
 def _close_generic_howto(page):
@@ -847,7 +896,7 @@ def _close_generic_howto(page):
     heading and then use the sheet's own close affordance, with Escape and a
     click on the backdrop as fallbacks.
     """
-    for _ in range(4):
+    for _ in range(2):
         try:
             hit = page.evaluate("""() => {
               // 1) an explicit close control inside the open sheet.
@@ -983,6 +1032,318 @@ def _close_betweenle_help(page):
             break
     return page
 
+
+
+# ---------------- fix-loop iter 3 helpers ----------------
+# Ready selectors: the game's own input/board element. run_one waits for
+# one of these instead of a fixed 6 s sleep (fast games proceed as soon as
+# the board is there; slow boots get a bounded wait, then the solver's own
+# waits take over — never a blind sleep + blind modal sweep).
+_READY_SELECTORS = {
+    "betweenle": ["button:has-text('DAILY WORD')", "canvas"],
+    "colordle": ["input[placeholder='Guess your color here']"],
+    "colorfle": ["button:has-text('ENTER')"],
+    "searchle": ["input"],
+    "semantle": ["input[placeholder='Enter a word...']"],
+    "phrazle": [".wordhunt-row"],
+    "canuckle": ["flt-glass-pane", "canvas"],
+    "phoodle": [".letter-container", "input"],
+    "contexto": ["input.word"],
+    "worldle": ["input"],
+    "globle": ["input[name=guess]"],
+    "waffle": [".tile"],
+    "worgle": ["game-app"],
+    "countryle": ["#rm-app-frame", "iframe"],
+    "batterup": ["input"],
+    "marveldle": ["input"],
+}
+_READY_TIMEOUTS = {"canuckle": 30000, "countryle": 30000, "waffle": 20000}
+
+
+def _wait_ready(page, gid):
+    """Wait for the game's input/board selector (bounded, fail-fast log).
+
+    Returns True when a ready selector attached. On timeout it logs and
+    returns False — the solver's own waits still handle a slow boot, so a
+    timeout here never aborts a run; it just stops the fixed-sleep tax.
+    """
+    import time as _t
+    sels = _READY_SELECTORS.get(gid) or ["input", "button", "canvas"]
+    budget = _READY_TIMEOUTS.get(gid, 15000) / 1000.0
+    t0 = _t.time()
+    for sel in sels:
+        left = budget - (_t.time() - t0)
+        if left <= 0:
+            break
+        try:
+            page.wait_for_selector(sel, state="attached",
+                                   timeout=max(500, min(4000, left * 1000)))
+            _dbg(gid, f"ready selector {sel!r} after {_t.time() - t0:.1f}s")
+            return True
+        except Exception:
+            continue
+    _dbg(gid, f"ready selector not seen after {_t.time() - t0:.1f}s "
+              f"(budget {budget:.0f}s); proceeding to solver")
+    return False
+
+
+def _result_steps(gid, aval):
+    """Steps for slides/chapters/result.json: PLAYED guesses when the solver
+    recorded them, else the plan. A rejected-and-replaced guess must never
+    be reported as played (contexto 5-vs-6)."""
+    played = _PLAYED.get(gid)
+    if played:
+        return [{"turn": i + 1, "guess": (str(g) if not isinstance(g, str) else g),
+                 "pattern": "", "pool_before": None, "pool_after": None}
+                for i, g in enumerate(played)]
+    return _steps(gid, aval)
+
+
+# Phoodle defensive un-hide (fix-loop iter 3). The live page ships
+# <html style="display: none !important">, so nothing paints (blank
+# screenshot + blank recording) while DOM text stays readable. This clears
+# the inline display:none on <html> and re-clears it if anything re-sets
+# it (MutationObserver). It does NOT identify the setter — that still
+# needs a live-browser DOM breakpoint on <html>'s style attribute
+# (still-open). Applied via add_init_script (before recording starts)
+# + explicit evaluate after load, phoodle only.
+_PHOODLE_UNHIDE_JS = """(() => {
+  const clear = () => {
+    try {
+      const h = document.documentElement;
+      if (!h || !h.style) return 0;
+      if (h.style.getPropertyValue('display') === 'none') {
+        h.style.removeProperty('display');
+        return 1;
+      }
+      return 0;
+    } catch (e) { return 0; }
+  };
+  const n = clear();
+  try {
+    const mo = new MutationObserver(() => { clear(); });
+    mo.observe(document.documentElement,
+               {attributes: true, attributeFilter: ['style']});
+    window.__QP_UNHIDE_MO = mo;
+  } catch (e) {}
+  return n;
+})()"""
+
+
+def _phoodle_unhide(page, gid="phoodle"):
+    """Explicitly clear <html> display:none after load / before screenshot."""
+    try:
+        n = page.evaluate(_PHOODLE_UNHIDE_JS)
+        _dbg(gid, f"un-hide <html>: cleared={n} "
+                  f"(display:none removed if present; observer armed)")
+        return n
+    except Exception as e:
+        _dbg(gid, f"un-hide <html> failed: {str(e)[:80]}")
+        return None
+
+
+def _qc_visible_content(gid, vdir, gameplay_path=None):
+    """Visible-content QC (shared helper, fix-loop iter 3).
+
+    Metadata QC (solved + 1920x1080 + dur>=40) passed a BLANK phoodle video.
+    Fail when gameplay frozen_frac > 0.98 AND mean brightness > 240, OR
+    shot_win std < 12. Never raises; returns (ok, detail). A missing
+    screenshot/gameplay is reported as skipped, not failed — no evidence,
+    no failure — but the detail records the gap.
+    """
+    import subprocess as _sp
+    import tempfile
+    detail = {}
+    ok = True
+    try:
+        shot = Path(vdir) / "shot_win.png"
+        if shot.exists():
+            try:
+                from PIL import Image as _PIL
+                _im = _PIL.open(shot).convert("L")
+                _hist = _im.histogram()
+                _n = sum(_hist) or 1
+                _mean = sum(i * c for i, c in enumerate(_hist)) / _n
+                _var = sum(c * (i - _mean) ** 2 for i, c in enumerate(_hist)) / _n
+                _std = _var ** 0.5
+                detail["shot_win"] = {"mean": round(_mean, 1),
+                                      "std": round(_std, 1)}
+                if _std < 12:
+                    ok = False
+                    detail["shot_win"]["fail"] = "std<12 (near-blank)"
+            except Exception as e:
+                detail["shot_win"] = {"error": str(e)[:80]}
+        else:
+            detail["shot_win"] = {"skipped": "no shot_win.png"}
+        gp = Path(str(gameplay_path)) if gameplay_path else None
+        if gp is not None and gp.exists():
+            try:
+                from PIL import Image as _PIL2, ImageChops as _Chops
+                with tempfile.TemporaryDirectory() as _td:
+                    _r = _sp.run(["ffmpeg", "-y", "-v", "error", "-i", str(gp),
+                                  "-vf", "fps=1,scale=160:-1,format=gray",
+                                  "-frames:v", "120",
+                                  str(Path(_td) / "f%04d.png")],
+                                 capture_output=True, text=True, timeout=300)
+                    _frames = sorted(Path(_td).glob("f*.png"))
+                    _means, _diffs = [], []
+                    _prev = None
+                    for _fp in _frames:
+                        _f = _PIL2.open(_fp).convert("L")
+                        _h = _f.histogram()
+                        _nn = sum(_h) or 1
+                        _means.append(sum(i * c for i, c in enumerate(_h)) / _nn)
+                        if _prev is not None:
+                            _d = _Chops.difference(_prev, _f).histogram()
+                            _diffs.append(sum(i * c for i, c in enumerate(_d)) / _nn)
+                        _prev = _f
+                    if _diffs:
+                        _frozen = sum(1 for d in _diffs if d < 1.0) / len(_diffs)
+                        _bmean = sum(_means) / len(_means) if _means else 0.0
+                        detail["gameplay"] = {"frames": len(_frames),
+                                              "frozen_frac": round(_frozen, 3),
+                                              "mean_brightness": round(_bmean, 1)}
+                        if _frozen > 0.98 and _bmean > 240:
+                            ok = False
+                            detail["gameplay"]["fail"] = (
+                                "frozen_frac>0.98 AND brightness>240 (blank)")
+                    else:
+                        detail["gameplay"] = {"skipped": "no frames sampled"}
+            except Exception as e:
+                detail["gameplay"] = {"error": str(e)[:100]}
+        else:
+            detail["gameplay"] = {"skipped": "no gameplay file"}
+    except Exception as e:
+        detail["error"] = str(e)[:120]
+    return ok, detail
+
+
+def _semantic_dom_scores(page, word):
+    """Score for `word` from the sites' real score DOM (guess list/table).
+
+    Semantle renders each guess as a table row (word + similarity);
+    Contexto renders each guess as a list row (word + rank number). Read
+    the row for this word and take its number: a trailing '%' number first,
+    else the single decimal, else the single integer when the row holds
+    only the word + one number. Returns (score_or_None, probe) — None with
+    the probe (rows scanned, matched row text) means the DOM exposes no
+    per-guess score; the caller must say so honestly, never fake one.
+    """
+    import re as _re
+    probe = {"rows_scanned": 0, "matched_row": None, "numbers": []}
+    try:
+        rows = page.evaluate("""() => {
+          const out = [];
+          for (const r of document.querySelectorAll(
+              'table tr, li, [class*=guess i], [class*=row i], [class*=entry i]')) {
+            const t = (r.innerText || r.textContent || '').trim();
+            if (t) out.push(t);
+          }
+          return out.slice(0, 80);
+        }""") or []
+    except Exception as e:
+        probe["error"] = str(e)[:80]
+        return None, probe
+    probe["rows_scanned"] = len(rows)
+    w = str(word).lower()
+    matched = None
+    for t in rows:
+        low = t.lower()
+        if _re.search(r"(?<![a-z])" + _re.escape(w) + r"(?![a-z])", low):
+            matched = t
+    if not matched:
+        return None, probe
+    probe["matched_row"] = matched[:160]
+    nums = _re.findall(r"[-+]?\d+(?:\.\d+)?%?", matched)
+    probe["numbers"] = nums
+    m_pct = _re.search(r"([-+]?\d+(?:\.\d+)?)\s*%", matched)
+    if m_pct:
+        return m_pct.group(1), probe
+    decs = [n for n in nums if "." in n]
+    if len(decs) == 1:
+        return decs[0], probe
+    rest = _re.sub(r"(?i)" + _re.escape(w), "", matched)
+    rest_nums = _re.findall(r"[-+]?\d+(?:\.\d+)?", rest)
+    if len(rest_nums) == 1:
+        return rest_nums[0], probe
+    return None, probe
+
+
+def _betweenle_counters(page):
+    """The game's own submit counters: GUESS n/14, stats-panel word, WIN popup."""
+    try:
+        return page.evaluate("""() => {
+          const t = document.body.innerText || '';
+          const gm = t.match(/GUESS\\s*(\\d+)\\s*\\/\\s*(\\d+)/i) || [];
+          const st = document.getElementById('statisticspanel-word');
+          return {guess_n: Number(gm[1] || 0),
+                  guess_total: Number(gm[2] || 0),
+                  stats_word: st ? st.innerText : '',
+                  win_popup: /WIN/i.test(t.slice(-600)),
+                  tail: t.slice(-200)};
+        }""") or {}
+    except Exception:
+        return {}
+
+
+def _betweenle_submitted(page, before_n, word):
+    """True only if the game's own counters confirm submission.
+
+    Settle-wait, read twice (a single read can lag the canvas app), and
+    accept only a GUESS-counter advance or the stats panel showing this
+    word. A stale bounds/board read must never produce a 'did not submit'.
+    Returns (submitted, counters)."""
+    page.wait_for_timeout(1200)
+    c1 = _betweenle_counters(page)
+    page.wait_for_timeout(800)
+    c2 = _betweenle_counters(page)
+    if (c2.get("guess_n") or 0) > (before_n or 0):
+        return True, c2
+    if word and word.lower() in (c2.get("stats_word") or "").lower():
+        return True, c2
+    if (c2.get("guess_n") or 0) > (c1.get("guess_n") or 0):
+        return True, c2
+    return False, c2
+
+
+def _waffle_board_letters(page):
+    """Initial board letters in row-major (data-pos) order, or ''.
+
+    The game's logical state lives in data-pos (DOM order never changes on
+    a swap), so sorting by data-pos is the only honest board read."""
+    import json as _js
+    board = _waffle_board(page)
+    if not board:
+        return ""
+    def _pos(t):
+        try:
+            p = _js.loads(t.get("pos") or "{}")
+            return (int(p.get("y", 0)), int(p.get("x", 0)))
+        except Exception:
+            return (99, 99)
+    cells = sorted([i for i, t in enumerate(board) if not t.get("empty")],
+                   key=lambda i: _pos(board[i]))
+    return "".join(board[i].get("ch") or "" for i in cells)
+
+
+def _waffle_served_day(board_letters, puzzle_today, puzzle_prev):
+    """Pure served-board classifier (unit-testable, no browser).
+
+    Returns (verdict, detail): 'proceed' when the board is today's puzzle,
+    'defer' when it is yesterday's (site has not rolled — never solve it),
+    'fail' otherwise (wrong length, or matches neither — fail loudly).
+    """
+    b = str(board_letters or "").upper().replace(" ", "")
+    t = str(puzzle_today or "").upper().replace(" ", "")
+    p = str(puzzle_prev or "").upper().replace(" ", "")
+    if len(b) != 21:
+        return "fail", f"board has {len(b)} letters, want 21: {b!r}"
+    if t and b == t:
+        return "proceed", "board matches today's puzzle"
+    if p and b == p:
+        return "defer", "board matches previous-day puzzle"
+    return "fail", (f"board {b!r} matches neither today's puzzle "
+                    f"{t!r} nor previous-day puzzle {p!r}")
 
 
 def _betweenle_invalid_showing(page):
@@ -1466,14 +1827,27 @@ def solve_colorfle(page, ans):
         else:
             el.evaluate("e => e.click()")
 
-    for combo in seq:
+    _played_cf = []
+    for _n, combo in enumerate(seq):
         combo = [int(c) for c in combo]
+        _dbg(getattr(page, "_qp_gid", "colorfle"),
+             f"guess {_n + 1}/{len(seq)} combo={combo}")
         for i in combo:
             if i in sw:
                 _click(sw[i])
                 page.wait_for_timeout(420)
         _click(enter)
         page.wait_for_timeout(3400)
+        _played_cf.append(list(combo))
+        _PLAYED["colorfle"] = [list(c) for c in _played_cf]
+        try:
+            _tail = (page.evaluate(
+                "() => (document.body.innerText || '').slice(-140)") or "")
+            _dbg(getattr(page, "_qp_gid", "colorfle"),
+                 f"board after guess {_n + 1}: "
+                 f"{_tail.replace(chr(10), '|')[:120]!r}")
+        except Exception:
+            pass
 
     # The game's own end state. On a win Colorfle opens a Statistics panel
     # reading "1 Wins" / "Your average color accuracy was ...%", and the
@@ -1854,6 +2228,10 @@ def solve_framed_modes(page, answers):
                     _dbg("framed", f"{mid}: unlock failed: {str(_ue)[:70]}")
             tag = "answer" if last else "probe"
             print(f"[framed] {mid}: {tag} {t!r} -> {pev}")
+            # Per-guess lines must ALSO reach the artifact debug log
+            # (stdout-only lines never land in the artifact).
+            _dbg("framed", f"guess {n + 1}/{len(guesses)} {mid} {tag} "
+                           f"{t!r} -> {pev}")
             # Only a probe that IS the resolved answer can be an early win.
             # An earlier version treated "the guess counter disappeared" as a
             # win, but the counter also vanishes when the round simply ends, so
@@ -1888,8 +2266,11 @@ def solve_framed_modes(page, answers):
                 page.goto(murl, wait_until="domcontentloaded", timeout=25000)
                 page.wait_for_timeout(5000)
                 if _framed_board_ready(page):
-                    for _t2 in _framed_probe_path(ans, max_guesses=2)[0]:
-                        _framed_submit(page, _t2)
+                    _retry_gs = _framed_probe_path(ans, max_guesses=2)[0]
+                    for _n2, _t2 in enumerate(_retry_gs):
+                        _pev2 = _framed_submit(page, _t2)
+                        _dbg("framed", f"retry guess {_n2 + 1}/{len(_retry_gs)} "
+                                      f"{mid} {_t2!r} -> {_pev2}")
                     page.wait_for_timeout(6000)
                     ok, ev = _strict_win(page, ans)
                     if not ok:
@@ -2113,6 +2494,17 @@ def _semantic_guess_accepted(page, word, before_txt):
     if _re.search(r"not a valid word|isn't a valid|invalid word|"
                   r"not in the dictionary|unknown word", low):
         return False, None
+    # Root-cause fix (iter 3): the old code extracted a score ONLY via a
+    # `<word> ... <number>%` regex on body text, which never matches either
+    # site's score rendering — so scores were always []. Read the score
+    # from the sites' real score DOM (guess list/table rows) instead.
+    # The caller already settled after Enter before calling this.
+    try:
+        dom_score, _probe = _semantic_dom_scores(page, word)
+    except Exception:
+        dom_score, _probe = None, {}
+    if dom_score is not None:
+        return True, dom_score
     m = _re.search(_re.escape(w) + r"[^\n]{0,40}?([\d.]+)\s*%", low)
     if m:
         return True, m.group(1)
@@ -2136,20 +2528,20 @@ def solve_semantle(page, ans, gid="semantle"):
              if w not in set(gs) and w != str(ans).lower()]
     import random as _r
     _r.Random(_day_seed(gid) + ":spare").shuffle(spare)
-
-    for w in list(gs):
-        if w == str(ans).lower():
-            _idle_drift(page)
-            try:
-                _type_into(page, "input", w, base_delay=150)
-                page.keyboard.press("Enter")
-            except Exception as e:
-                return False, f"answer {w!r} failed: {str(e)[:120]}"
-            _settle(page, base=2600)
-            used.append(w)
-            break
+    # Probes only in the queue; the answer is typed AFTER the probe queue
+    # drains, so a replacement appended for a rejected probe is actually
+    # reached (old code iterated a snapshot `list(gs)` while mutating `gs`,
+    # so the replacement was never typed — dead code).
+    _ans_l = str(ans).lower()
+    gs = [w for w in gs if w != _ans_l]
+    _qi, _attempted = 0, 0
+    while _qi < len(gs):
+        w = gs[_qi]
+        _qi += 1
         if w in rejected:
             continue
+        _attempted += 1
+        _dbg(gid, f"guess {_attempted} {w!r} (queue {_qi}/{len(gs)})")
         _idle_drift(page)
         try:
             before = page.evaluate("() => document.body.innerText") or ""
@@ -2163,21 +2555,47 @@ def solve_semantle(page, ans, gid="semantle"):
         accepted, score = _semantic_guess_accepted(page, w, before)
         if not accepted:
             rejected.add(w)
-            print(f"[{gid}] {w!r} rejected by the site; replacing it")
-            for alt in spare:
-                if alt not in rejected:
-                    gs[gs.index(w)] = alt
+            _REJECTED[gid] = sorted(rejected)
+            _dbg(gid, f"{w!r} rejected by the site; replacing it "
+                      f"(rejected={sorted(rejected)})")
+            for alt in list(spare):
+                if alt not in rejected and alt not in gs:
+                    gs.append(alt)
                     spare.remove(alt)
+                    _dbg(gid, f"replacement queued: {alt!r} "
+                              f"(queue now {len(gs)})")
                     break
+            else:
+                _dbg(gid, f"no spare replacement left for {w!r}; guess lost")
             continue
         used.append(w)
+        _PLAYED[gid] = list(used)
         if score is not None:
-            scores.append(score)
+            scores.append((w, score))
+        _dbg(gid, f"guess {_attempted} accepted: {w!r} score={score!r} "
+                  f"(played={used})")
+    # Answer last, after every probe/replacement has actually been played.
+    try:
+        _idle_drift(page)
+        _type_into(page, "input", _ans_l, base_delay=150)
+        page.keyboard.press("Enter")
+    except Exception as e:
+        return False, f"answer {_ans_l!r} failed: {str(e)[:120]}"
+    _settle(page, base=2600)
+    used.append(_ans_l)
+    _PLAYED[gid] = list(used)
+    _REJECTED[gid] = sorted(rejected)
+    _dbg(gid, f"guess {len(used)} answer {_ans_l!r} played "
+              f"(played={used} rejected={sorted(rejected)})")
     ok, ev = _strict_win(page, ans)
+    _score_txt = (f"scores={scores}" if scores else
+                  "scores not exposed in DOM (no per-guess score row "
+                  "found in the guess list/table for any played guess)")
     if not ok:
-        return False, f"{ev}; guesses={used} scores={scores}"
+        return False, (f"{ev}; guesses={used} {_score_txt} "
+                       f"rejected={sorted(rejected)}")
     return True, (f"{ev} after {len(used)} typed guesses "
-                   f"(scores={scores if scores else 'unreadable'})")
+                   f"({_score_txt}; rejected={sorted(rejected)})")
 
 
 def solve_contexto(page, ans, gid="contexto"):
@@ -2208,12 +2626,21 @@ def solve_contexto(page, ans, gid="contexto"):
              if w not in set(gs) and w != str(ans).lower()]
     import random as _r
     _r.Random(_day_seed(gid) + ":spare").shuffle(spare)
-
-    for w in list(gs):
-        if w == str(ans).lower():
-            break
+    # Probes only in the queue; the answer is typed AFTER the probe queue
+    # drains, so a replacement appended for a rejected probe is actually
+    # reached (old code iterated a snapshot `list(gs)` while mutating `gs`,
+    # so the replacement was never typed — dead code, and the video showed
+    # 5 guesses while the plan/chapters claimed 6).
+    _ans_l = str(ans).lower()
+    gs = [w for w in gs if w != _ans_l]
+    _qi, _attempted = 0, 0
+    while _qi < len(gs):
+        w = gs[_qi]
+        _qi += 1
         if w in rejected:
             continue
+        _attempted += 1
+        _dbg(gid, f"guess {_attempted} {w!r} (queue {_qi}/{len(gs)})")
         _idle_drift(page)
         try:
             before = page.evaluate("() => document.body.innerText") or ""
@@ -2225,30 +2652,47 @@ def solve_contexto(page, ans, gid="contexto"):
         accepted, score = _semantic_guess_accepted(page, w, before)
         if not accepted:
             rejected.add(w)
-            print(f"[{gid}] {w!r} rejected by the site; replacing it")
-            for alt in spare:
-                if alt not in rejected:
-                    gs[gs.index(w)] = alt
+            _REJECTED[gid] = sorted(rejected)
+            _dbg(gid, f"{w!r} rejected by the site; replacing it "
+                      f"(rejected={sorted(rejected)})")
+            for alt in list(spare):
+                if alt not in rejected and alt not in gs:
+                    gs.append(alt)
                     spare.remove(alt)
+                    _dbg(gid, f"replacement queued: {alt!r} "
+                              f"(queue now {len(gs)})")
                     break
+            else:
+                _dbg(gid, f"no spare replacement left for {w!r}; guess lost")
             continue
         used.append(w)
+        _PLAYED[gid] = list(used)
         if score is not None:
-            scores.append(score)
-    if str(ans).lower() not in [u.lower() for u in used]:
+            scores.append((w, score))
+        _dbg(gid, f"guess {_attempted} accepted: {w!r} score={score!r} "
+                  f"(played={used})")
+    if _ans_l not in [u.lower() for u in used]:
         try:
             _idle_drift(page)
-            _type_into(page, "input.word", str(ans).lower(), base_delay=150)
+            _type_into(page, "input.word", _ans_l, base_delay=150)
             page.keyboard.press("Enter")
             _settle(page, base=2600)
-            used.append(str(ans).lower())
+            used.append(_ans_l)
+            _PLAYED[gid] = list(used)
         except Exception as ex:
             return False, f"answer submit failed: {str(ex)[:120]}"
+    _REJECTED[gid] = sorted(rejected)
+    _dbg(gid, f"answer {_ans_l!r} played "
+              f"(played={used} rejected={sorted(rejected)})")
     ok, ev = _strict_win(page, ans)
+    _score_txt = (f"scores={scores}" if scores else
+                  "scores not exposed in DOM (no per-guess score row "
+                  "found in the guess list for any played guess)")
     if not ok:
-        return False, f"{ev}; guesses={used} scores={scores}"
+        return False, (f"{ev}; guesses={used} {_score_txt} "
+                       f"rejected={sorted(rejected)}")
     return True, (f"{ev} after {len(used)} typed guesses "
-                   f"(scores={scores if scores else 'unreadable'})")
+                   f"({_score_txt}; rejected={sorted(rejected)})")
 
 
 # ---------------- plan builders ----------------
@@ -2608,6 +3052,11 @@ def _s_betweenle(page, ans, gid):
     _rows_before = 0
     for gi, g in enumerate(gs):
         _rows_before = (_betweenle_state(page) or {}).get("rows") or 0
+        # The game's own GUESS n/14 counter, read fresh before this guess.
+        # Submission is verified against THIS counter, never against a
+        # stale bounds/board snapshot (rerun #2 logged GATOR as
+        # "did not submit" while the WIN popup proved it had).
+        _cnt_before = (_betweenle_counters(page) or {}).get("guess_n") or 0
         _bd = _betweenle_bounds(page)
         _dbg(gid, f"bounds before guess {gi + 1}: {_bd}")
         if _bd and not (_bd[0] < str(g).upper() < _bd[1]):
@@ -2653,7 +3102,14 @@ def _s_betweenle(page, ans, gid):
             _st = _betweenle_state(page)
         except Exception:
             _st = {}
-        if (_st.get("rows") or 0) <= _rows_before:
+        _cnt1 = _betweenle_counters(page) or {}
+        _submitted1 = ((_cnt1.get("guess_n") or 0) > _cnt_before or
+                       str(g).lower() in (_cnt1.get("stats_word") or "").lower())
+        _dbg(gid, f"submit check {g!r}: counters GUESS "
+                  f"{_cnt1.get('guess_n')}/{_cnt1.get('guess_total')} "
+                  f"(was {_cnt_before}) stats={_cnt1.get('stats_word')!r} "
+                  f"submitted={_submitted1}")
+        if not _submitted1:
             # out-of-bounds prompt or stolen focus: dismiss + resend once
             _dbg(gid, f"{g!r} did not submit; dismissing prompt + resending")
             try:
@@ -2711,21 +3167,28 @@ def _s_betweenle(page, ans, gid):
                     pass
                 _settle(page, base=2500)
                 _st2 = _betweenle_state(page)
-            if (_st2.get("rows") or 0) <= _rows_before:
-                # Rows did not advance after retries. The cause is NOT
-                # proven to be bounds (stale-state reads also produce this;
-                # video proof in rerun #1 showed guesses logged this way DID
-                # submit). Label it honestly so future analysis is not misled.
+            # Final verdict from the GAME'S OWN counters (settle + double
+            # read), not from the stale bounds/board snapshot. Only log
+            # "did not submit" when the counters confirm it.
+            _submitted_f, _cntf = _betweenle_submitted(page, _cnt_before, g)
+            if not _submitted_f:
                 _dbg(gid, f"{g!r} did not submit after retries; skipping "
-                          f"(bounds not verified)")
+                          f"(game counters confirm: GUESS "
+                          f"{_cntf.get('guess_n')}/{_cntf.get('guess_total')}, "
+                          f"was {_cnt_before}, stats={_cntf.get('stats_word')!r})")
                 continue
+            _dbg(gid, f"{g!r} confirmed submitted by game counters "
+                      f"(GUESS {_cntf.get('guess_n')}/{_cntf.get('guess_total')})")
             _type_betweenle_via_keys(page, g)
             page.wait_for_timeout(300)
             _submit_betweenle(page)
             _settle(page, base=2500)
         try:
             _st = _betweenle_state(page)
+            _cntf2 = _betweenle_counters(page) or {}
             _dbg(gid, f"guess {gi + 1}/{len(gs)} {g!r}: rows={_st.get('rows')} "
+                      f"GUESS={_cntf2.get('guess_n')}/{_cntf2.get('guess_total')} "
+                      f"stats={_cntf2.get('stats_word')!r} "
                       f"len={_st.get('len')} invalid={_betweenle_invalid_showing(page)}")
             if not _st.get("enter"):
                 # on-screen keyboard not visible yet: one canvas-centre click
@@ -3083,18 +3546,690 @@ def _type_country_guess(page, scope, country):
         return False, f"exception: {str(e)[:110]}"
 
 
-def _s_worldle(page, ans, gid):
-    """Worldle: autosuggest-pick + Guess button, 6 guesses max."""
+# ---------------- worldle all-modes (fix-loop iter 3) ----------------
+# One video, one chapter per played mode: Country first (bonus rounds are
+# DISABLED until Country completes — bundle getRoundDisabled:
+# `!completed.includes(country) && mode !== country`), then bonus rounds in
+# dropdown order, then a Summary end card (not a puzzle).
+#
+# Static-source grounding (bundled main.js, NOT live-UI observation):
+# - Mode ids + dropdown order: rounds array `f.u` (module 72558) and locale
+#   commonPhrases.<mode> labels (Country, Neighbours, Capital, Orientation,
+#   Flag, Trivia, Landmark, Emblem, Spoken languages, GDP Per Capita,
+#   Population & Currency, Populous cities, Area, Summary).
+# - Round removal: rounds hook (module 22314) — capital/orientation without
+#   a capital city or for micro-states VA/MC/MO/SG/HK/GI; populousCities with
+#   <4 populated cities; language unless exactly 2 languages; currency
+#   without population; borders+orientation without borders; gdp without
+#   gdpPerCapita; emblem/landmark by live image content-type.
+# - Win checks: the game's own share-emoji function (module 32445 `_`),
+#   recomputed here from the SAME localStorage guess stores the game
+#   writes. Never claim a mode solved unless its win check passes.
+# - Guess stores (daily, non-archive): country "guesses", neighbours
+#   "bonus-guesses", capital "city-guesses", orientation "orientation-round",
+#   flag "flag-guesses", trivia "trivia-guesses", landmark
+#   "landmark-guesses", emblem "emblem-guesses", language
+#   "language-guesses", gdp "gdp-guesses", currency "currency-guesses",
+#   populousCities "populous-cities-guesses", size "size-guesses";
+#   completion record "rounds-completed" {dayString: [modes]};
+#   mode state "game_round" {gameMode, dayString}.
+# - Data URLs (module 83512): day games/<y>/<date>.json, countries,
+#   cities, facts/<code>.json, landmarks.json, flags/<code>.svg,
+#   shields/<code>.svg.
+#
+# What static source CANNOT prove (round components are lazy chunks):
+# the exact per-round input widgets. Every bonus interaction below is
+# therefore attempted only when its controls are identifiable at runtime
+# (labelled input / option whose text or image URL matches the derived
+# answer); otherwise the mode is SKIPPED WITH REASON, never guessed.
+# In particular: the Capital pinpoint sub-question (map click) is NEVER
+# faked — its map projection is not in static source — and Trivia answers
+# come only from the facts DB matched by question text, never guessed.
+_WORLDLE_MODE_LABELS = {
+    "country": "Country", "neighbours": "Neighbours", "capital": "Capital",
+    "orientation": "Orientation", "flag": "Flag", "trivia": "Trivia",
+    "landmark": "Landmark", "emblem": "Emblem",
+    "spokenLanguages": "Spoken languages", "gdp": "GDP Per Capita",
+    "populationCurrency": "Population & Currency",
+    "populousCities": "Populous cities", "area": "Area",
+    "summary": "Summary",
+}
+_WORLDLE_PLAY_ORDER = ["country", "neighbours", "capital", "orientation",
+                       "flag", "trivia", "landmark", "emblem",
+                       "spokenLanguages", "gdp", "populationCurrency",
+                       "populousCities", "area"]
+_WORLDLE_GUESS_KEYS = ["guesses", "bonus-guesses", "city-guesses",
+                       "currency-guesses", "emblem-guesses", "flag-guesses",
+                       "gdp-guesses", "landmark-guesses", "language-guesses",
+                       "populous-cities-guesses", "size-guesses",
+                       "trivia-guesses", "orientation-round"]
+_WORLDLE_MODES = []      # per-mode evidence records (see _s_worldle)
+_WORLDLE_SEGMENTS = []   # [(gameplay_offset_s, chapter_title)]
+_WORLDLE_T0 = None       # solver start (fallback when _VIDEO_T0 unset)
+
+
+def _s_worldle_norm(s):
+    """Bundle normalizer (module 21068 `r`): NFD, strip diacritics, drop
+    [- '()], lowercase. Used for name matching exactly as the game does."""
+    import unicodedata as _ud
+    t = _ud.normalize("NFD", str(s or ""))
+    t = "".join(c for c in t if _ud.category(c) != "Mn")
+    for ch in ("-", " ", "'", "(", ")"):
+        t = t.replace(ch, "")
+    return t.lower()
+
+
+def _s_worldle_ls(page, key):
+    """Read one localStorage key as parsed JSON ({} / None on any error)."""
+    try:
+        v = page.evaluate("(k) => { try { const v = localStorage.getItem(k);"
+                          " return v === null ? null : JSON.parse(v); }"
+                          " catch (e) { return null; } }", key)
+        return v
+    except Exception:
+        return None
+
+
+def _s_worldle_day_guesses(page, key, day_string):
+    """Guess list for one mode on one dayString ({} -> [] safe)."""
+    try:
+        d = _s_worldle_ls(page, key) or {}
+        v = d.get(day_string)
+        return v if isinstance(v, list) else []
+    except Exception:
+        return []
+
+
+def _s_worldle_completed(page, day_string):
+    try:
+        d = _s_worldle_ls(page, "rounds-completed") or {}
+        v = d.get(day_string)
+        return list(v) if isinstance(v, list) else []
+    except Exception:
+        return []
+
+
+def _s_worldle_current_mode(page):
+    try:
+        d = _s_worldle_ls(page, "game_round") or {}
+        return d.get("gameMode")
+    except Exception:
+        return None
+
+
+def _s_worldle_clear_storage(page, gid, day_string):
+    """Fresh-state clear BEFORE play: game_round, every per-mode guess
+    store, removedRounds, and ONLY today's entry of rounds-completed
+    (other days' history is left alone). The runner's pre-nav purge
+    already clears storage; this is the explicit, verifiable clear the
+    all-modes design requires, so stale rounds/guesses cannot leak in."""
+    try:
+        cleared = page.evaluate("""(ds) => {
+          const keys = ["game_round", "removedRounds", "bonus-guesses",
+            "city-guesses", "currency-guesses", "emblem-guesses",
+            "flag-guesses", "gdp-guesses", "landmark-guesses",
+            "language-guesses", "populous-cities-guesses", "size-guesses",
+            "trivia-guesses", "orientation-round", "guesses"];
+          const out = [];
+          for (const k of keys) {
+            if (localStorage.getItem(k) !== null) {
+              localStorage.removeItem(k); out.push(k);
+            }
+          }
+          try {
+            const rc = JSON.parse(
+              localStorage.getItem("rounds-completed") || "{}");
+            if (Object.prototype.hasOwnProperty.call(rc, ds)) {
+              delete rc[ds];
+              localStorage.setItem("rounds-completed", JSON.stringify(rc));
+              out.push("rounds-completed[" + ds + "]");
+            }
+          } catch (e) {}
+          return out;
+        }""", day_string)
+        _dbg(gid, f"worldle storage cleared: {cleared}")
+        return cleared
+    except Exception as e:
+        _dbg(gid, f"worldle storage clear failed: {str(e)[:90]}")
+        return []
+
+
+def _s_worldle_segment(mode, label):
+    """Record a chapter segment: gameplay offset of this mode's start.
+    Recording starts at page creation, ~when _VIDEO_T0 fires on first
+    navigation, so offset vs _VIDEO_T0 is accurate to ~1 s."""
+    try:
+        base = _VIDEO_T0 or _WORLDLE_T0 or time.time()
+        off = max(0.0, time.time() - base)
+    except Exception:
+        off = 0.0
+    _WORLDLE_SEGMENTS.append((round(off, 1), f"{label} Solve"))
+    return off
+
+
+def _s_worldle_chapter_plan():
+    """Gameplay-relative chapter plan: [(gameplay_offset_s, title)] for
+    every played mode. The assembly step shifts these by intro + card
+    durations and appends the Summary chapter at gameplay end; see
+    _s_worldle_final_chapters."""
+    return list(_WORLDLE_SEGMENTS)
+
+
+def _s_worldle_final_chapters(intro_s, gameplay_s, cards_s=15.0):
+    """Full final-video chapter list from the gameplay-relative plan.
+
+    Assumed assembly layout (the generic one): intro, then 5 s recap +
+    10 s hints cards (cards_s=15) before gameplay, then the end cards.
+    One chapter per played mode, plus Summary at gameplay end. Callers
+    with a different card layout pass their own cards_s."""
+    out = [(0, "Intro")]
+    base = float(intro_s or 0) + float(cards_s)
+    for off, title in _WORLDLE_SEGMENTS:
+        out.append((round(base + float(off), 1), title))
+    out.append((round(base + float(gameplay_s or 0), 1), "Summary"))
+    return out
+
+
+def _s_worldle_win_check(page, mode, day, day_string, extra=None):
+    """Recompute the game's OWN completion check for one mode (share-emoji
+    function, module 32445) from the game's localStorage guess stores.
+
+    Returns (correct_bool, guesses_summary_list, detail_string).
+    `extra` carries play-time facts the store alone cannot show
+    (e.g. populousCities expected count parsed from the live prompt)."""
+    extra = extra or {}
+    code = (day.get("code") or "").upper()
+    comp = _s_worldle_completed(page, day_string)
+    done = mode in comp
+    if mode == "country":
+        gs = _s_worldle_day_guesses(page, "guesses", day_string)
+        win = any((g or {}).get("distance") == 0 for g in gs)
+        return win, [str((g or {}).get("code") or "?") for g in gs], \
+            f"distance==0 win={win}; completed={done}"
+    if mode == "neighbours":
+        gs = _s_worldle_day_guesses(page, "bonus-guesses", day_string)
+        borders = {str(b.get("code") or "").upper()
+                   for b in (day.get("borders") or [])}
+        hit = [str((g or {}).get("code") or "?") for g in gs]
+        n_ok = sum(1 for h in hit if h.upper() in borders)
+        return n_ok >= len(borders), hit, \
+            f"{n_ok}/{len(borders)} border codes guessed; completed={done}"
+    if mode == "capital":
+        gs = _s_worldle_day_guesses(page, "city-guesses", day_string)
+        caps = day.get("capitals") or ([day.get("capital")] if day.get("capital") else [])
+        cap_names = {_s_worldle_norm((c or {}).get("name")) for c in caps}
+        q0 = [g for g in gs if (g or {}).get("question") == 0]
+        name_ok = bool(q0) and _s_worldle_norm(
+            (q0[-1] or {}).get("name")) in cap_names
+        n_pin = sum(1 for g in gs
+                    if "right" in str((g or {}).get("name") or "").lower())
+        pin_ok = bool(caps) and n_pin == len(caps)
+        win = bool(name_ok and pin_ok)
+        return (win, [str((g or {}).get("name") or "?") for g in gs],
+                f"name_ok={name_ok} pin_ok={pin_ok} "
+                f"(pin {n_pin}/{len(caps)} 'right'); completed={done}")
+    if mode == "orientation":
+        st = (_s_worldle_ls(page, "orientation-round") or {}).get(day_string) or {}
+        win = st.get("directionCorrect") is True \
+            and st.get("distanceCorrect") is True
+        return (win, [f"dir={st.get('directionCorrect')} "
+                      f"dist={st.get('distanceCorrect')}"],
+                f"directionCorrect={st.get('directionCorrect')} "
+                f"distanceCorrect={st.get('distanceCorrect')}; "
+                f"completed={done}")
+    if mode in ("flag", "emblem"):
+        key = "flag-guesses" if mode == "flag" else "emblem-guesses"
+        gs = _s_worldle_day_guesses(page, key, day_string)
+        hit = [str((g or {}).get("code") or "?") for g in gs]
+        win = any(h.upper() == code for h in hit)
+        return win, hit, f"code=={code}: {win}; completed={done}"
+    if mode == "trivia":
+        gs = _s_worldle_day_guesses(page, "trivia-guesses", day_string)
+        per = {}
+        for g in gs:
+            q = (g or {}).get("question")
+            if q in (1, 2, 3):
+                per[q] = (g or {}).get("answer") == (g or {}).get("correct")
+        n_ok = sum(1 for v in per.values() if v)
+        win = len(per) == 3 and n_ok == 3
+        return win, [f"q{q}={'ok' if per.get(q) else 'X'}"
+                     for q in sorted(per)], \
+            f"{n_ok}/3 questions correct (game share rule needs >=2); " \
+            f"completed={done}"
+    if mode == "landmark":
+        gs = _s_worldle_day_guesses(page, "landmark-guesses", day_string)
+        want = (day.get("landmark") or {}).get("landmarkCode")
+        q0 = next((g for g in gs if (g or {}).get("question") == 0), None)
+        q1 = next((g for g in gs if (g or {}).get("question") == 1), None)
+        ok0 = bool(q0) and (q0 or {}).get("landmarkCode") == want
+        ok1 = bool(q1) and (q1 or {}).get("landmarkCode") == want
+        return bool(ok0 and ok1), \
+            [f"q{q}={((g or {}).get('landmarkCode'))}" for q, g in
+             ((0, q0), (1, q1))], \
+            f"landmarkCode=={want}: image={ok0} name={ok1}; completed={done}"
+    if mode == "spokenLanguages":
+        gs = _s_worldle_day_guesses(page, "language-guesses", day_string)
+        n_lang = len(day.get("languages") or [])
+        c0 = sum(1 for g in gs if (g or {}).get("question") == 0
+                 and (g or {}).get("isCorrect"))
+        c1 = sum(1 for g in gs if (g or {}).get("question") == 1
+                 and (g or {}).get("isCorrect"))
+        win = n_lang > 0 and c0 == n_lang and c1 == n_lang
+        return win, [f"q0:{c0}/{n_lang} q1:{c1}/{n_lang}"], \
+            f"correct counts per question vs {n_lang} languages; " \
+            f"completed={done}"
+    if mode == "gdp":
+        gs = _s_worldle_day_guesses(page, "gdp-guesses", day_string)
+        ok0 = any((g or {}).get("question") == 0
+                  and (g or {}).get("answer") == (g or {}).get("correct")
+                  for g in gs)
+        ok1 = any((g or {}).get("question") == 1
+                  and (g or {}).get("answer") == (g or {}).get("correct")
+                  for g in gs)
+        return bool(ok0 and ok1), \
+            [f"q{q}={'ok' if (ok0 if q == 0 else ok1) else 'X'}"
+             for q in (0, 1)], \
+            f"number={ok0} comparison={ok1}; completed={done}"
+    if mode == "populationCurrency":
+        gs = _s_worldle_day_guesses(page, "currency-guesses", day_string)
+        ok1 = any((g or {}).get("question") == 1
+                  and (g or {}).get("answer") == (g or {}).get("correct")
+                  for g in gs)
+        ok2 = any((g or {}).get("question") == 2
+                  and (g or {}).get("answer") == (g or {}).get("correct")
+                  for g in gs)
+        return bool(ok1 and ok2), \
+            [f"q{q}={'ok' if (ok1 if q == 1 else ok2) else 'X'}"
+             for q in (1, 2)], \
+            f"q1={ok1} q2={ok2}; completed={done}"
+    if mode == "populousCities":
+        gs = _s_worldle_day_guesses(page, "populous-cities-guesses",
+                                    day_string)
+        n_exp = extra.get("expected_n")
+        if n_exp is None:
+            return False, [str((g or {}).get("name") or "?") for g in gs], \
+                "expected city count unknown (prompt unreadable); completed=" \
+                f"{done}"
+        win = len(gs) == n_exp and bool(gs) and all(
+            (g or {}).get("isCorrect") for g in gs)
+        return win, [str((g or {}).get("name") or "?") for g in gs], \
+            f"{len(gs)}/{n_exp} guesses, all isCorrect={win}; " \
+            f"completed={done}"
+    if mode == "area":
+        gs = _s_worldle_day_guesses(page, "size-guesses", day_string)
+        win = bool(gs) and (gs[0] or {}).get("correct") == (gs[0] or {}).get("answer")
+        return win, [str((g or {}).get("answer") or "?") for g in gs], \
+            f"first guess correct==answer: {win}; completed={done}"
+    return False, [], f"unknown mode {mode}"
+
+
+# ---- runtime interaction helpers (all defensive: no identifiable control
+# ---- -> return False so the caller skips with reason; never click blind) ----
+def _s_worldle_click_submit(page, scope_text=None):
+    """Click the round's submit control (Guess/Submit/Check/Confirm), or
+    press Enter when no submit button exists. Returns the clicked label
+    or 'enter' / None."""
+    try:
+        if scope_text:
+            hit = page.evaluate("""(t) => {
+              const vis = e => e && e.offsetParent !== null;
+              const norm = s => (s||'').toLowerCase().replace(/\\s+/g,' ').trim();
+              const holder = Array.from(document.querySelectorAll(
+                'section, div, form, fieldset')).filter(vis).find(
+                e => norm(e.innerText).includes(norm(t)) &&
+                     e.querySelector('button'));
+              if (!holder) return null;
+              const btns = Array.from(holder.querySelectorAll('button'))
+                .filter(vis);
+              const want = ['submit','check','guess','confirm','continue',
+                            'next','save'];
+              for (const w of want) {
+                const b = btns.find(x => norm(x.innerText) === w);
+                if (b) { b.click(); return w; }
+              }
+              return null;
+            }""", scope_text)
+            if hit:
+                return hit
+        hit = page.evaluate("""() => {
+          const vis = e => e && e.offsetParent !== null;
+          const norm = s => (s||'').toLowerCase().replace(/\\s+/g,' ').trim();
+          const btns = Array.from(document.querySelectorAll('button'))
+            .filter(vis).filter(b => !b.closest('nav, header, footer'));
+          const want = ['submit','check','guess','confirm','continue',
+                        'next','save'];
+          for (const w of want) {
+            const b = btns.find(x => norm(x.innerText) === w);
+            if (b) { b.click(); return w; }
+          }
+          return null;
+        }""")
+        if hit:
+            return hit
+        try:
+            page.keyboard.press("Enter")
+        except Exception:
+            pass
+        return "enter"
+    except Exception:
+        return None
+
+
+def _s_worldle_pick_input(page, keywords):
+    """Mark the best-matching visible text/number input for `keywords`
+    (placeholder / aria-label / name / id / nearby label text) with a
+    temp attribute. Returns True when one was marked."""
+    try:
+        return bool(page.evaluate("""(kws) => {
+          const vis = e => e && e.offsetParent !== null;
+          const norm = s => (s||'').toLowerCase();
+          const inputs = Array.from(document.querySelectorAll(
+            'input, textarea')).filter(vis).filter(
+            e => !e.closest('nav, header, footer'));
+          let best = null, bestScore = 0;
+          for (const inp of inputs) {
+            if (inp.type === 'hidden' || inp.type === 'checkbox' ||
+                inp.type === 'radio' || inp.type === 'range' ||
+                inp.type === 'submit' || inp.type === 'button') continue;
+            let txt = [inp.placeholder, inp.getAttribute('aria-label'),
+                       inp.name, inp.id].map(x => norm(x || '')).join(' ');
+            const lab = inp.labels && inp.labels[0] ?
+              norm(inp.labels[0].innerText || '') : '';
+            txt += ' ' + lab;
+            const host = inp.closest('label, div, section, form');
+            if (host) txt += ' ' + norm(
+              (host.innerText || '').slice(0, 300));
+            let score = 0;
+            for (const k of kws) if (txt.includes(norm(k))) score += 1;
+            if (score > bestScore) { bestScore = score; best = inp; }
+          }
+          if (best && bestScore > 0) {
+            best.setAttribute('data-qp-pick', '1');
+            return true;
+          }
+          return false;
+        }""", [str(k).lower() for k in keywords]))
+    except Exception:
+        return False
+
+
+def _s_worldle_type_picked(page, text, gid):
+    """Type into the input marked by _s_worldle_pick_input (same typing
+    speed as everywhere: _type_like_a_person base_delay=90 — UNCHANGED).
+    Returns True when text landed in the box."""
+    try:
+        inp = page.query_selector("[data-qp-pick='1']")
+        if not inp:
+            return False
+        try:
+            inp.scroll_into_view_if_needed(timeout=3000)
+        except Exception:
+            pass
+        inp.click(timeout=3000)
+        page.wait_for_timeout(400)
+        try:
+            page.keyboard.press("ControlOrMeta+a")
+        except Exception:
+            pass
+        page.wait_for_timeout(200)
+        _type_like_a_person(page, str(text), base_delay=90)
+        page.wait_for_timeout(400)
+        try:
+            v = (inp.input_value() or "").strip()
+        except Exception:
+            v = ""
+        try:
+            page.evaluate("() => { const e = document.querySelector("
+                          "'[data-qp-pick=\"1\"]'); if (e) e.removeAttribute("
+                          "'data-qp-pick'); }")
+        except Exception:
+            pass
+        return bool(v) and str(text).strip()[:12].lower() in v.lower()
+    except Exception:
+        return False
+
+
+def _s_worldle_click_option_text(page, want):
+    """Click a visible option button whose own text exactly equals `want`
+    (normalized). Never clicks a near-match: a wrong option is a wrong
+    guess, so exact-match-or-nothing."""
+    try:
+        hit = page.evaluate("""(want) => {
+          const vis = e => e && e.offsetParent !== null;
+          const norm = s => (s||'').toLowerCase().replace(/\\s+/g,' ').trim();
+          const els = Array.from(document.querySelectorAll(
+            'button, [role=option], [role=button], [role=menuitem], ' +
+            'a, label, li')).filter(vis).filter(
+            e => !e.closest('nav, header, footer'));
+          const hit = els.find(e => norm(e.innerText) === norm(want) ||
+            norm(e.getAttribute('aria-label') || '') === norm(want) ||
+            norm(e.getAttribute('data-value') || '') === norm(want));
+          if (!hit) return [false, 'not found'];
+          hit.click();
+          return [true, (hit.innerText || '').trim().slice(0, 80)];
+        }""", str(want))
+        return bool(hit and hit[0]), str((hit or [None, ""])[1] or "")
+    except Exception as e:
+        return False, f"exception: {str(e)[:80]}"
+
+
+def _s_worldle_click_image(page, kind, code):
+    """Click the flag/emblem/landmark image for `code`.
+
+    kind 'flags' -> src contains /flags/<code>.svg (bundle Sn builder);
+    kind 'shields' -> src contains /shields/<code>.svg (bundle jn builder);
+    kind 'landmarks' -> src contains /landmarks/<code>/ (bundle Lr builder).
+    Clicks the closest clickable ancestor, else the image itself."""
+    try:
+        hit = page.evaluate("""(args) => {
+          const vis = e => e && e.offsetParent !== null;
+          const kind = args[0], code = String(args[1]).toLowerCase();
+          const imgs = Array.from(document.querySelectorAll('img'))
+            .filter(vis);
+          let img = null;
+          if (kind === 'landmarks') {
+            img = imgs.find(i => (i.src || '').toLowerCase().includes(
+              '/landmarks/' + code + '/'));
+          } else {
+            const sub = '/' + kind + '/' + code + '.svg';
+            img = imgs.find(i => (i.src || '').toLowerCase().includes(sub));
+          }
+          if (!img) return [false, 'no matching image'];
+          const t = img.closest(
+            'button, [role=button], [role=option], a, label') || img;
+          t.click();
+          return [true, (img.src || '').slice(-70)];
+        }""", [kind, str(code)])
+        return bool(hit and hit[0]), str((hit or [None, ""])[1] or "")
+    except Exception as e:
+        return False, f"exception: {str(e)[:80]}"
+
+
+def _s_worldle_switch_mode(page, gid, mode, day_string):
+    """Switch rounds via the round-nav dropdown click by visible label
+    (the dropdown's goToRound calls setGameMode(mode, true); Summary
+    navigates to /summary). Fallback: write the same state transition
+    the app persists (game_round {gameMode, dayString}) + reload.
+    Verified by reading game_round back. Returns True iff the mode
+    actually changed."""
+    label = _WORLDLE_MODE_LABELS.get(mode, mode)
+
+    def _verify():
+        # Summary navigates to /summary instead of setting a gameMode
+        # (dropdown goToRound: summary -> navigate("/summary")), so it is
+        # verified by URL, not by game_round.
+        if mode == "summary":
+            try:
+                return "summary" in (page.url or "")
+            except Exception:
+                return False
+        return _s_worldle_current_mode(page) == mode
+
+    if _verify():
+        return True
+    # 1) dropdown click by visible label.
+    try:
+        labels = list(_WORLDLE_MODE_LABELS.values())
+        opened = page.evaluate("""(labels) => {
+          const vis = e => e && e.offsetParent !== null;
+          const norm = s => (s||'').toLowerCase().replace(/\\s+/g,' ').trim();
+          const cands = Array.from(document.querySelectorAll(
+            'button, [role=button], [aria-expanded], [aria-haspopup]'))
+            .filter(vis);
+          for (const el of cands) {
+            const t = norm(el.innerText);
+            if (labels.some(l => t.includes(norm(l))) &&
+                (el.querySelector('svg') ||
+                 el.getAttribute('aria-expanded') !== null ||
+                 el.getAttribute('aria-haspopup'))) {
+              el.click(); return true;
+            }
+          }
+          return false;
+        }""", labels)
+        if opened:
+            page.wait_for_timeout(700)
+            # Tiered item match: role option/menuitem first, then items
+            # inside a listbox/menu container, then any button with the
+            # exact label. (The toggle shows the CURRENT label, never the
+            # target's, so an exact-label click cannot hit the toggle.)
+            clicked = page.evaluate("""(label) => {
+              const vis = e => e && e.offsetParent !== null;
+              const norm = s => (s||'').toLowerCase().replace(/\\s+/g,' ').trim();
+              const els = Array.from(document.querySelectorAll(
+                'button, [role=option], [role=menuitem], ' +
+                '[role=menuitemradio], a, li')).filter(vis)
+                .filter(e => norm(e.innerText) === norm(label));
+              const tier = [
+                e => (e.getAttribute('role') || '').includes('option') ||
+                     (e.getAttribute('role') || '').includes('menuitem'),
+                e => !!e.closest('[role=listbox], [role=menu], ' +
+                                 '[aria-expanded=true]'),
+                e => e.tagName === 'BUTTON'
+              ];
+              for (const t of tier) {
+                const hit = els.find(t);
+                if (hit) { hit.click(); return true; }
+              }
+              return false;
+            }""", label)
+            try:
+                page.keyboard.press("Escape")
+            except Exception:
+                pass
+            if clicked:
+                _settle(page, base=1200)
+                _close_modals(page, _force=True)
+                _settle(page, base=1200)
+                if _verify():
+                    return True
+                # Lifesaver modal can hold the switch as pendingGameMode
+                # until it closes; one more settle + re-check.
+                _settle(page, base=1500)
+                if _verify():
+                    return True
+    except Exception as e:
+        _dbg(gid, f"worldle switch {mode}: dropdown path failed: "
+                  f"{str(e)[:90]}")
+    # 2) fallback: the persisted state transition + reload (the Ke/Ye
+    # hooks restore gameMode from game_round when dayString matches).
+    # Summary fallback: direct navigation to <origin>/summary.
+    try:
+        if mode == "summary":
+            try:
+                origin = "/".join((page.url or "").split("/")[:3])
+                page.goto(origin + "/summary",
+                          wait_until="domcontentloaded", timeout=45000)
+            except Exception:
+                pass
+        else:
+            page.evaluate("""(args) => { localStorage.setItem('game_round',
+              JSON.stringify({gameMode: args[0], dayString: args[1]})); }""",
+              [mode, day_string])
+            page.reload(wait_until="domcontentloaded")
+        try:
+            page._qp_modals_closed = False
+        except Exception:
+            pass
+        _close_modals(page, _force=True)
+        _settle(page, base=1500)
+        if _verify():
+            _dbg(gid, f"worldle switch {mode}: via fallback "
+                      f"({'nav' if mode == 'summary' else 'game_round+reload'})")
+            return True
+    except Exception as e:
+        _dbg(gid, f"worldle switch {mode}: fallback failed: {str(e)[:90]}")
+    return _verify()
+
+
+def _s_worldle_live_round_modes(page, gid):
+    """Read the live round list from the open dropdown (labels -> mode
+    ids). Returns a set of mode ids, or None when the dropdown cannot be
+    read. Rounds the game removed for missing data are ABSENT here —
+    that is the authoritative availability signal."""
+    try:
+        labels = list(_WORLDLE_MODE_LABELS.values())
+        opened = page.evaluate("""(labels) => {
+          const vis = e => e && e.offsetParent !== null;
+          const norm = s => (s||'').toLowerCase().replace(/\\s+/g,' ').trim();
+          const cands = Array.from(document.querySelectorAll(
+            'button, [role=button], [aria-expanded], [aria-haspopup]'))
+            .filter(vis);
+          for (const el of cands) {
+            const t = norm(el.innerText);
+            if (labels.some(l => t.includes(norm(l))) &&
+                (el.querySelector('svg') ||
+                 el.getAttribute('aria-expanded') !== null ||
+                 el.getAttribute('aria-haspopup'))) {
+              el.click(); return true;
+            }
+          }
+          return false;
+        }""", labels)
+        if not opened:
+            return None
+        page.wait_for_timeout(700)
+        found = page.evaluate("""(labels) => {
+          const vis = e => e && e.offsetParent !== null;
+          const norm = s => (s||'').toLowerCase().replace(/\\s+/g,' ').trim();
+          const out = [];
+          for (const e of Array.from(document.querySelectorAll(
+              'button, [role=option], [role=menuitem], ' +
+              '[role=menuitemradio], a, li')).filter(vis)) {
+            const t = norm(e.innerText);
+            if (labels.some(l => norm(l) === t)) out.push(t);
+          }
+          return Array.from(new Set(out));
+        }""", labels)
+        try:
+            page.keyboard.press("Escape")
+        except Exception:
+            pass
+        inv = {_s_worldle_norm(v): k
+               for k, v in _WORLDLE_MODE_LABELS.items()}
+        return {inv[_s_worldle_norm(f)] for f in (found or [])
+                if _s_worldle_norm(f) in inv}
+    except Exception as e:
+        _dbg(gid, f"worldle live round list unreadable: {str(e)[:90]}")
+        return None
+
+
+def _s_worldle_play_country(page, ans, gid, day):
+    """Country round: the pre-existing solver, unchanged — autosuggest
+    picks for the 3-probe plan + answer, Guess button, answer-row win
+    check. Returns (ok, evidence, played_guesses)."""
     _close_modals(page)
     seq = _guesses(gid, ans)
     a = str(ans or "").strip()
+    played = []
     for n, g in enumerate(seq):
         last = (n == len(seq) - 1)
         _idle_drift(page)
         ok, detail = _type_country_guess(page, page, g)
         _dbg(gid, f"guess {n + 1}/{len(seq)} {g!r}: pick ok={ok} ({detail[:70]})")
         if not ok:
-            return False, f"guess {n + 1} {g!r}: pick failed ({detail})"
+            return False, f"guess {n + 1} {g!r}: pick failed ({detail})", played
+        played.append(g)
         try:
             btn = page.query_selector("button:has-text('Guess')")
             if btn and btn.is_visible():
@@ -3115,7 +4250,7 @@ def _s_worldle(page, ans, gid):
         if last and a.lower() in low and any(
                 k in low for k in ("guesses remaining", "well done",
                                   "correct", "share", "guessed")):
-            return True, f"answer row rendered after guess {n + 1}"
+            return True, f"answer row rendered after guess {n + 1}", played
     page.wait_for_timeout(2500)
     try:
         body = (page.evaluate("() => document.body.innerText") or "")
@@ -3125,8 +4260,691 @@ def _s_worldle(page, ans, gid):
     if a.lower() in body.lower() and any(
             k in body.lower() for k in ("well done", "correct",
                                         "guesses remaining", "share")):
-        return True, "answer present with post-game markers"
-    return False, "board did not confirm the answer"
+        return True, "answer present with post-game markers", played
+    return False, "board did not confirm the answer", played
+
+
+def _s_worldle_play_neighbours(page, gid, day):
+    """Neighbours: autosuggest-pick every border country, submit each.
+    Border names come from the day data (neighbour records), never from
+    the played country's own name."""
+    picked = []
+    for b in (day.get("borders") or []):
+        name = b.get("name") or b.get("code")
+        _idle_drift(page)
+        ok, detail = _type_country_guess(page, page, name)
+        _dbg(gid, f"worldle neighbours pick {name!r}: ok={ok} ({detail[:70]})")
+        if not ok:
+            return "failed", [name], \
+                f"autosuggest pick failed for border {name!r} ({detail})"
+        picked.append(name)
+        _s_worldle_click_submit(page)
+        _settle(page, base=2200)
+    return "attempted", picked, f"picked {len(picked)} border countries"
+
+
+def _s_worldle_play_capital(page, gid, day):
+    """Capital: Q0 text/autosuggest name + Q1 map pinpoint.
+
+    The pinpoint click is NEVER faked: the map projection is not in
+    static source, so a guessed pixel would be a guessed answer. When
+    the pinpoint prompt is present ("Can you guess where ... is in ...",
+    locale canYouGuessWhereCapital*), the name path is played, a WARNING
+    is logged, and the mode is reported partial pending live confirmation
+    of the map interaction."""
+    cap = day.get("capital") or {}
+    name = cap.get("name") or ""
+    if not name:
+        return "skipped", [], "no capital city in day data"
+    _idle_drift(page)
+    ok, detail = _type_country_guess(page, page, name)
+    if not ok:
+        # Fall back to plain typing when the round is a bare text input
+        # rather than an autosuggest (no suggestion row to pick).
+        if _s_worldle_pick_input(page, ["capital", "city"]):
+            ok = _s_worldle_type_picked(page, name, gid)
+            detail = "plain-text fallback"
+    _dbg(gid, f"worldle capital name {name!r}: ok={ok} ({detail[:70]})")
+    if not ok:
+        return "failed", [], f"capital name input failed ({detail})"
+    _s_worldle_click_submit(page)
+    _settle(page, base=2500)
+    try:
+        body = (page.evaluate("() => document.body.innerText") or "")
+    except Exception:
+        body = ""
+    pin_present = "can you guess where" in body.lower()
+    if pin_present:
+        _dbg(gid, "worldle capital WARNING: map-pin sub-question present; "
+                  "pin click NOT attempted (map projection not in static "
+                  "source; needs live confirmation)")
+        return "partial", [name], \
+            "name played; pinpoint NOT attempted (needs live confirmation)"
+    return "attempted", [name], "name played; no pinpoint prompt shown"
+
+
+def _s_worldle_play_orientation(page, gid, day):
+    """Orientation: compass direction + distance slider between capitals.
+
+    The reference MUST come from the live round prompt: the prompt must
+    name exactly our capital + one neighbour capital (or our country +
+    one neighbour country). Anything else -> skip with reason, never
+    guess. Bearing = rhumb-line bearing, distance = haversine km between
+    the two capitals. Controls must be two labelled range inputs (angle
+    + distance); a click-dial compass without a numeric affordance is
+    NOT attempted."""
+    try:
+        body = (page.evaluate("() => document.body.innerText") or "")
+    except Exception:
+        body = ""
+    low = body.lower()
+    ours_cap = ((day.get("capital") or {}).get("name") or "")
+    ours_country = day.get("name") or ""
+    # Identify the OTHER endpoint from the prompt.
+    others = []
+    for b in (day.get("borders") or []):
+        for cand in ((b.get("capital") or {}).get("name") or "",
+                     b.get("name") or ""):
+            if cand and _s_worldle_norm(cand) in _s_worldle_norm(body) \
+                    and _s_worldle_norm(cand) != _s_worldle_norm(ours_cap) \
+                    and _s_worldle_norm(cand) != _s_worldle_norm(ours_country):
+                others.append((b, cand))
+    # De-duplicate by border code; require exactly one other endpoint.
+    seen = {}
+    for b, cand in others:
+        seen[b.get("code")] = (b, cand)
+    if len(seen) != 1:
+        return "skipped", [], \
+            f"orientation reference ambiguous: {len(seen)} other " \
+            f"endpoint(s) named in prompt (need exactly 1 neighbour)"
+    (b, _cand) = next(iter(seen.values()))
+    other_cap = b.get("capital") or {}
+    lat1, lon1 = (day.get("capital") or {}).get("lat"), \
+        (day.get("capital") or {}).get("lon")
+    lat2, lon2 = other_cap.get("lat"), other_cap.get("lon")
+    if None in (lat1, lon1, lat2, lon2):
+        return "skipped", [], "orientation: missing capital coordinates"
+    import math as _math
+    p1, p2 = _math.radians(lat1), _math.radians(lat2)
+    dl = _math.radians(lon2 - lon1)
+    dl_w = (dl + _math.pi) % (2 * _math.pi) - _math.pi
+    dpsi = _math.log(_math.tan(_math.pi / 4 + p2 / 2) /
+                     _math.tan(_math.pi / 4 + p1 / 2)) if p1 != p2 else 0.0
+    bearing = (_math.degrees(_math.atan2(dl_w, dpsi)) + 360) % 360 \
+        if dpsi != 0 else (90.0 if dl_w > 0 else 270.0)
+    a_h = _math.sin((p2 - p1) / 2) ** 2 + _math.cos(p1) * _math.cos(p2) \
+        * _math.sin(dl / 2) ** 2
+    dist_km = 2 * 6371.0 * _math.asin(min(1.0, _math.sqrt(a_h)))
+    _dbg(gid, f"worldle orientation: {ours_cap} -> "
+              f"{other_cap.get('name')} bearing={bearing:.1f}deg "
+              f"dist={dist_km:.0f}km (haversine)")
+    # Two labelled range inputs: angle (direction/compass) + distance.
+    try:
+        mapped = page.evaluate("""() => {
+          const vis = e => e && e.offsetParent !== null;
+          const norm = s => (s||'').toLowerCase();
+          const ranges = Array.from(document.querySelectorAll(
+            'input[type=range]')).filter(vis);
+          const out = {};
+          for (const r of ranges) {
+            let txt = [r.placeholder, r.getAttribute('aria-label'),
+                       r.name, r.id].map(x => norm(x || '')).join(' ');
+            const host = r.closest('label, div, section, form');
+            if (host) txt += ' ' + norm((host.innerText || '').slice(0, 250));
+            if (txt.includes('direction') || txt.includes('angle') ||
+                txt.includes('compass') || txt.includes('bearing'))
+              out.angle = r;
+            else if (txt.includes('distance') || txt.includes('km') ||
+                     txt.includes('kilomet'))
+              out.distance = r;
+          }
+          const res = {};
+          for (const k of ['angle', 'distance']) {
+            if (out[k]) {
+              out[k].setAttribute('data-qp-range-' + k, '1');
+              res[k] = {min: out[k].min, max: out[k].max};
+            }
+          }
+          return res;
+        }""")
+    except Exception:
+        mapped = {}
+    if not (isinstance(mapped, dict) and mapped.get("angle")
+            and mapped.get("distance")):
+        return "skipped", [], \
+            "orientation controls not identifiable (need labelled " \
+            "angle + distance range inputs; dial compass not attempted)"
+    try:
+        page.evaluate("""(args) => {
+          const set = (sel, val) => {
+            const el = document.querySelector(sel);
+            if (!el) return false;
+            const min = parseFloat(el.min || 0), max = parseFloat(
+              el.max || 360);
+            el.value = String(Math.min(max, Math.max(min, val)));
+            el.dispatchEvent(new Event('input', {bubbles: true}));
+            el.dispatchEvent(new Event('change', {bubbles: true}));
+            return true;
+          };
+          return [set('[data-qp-range-angle="1"]', args[0]),
+                  set('[data-qp-range-distance="1"]', args[1])];
+        }""", [round(bearing, 1), round(dist_km)])
+    except Exception as e:
+        return "failed", [], f"orientation slider set failed: {str(e)[:90]}"
+    _s_worldle_click_submit(page)
+    _settle(page, base=2500)
+    return "attempted", [f"bearing {bearing:.1f}deg",
+                         f"distance {dist_km:.0f}km"], \
+        f"angle+distance set from {ours_cap} to {other_cap.get('name')}"
+
+
+def _s_worldle_play_flag_emblem(page, gid, day, mode):
+    """Flag / Emblem: click the image whose src is the game's own URL for
+    this country (flags/<code>.svg / shields/<code>.svg)."""
+    kind = "flags" if mode == "flag" else "shields"
+    code = (day.get("code") or "").lower()
+    ok, detail = _s_worldle_click_image(page, kind, code)
+    _dbg(gid, f"worldle {mode} click {code}: ok={ok} ({detail[:70]})")
+    if not ok:
+        return "failed", [], f"{mode} image not found ({detail})"
+    _settle(page, base=2000)
+    _s_worldle_click_submit(page)
+    _settle(page, base=2200)
+    return "attempted", [day.get("name") or code], f"clicked {kind}/{code}"
+
+
+def _s_worldle_play_trivia(page, gid, day):
+    """Trivia: 3 multiple-choice questions. Correct answers come ONLY
+    from the facts DB (fillFacts), matched by question text against the
+    live DOM. A question with no facts-DB match (e.g. the boolean
+    geogrid-facts question, whose phrasing mapping is not in static
+    source) is SKIPPED, never guessed."""
+    facts = day.get("facts") or {}
+    answered, done_codes = [], set()
+    # Multi-pass: questions may be shown one at a time (answering one
+    # reveals the next), so re-scan until a full pass answers nothing.
+    for _pass in range(4):
+        try:
+            body = (page.evaluate("() => document.body.innerText") or "")
+        except Exception:
+            body = ""
+        progress = False
+        for _code, f in sorted(facts.items()):
+            if _code in done_codes:
+                continue
+            q, ans = (f.get("question") or ""), (f.get("answer") or "")
+            if not q or not ans:
+                continue
+            if _s_worldle_norm(q) not in _s_worldle_norm(body):
+                continue
+            ok, detail = _s_worldle_click_option_text(page, ans)
+            _dbg(gid, f"worldle trivia factCode={_code}: option {ans!r} "
+                      f"ok={ok} ({detail[:60]})")
+            if ok:
+                answered.append(ans)
+                done_codes.add(_code)
+                progress = True
+                _s_worldle_click_submit(page, scope_text=q[:60])
+                _settle(page, base=1800)
+                try:
+                    body = (page.evaluate(
+                        "() => document.body.innerText") or "")
+                except Exception:
+                    body = ""
+        if not progress:
+            break
+    if not answered:
+        return "skipped", [], \
+            "trivia: no displayed question matched the facts DB " \
+            "(facts source not readable for this round)"
+    if len(answered) < 3:
+        return "partial", answered, \
+            f"answered {len(answered)}/3 from facts DB; remaining " \
+            f"question(s) unmatched -> NOT guessed"
+    return "attempted", answered, "answered 3/3 from facts DB"
+
+
+def _s_worldle_play_landmark(page, gid, day):
+    """Landmark: Q0 pick the image, Q1 name it — both keyed by the day
+    JSON landmarkCode (938 for TG 2026-10-17, computed, never hardcoded).
+    Image matched by the game's own landmark URL (/landmarks/<code>/);
+    name matched by the landmarks-DB name (names.en)."""
+    lm = day.get("landmark") or {}
+    want_code = lm.get("landmarkCode")
+    name = lm.get("name") or ""
+    if want_code is None:
+        return "skipped", [], "no landmarkData in day JSON"
+    ok, detail = _s_worldle_click_image(page, "landmarks", want_code)
+    _dbg(gid, f"worldle landmark image {want_code}: ok={ok} ({detail[:70]})")
+    if not ok:
+        return "failed", [], f"landmark image not found ({detail})"
+    _settle(page, base=1500)
+    _s_worldle_click_submit(page)
+    _settle(page, base=2000)
+    if name:
+        ok2, detail2 = _s_worldle_click_option_text(page, name)
+        if not ok2 and _s_worldle_pick_input(page, ["landmark", "name"]):
+            ok2 = _s_worldle_type_picked(page, name, gid)
+            detail2 = "typed name into input"
+        _dbg(gid, f"worldle landmark name {name!r}: ok={ok2} ({detail2[:60]})")
+        if not ok2:
+            return "partial", [f"image {want_code}"], \
+                f"image picked; name option/input not found ({detail2})"
+        _s_worldle_click_submit(page)
+        _settle(page, base=2200)
+        return "attempted", [f"image {want_code}", name], \
+            "image + name played for landmarkCode " + str(want_code)
+    return "partial", [f"image {want_code}"], \
+        "image picked; landmark name missing from landmarks DB"
+
+
+def _s_worldle_play_language(page, gid, day):
+    """Spoken languages: 2 questions, answers = the languageData codes.
+    Options are clicked ONLY when they expose a languageCode (data
+    attribute / value / aria-label). Display names cannot be mapped to
+    codes without guessing — if no code linkage exists, skip."""
+    langs = day.get("languages") or []
+    codes = [str(x.get("languageCode") or "").lower() for x in langs]
+    if len(codes) != 2:
+        return "skipped", [], \
+            f"language round needs exactly 2 languages, have {len(codes)}"
+    try:
+        hit = page.evaluate("""(codes) => {
+          const vis = e => e && e.offsetParent !== null;
+          const els = Array.from(document.querySelectorAll(
+            'button, [role=option], [role=button], [role=menuitem], ' +
+            'input[type=checkbox], input[type=radio], label, option'))
+            .filter(vis).filter(e => !e.closest('nav, header, footer'));
+          const found = {};
+          for (const code of codes) {
+            const el = els.find(e => {
+              const attrs = [e.getAttribute('data-value'),
+                e.getAttribute('data-code'), e.getAttribute('value'),
+                e.getAttribute('aria-label'), e.getAttribute('data-language'),
+                e.getAttribute('data-lang')].map(x => (x || '').toLowerCase());
+              return attrs.includes(code);
+            });
+            if (el) found[code] = true;
+          }
+          return found;
+        }""", codes)
+    except Exception:
+        hit = {}
+    if not (isinstance(hit, dict) and all(hit.get(c) for c in codes)):
+        return "skipped", [], \
+            "language options do not expose languageCode (names cannot " \
+            "be mapped to codes without guessing)"
+    # Two questions: click each language once per question (the game's
+    # win check counts isCorrect guesses per question == #languages).
+    picked = []
+    for _q in (0, 1):
+        for c in codes:
+            try:
+                page.evaluate("""(code) => {
+                  const vis = e => e && e.offsetParent !== null;
+                  const els = Array.from(document.querySelectorAll(
+                    'button, [role=option], [role=button], ' +
+                    '[role=menuitem], input[type=checkbox], ' +
+                    'input[type=radio], label, option'))
+                    .filter(vis).filter(
+                    e => !e.closest('nav, header, footer'));
+                  const el = els.find(e => {
+                    const attrs = [e.getAttribute('data-value'),
+                      e.getAttribute('data-code'), e.getAttribute('value'),
+                      e.getAttribute('aria-label'),
+                      e.getAttribute('data-language'),
+                      e.getAttribute('data-lang')]
+                      .map(x => (x || '').toLowerCase());
+                    return attrs.includes(code);
+                  });
+                  if (el) { el.click(); return true; }
+                  return false;
+                }""", c)
+                picked.append(c)
+                _settle(page, base=800)
+            except Exception:
+                pass
+        _s_worldle_click_submit(page)
+        _settle(page, base=1800)
+    return "attempted", picked, f"picked languageCodes {codes} per question"
+
+
+def _s_worldle_play_gdp(page, gid, day):
+    """GDP: Q0 type gdpPerCapita; Q1 pick the highest-GDP country among
+    {country + neighbours} (locale canYOuGuessHigherGDP), computed from
+    neighbour records. Comparison option matched by country NAME."""
+    gdp = day.get("gdp") or {}
+    number = gdp.get("number")
+    compare = gdp.get("compare_answer")
+    if number is None:
+        return "skipped", [], "no gdpPerCapita in day data"
+    if not _s_worldle_pick_input(page, ["gdp", "per capita", "dollar"]):
+        return "failed", [], "GDP number input not found"
+    if not _s_worldle_type_picked(page, str(int(number)), gid):
+        return "failed", [], "GDP number typing failed"
+    _s_worldle_click_submit(page)
+    _settle(page, base=2000)
+    if not compare:
+        return "partial", [str(number)], \
+            "number played; comparison answer not computable"
+    ok, detail = _s_worldle_click_option_text(page, compare)
+    _dbg(gid, f"worldle gdp comparison {compare!r}: ok={ok} ({detail[:60]})")
+    if not ok:
+        return "partial", [str(number)], \
+            f"number played; comparison option {compare!r} not found"
+    _s_worldle_click_submit(page)
+    _settle(page, base=2200)
+    return "attempted", [str(number), compare], \
+        "GDP number + highest-GDP comparison played"
+
+
+def _s_worldle_play_currency(page, gid, day):
+    """Population & Currency: type population; pick the currency NAME
+    from currencyData (matched by option text, else by currency code)."""
+    pop = day.get("population")
+    cur = day.get("currency") or {}
+    if pop is None:
+        return "skipped", [], "no population in day data"
+    if not _s_worldle_pick_input(page, ["population"]):
+        return "failed", [], "population input not found"
+    if not _s_worldle_type_picked(page, str(int(pop)), gid):
+        return "failed", [], "population typing failed"
+    _s_worldle_click_submit(page)
+    _settle(page, base=2000)
+    cname = cur.get("name") or ""
+    ccode = cur.get("code") or ""
+    ok, detail = (False, "no currency name")
+    if cname:
+        ok, detail = _s_worldle_click_option_text(page, cname)
+    if not ok and ccode:
+        ok, detail = _s_worldle_click_option_text(page, ccode)
+    _dbg(gid, f"worldle currency {cname!r}/{ccode}: ok={ok} ({detail[:60]})")
+    if not ok:
+        return "partial", [str(pop)], \
+            f"population played; currency option not found ({detail})"
+    _s_worldle_click_submit(page)
+    _settle(page, base=2200)
+    return "attempted", [str(pop), cname or ccode], \
+        "population + currency played"
+
+
+def _s_worldle_play_populous(page, gid, day):
+    """Populous cities: order the N most populous cities by population
+    desc. N is read from the live prompt ("organise the N most populated
+    cities"); the order comes from cities.json. Click-to-order only:
+    a drag UI without identifiable order controls is skipped."""
+    try:
+        body = (page.evaluate("() => document.body.innerText") or "")
+    except Exception:
+        body = ""
+    import re as _re
+    m = _re.search(r"(\d+)\s+most populated", body)
+    n_exp = int(m.group(1)) if m else None
+    if n_exp is None:
+        return "skipped", [], \
+            "populous cities: expected count not in live prompt"
+    want = [c.get("name") for c in (day.get("populous") or [])[:n_exp]]
+    if len(want) < n_exp or not all(want):
+        return "skipped", [], \
+            f"populous cities: only {len([w for w in want if w])} named " \
+            f"cities for N={n_exp}"
+    # All N names must be present as distinct clickable options.
+    try:
+        present = page.evaluate("""(names) => {
+          const vis = e => e && e.offsetParent !== null;
+          const norm = s => (s||'').toLowerCase().replace(/\\s+/g,' ').trim();
+          const els = Array.from(document.querySelectorAll(
+            'button, [role=option], [role=button], li, [draggable=true]'))
+            .filter(vis).filter(e => !e.closest('nav, header, footer'));
+          return names.map(n => els.some(
+            e => norm(e.innerText) === norm(n)));
+        }""", want)
+    except Exception:
+        present = []
+    if not (isinstance(present, list) and len(present) == n_exp
+            and all(present)):
+        return "skipped", [], \
+            "populous cities: not all city names are clickable options " \
+            "(drag UI not determinable from static source)"
+    for name in want:
+        ok, detail = _s_worldle_click_option_text(page, name)
+        _dbg(gid, f"worldle populous click {name!r}: ok={ok} ({detail[:50]})")
+        if not ok:
+            return "failed", [], f"populous cities click failed: {name!r}"
+        _settle(page, base=700)
+    _s_worldle_click_submit(page)
+    _settle(page, base=2200)
+    return "attempted", want, f"ordered top-{n_exp} cities by population"
+
+
+def _s_worldle_play_area(page, gid, day):
+    """Area: type the size (km2). A comparison sub-question, if shown,
+    is answered only when the other country is named in the prompt and
+    resolvable; otherwise the number alone is played."""
+    size = day.get("size")
+    if size is None:
+        return "skipped", [], "no size in day data"
+    if not _s_worldle_pick_input(page, ["size", "area", "km", "surface"]):
+        return "failed", [], "area number input not found"
+    if not _s_worldle_type_picked(page, str(int(size)), gid):
+        return "failed", [], "area number typing failed"
+    _s_worldle_click_submit(page)
+    _settle(page, base=2000)
+    return "attempted", [str(size)], f"area {size} km2 played"
+
+
+def _s_worldle_play_bonus(page, gid, day, mode):
+    """Dispatch one bonus mode to its player. Returns
+    (status, guesses, detail) with status in {attempted, partial,
+    skipped, failed}; the caller applies the win check and finalises."""
+    if mode == "neighbours":
+        return _s_worldle_play_neighbours(page, gid, day)
+    if mode == "capital":
+        return _s_worldle_play_capital(page, gid, day)
+    if mode == "orientation":
+        return _s_worldle_play_orientation(page, gid, day)
+    if mode in ("flag", "emblem"):
+        return _s_worldle_play_flag_emblem(page, gid, day, mode)
+    if mode == "trivia":
+        return _s_worldle_play_trivia(page, gid, day)
+    if mode == "landmark":
+        return _s_worldle_play_landmark(page, gid, day)
+    if mode == "spokenLanguages":
+        return _s_worldle_play_language(page, gid, day)
+    if mode == "gdp":
+        return _s_worldle_play_gdp(page, gid, day)
+    if mode == "populationCurrency":
+        return _s_worldle_play_currency(page, gid, day)
+    if mode == "populousCities":
+        return _s_worldle_play_populous(page, gid, day)
+    if mode == "area":
+        return _s_worldle_play_area(page, gid, day)
+    return "skipped", [], f"no player for mode {mode}"
+
+
+def _s_worldle(page, ans, gid):
+    """Worldle ALL daily rounds in ONE video, one chapter per played
+    mode: Country first, then bonus rounds in dropdown order, then the
+    Summary end card.
+
+    Solved (overall) requires: Country won AND every bonus round the
+    game offers (not removed for missing data) fully passes the game's
+    own win check. A mode skipped-with-reason (input not determinable
+    from static source / facts not readable / reference ambiguous) or
+    left partial (e.g. Capital pinpoint not attempted) makes the run
+    NOT solved — the evidence names the mode + reason + the live
+    confirmation still needed — so no publishable final is assembled
+    for a partial all-modes run (QC honesty: same rule as unsolved)."""
+    global _WORLDLE_T0
+    _WORLDLE_T0 = time.time()
+    _WORLDLE_MODES.clear()
+    _WORLDLE_SEGMENTS.clear()
+    _PLAYED.pop(gid, None)
+    _close_modals(page)
+    tgt = A.target_date()
+    day_string = tgt.isoformat()
+    # Day data: prefer the target date; run_one may have re-keyed to the
+    # served day, in which case the solver's answer (ans) names the
+    # served day's country — fall back to adjacent dates matching ans.
+    day = None
+    try:
+        cand = A.worldle_all_modes(tgt)
+        if _s_worldle_norm(cand.get("name")) == _s_worldle_norm(ans):
+            day = cand
+        else:
+            _dbg(gid, "worldle day-data name "
+                      f"{cand.get('name')!r} != solver answer {ans!r}; "
+                      "trying adjacent dates (served-day re-key)")
+    except SystemExit as e:
+        _dbg(gid, f"worldle day data unavailable for {day_string}: {e}")
+    except Exception as e:
+        _dbg(gid, f"worldle day data error for {day_string}: {str(e)[:120]}")
+    if day is None:
+        from datetime import timedelta as _td
+        for _off in (1, -1, 2, -2):
+            try:
+                cand = A.worldle_all_modes(tgt + _td(days=_off))
+            except Exception:
+                continue
+            if _s_worldle_norm(cand.get("name")) == _s_worldle_norm(ans):
+                day = cand
+                _dbg(gid, f"worldle day data matched on "
+                          f"{cand.get('date')} (re-keyed run)")
+                break
+    if day is None:
+        return False, ("worldle all-modes: no day data matching solver "
+                       f"answer {ans!r} (target {day_string} + adjacents)")
+    _dbg(gid, f"worldle all-modes: {day.get('name')} ({day.get('code')}) "
+              f"day {day.get('date')} capital="
+              f"{(day.get('capital') or {}).get('name')} "
+              f"borders={[b.get('code') for b in day.get('borders') or []]} "
+              f"landmark={(day.get('landmark') or {}).get('landmarkCode')}")
+
+    # Fresh state, then a reload so the app boots clean.
+    _s_worldle_clear_storage(page, gid, day_string)
+    try:
+        page.reload(wait_until="domcontentloaded")
+    except Exception:
+        pass
+    try:
+        page._qp_modals_closed = False
+    except Exception:
+        pass
+    _close_modals(page, _force=True)
+    _settle(page, base=1500)
+
+    played_labels = []
+
+    def _record(mode, status, guesses, detail, win_check):
+        label = _WORLDLE_MODE_LABELS.get(mode, mode)
+        rec = {"mode": mode, "label": label, "status": status,
+               "guesses": list(guesses or []),
+               "correct": bool(win_check[0]) if win_check else False,
+               "win_check": (win_check[2] if win_check else ""),
+               "detail": detail}
+        _WORLDLE_MODES.append(rec)
+        for g in (guesses or []):
+            played_labels.append(f"{label}: {g}")
+        _PLAYED[gid] = list(played_labels)
+        _dbg(gid, f"worldle mode {mode}: status={status} "
+                  f"correct={rec['correct']} guesses={rec['guesses']} "
+                  f"win_check={rec['win_check']} detail={detail[:110]}")
+        return rec
+
+    # ---- Country first (bonus rounds are locked until it completes).
+    _s_worldle_segment("country", "Country")
+    ok_c, ev_c, played_c = _s_worldle_play_country(page, ans, gid, day)
+    win_c = _s_worldle_win_check(page, "country", day, day_string)
+    _record("country", "solved" if (ok_c and win_c[0]) else "failed",
+            played_c, ev_c, win_c)
+    if not (ok_c and win_c[0]):
+        return False, (f"worldle all-modes: country not solved "
+                       f"({ev_c}; win_check={win_c[2]})")
+
+    # ---- Live round list: the game removes rounds with missing data.
+    live = _s_worldle_live_round_modes(page, gid)
+    if live is not None:
+        _dbg(gid, f"worldle live rounds: {sorted(live)}")
+    avail = day.get("available") or {}
+    for mode in _WORLDLE_PLAY_ORDER[1:]:
+        label = _WORLDLE_MODE_LABELS.get(mode, mode)
+        if live is not None and mode not in live:
+            # Game-removed: excluded from the solved requirement.
+            _record(mode, "removed", [],
+                    "removed by game (absent from live round list)",
+                    (False, [], "round not offered by game"))
+            continue
+        if avail.get(mode) is not True:
+            _record(mode, "removed", [],
+                    f"removed by game: {avail.get(mode)}",
+                    (False, [], "statically removed (game removal rule)"))
+            continue
+        if not _s_worldle_switch_mode(page, gid, mode, day_string):
+            _record(mode, "skipped", [],
+                    "mode switch failed (dropdown + game_round fallback)",
+                    (False, [], "switch failed"))
+            continue
+        _s_worldle_segment(mode, label)
+        _close_modals(page, _force=True)
+        status, guesses, detail = _s_worldle_play_bonus(page, gid, day, mode)
+        # Populous win check needs the N parsed from the live prompt;
+        # re-parse here from the same prompt text the player read.
+        extra = {}
+        if mode == "populousCities":
+            try:
+                _bt = (page.evaluate(
+                    "() => document.body.innerText") or "")
+                import re as _re2
+                _m2 = _re2.search(r"(\d+)\s+most populated", _bt)
+                extra["expected_n"] = int(_m2.group(1)) if _m2 else None
+            except Exception:
+                extra["expected_n"] = None
+        win = _s_worldle_win_check(page, mode, day, day_string,
+                                   extra=extra)
+        if status == "attempted":
+            final = "solved" if win[0] else "failed"
+        elif status == "partial":
+            # Partial = some sub-question correct, rest skipped with
+            # reason (e.g. Capital pinpoint). Win check cannot pass
+            # without the missing part, so never upgrade to solved.
+            final = "partial"
+        elif status == "skipped":
+            final = "skipped"
+        else:  # failed
+            final = "failed"
+        _record(mode, final, guesses, detail, win)
+
+    # ---- Summary end card (not a puzzle). No chapter segment is
+    # recorded for it here: _s_worldle_final_chapters appends the
+    # Summary chapter once, at gameplay end.
+    if _s_worldle_switch_mode(page, gid, "summary", day_string):
+        _record("summary", "end-card", [],
+                "summary end card (not a puzzle)", (True, [], "n/a"))
+    else:
+        _record("summary", "skipped", [],
+                "summary navigation failed (end card only)",
+                (False, [], "summary switch failed"))
+
+    solved_modes = [r for r in _WORLDLE_MODES
+                    if r["mode"] != "summary" and r["status"] == "solved"]
+    offered = [r for r in _WORLDLE_MODES
+               if r["mode"] != "summary"
+               and r["status"] != "removed"]
+    blocked = [r for r in _WORLDLE_MODES
+               if r["mode"] != "summary"
+               and r["status"] in ("partial", "skipped", "failed")]
+    n_offered = len(offered)
+    evidence = (f"worldle all-modes: {day.get('name')} ({day.get('code')}); "
+                f"{len(solved_modes)}/{n_offered} offered modes solved; "
+                f"chapters={_s_worldle_chapter_plan()}")
+    if blocked:
+        evidence += "; blocked: " + "; ".join(
+            f"{r['mode']}={r['status']} ({r['detail'][:80]})"
+            for r in blocked)
+    solved = (len(offered) == len(solved_modes)) and bool(offered)
+    if not solved:
+        return False, evidence
+    return True, evidence
 
 
 def _s_globle(page, ans, gid):
@@ -3141,7 +4959,9 @@ def _s_globle(page, ans, gid):
                            "404 - faked day is ahead of the server's roll)")
     seq = _guesses(gid, ans)
     a = str(ans or "").strip()
+    _played_gl = []
     for n, g in enumerate(seq):
+        _dbg(gid, f"guess {n + 1}/{len(seq)} {g!r}")
         _idle_drift(page)
         try:
             inp = page.query_selector("input[name=guess]")
@@ -3160,11 +4980,15 @@ def _s_globle(page, ans, gid):
         except Exception as e:
             return False, f"guess {n + 1} {g!r}: {str(e)[:110]}"
         _settle(page, base=2800)
+        _played_gl.append(g)
+        _PLAYED[gid] = list(_played_gl)
         try:
             body = (page.evaluate("() => document.body.innerText") or "")
         except Exception:
             body = ""
         low = body.lower()
+        _dbg(gid, f"board after guess {n + 1}: "
+                  f"{body[-140:].replace(chr(10), '|')[:120]!r}")
         if a.lower() in low and any(
                 k in low for k in ("found", "congrat", "well done",
                                   "correct", "share", "win")):
@@ -3182,31 +5006,94 @@ def _s_globle(page, ans, gid):
     return False, "answer not found in guess list"
 
 
-def _countryle_frame(page):
+# Countryle onboarding buttons, PLAY/START-first: the old scan returned the
+# FIRST matching button in DOM order (NEXT before PLAY), so PLAY was starved
+# and the deck burned 5 no-op NEXT taps. PLAY/START/CONTINUE win whenever
+# present; NEXT/SKIP only when no PLAY-style button exists.
+_COUNTRYLE_BTN_JS = """() => {
+  const vis = e => e && e.offsetParent !== null;
+  const pick = (re) => {
+    for (const b of Array.from(
+        document.querySelectorAll('button, a')).filter(vis)) {
+      const t = (b.innerText || '').trim().toUpperCase();
+      if (re.test(t)) {
+        const r = b.getBoundingClientRect();
+        if (r.width > 4 && r.height > 4)
+          return {t: t, x: r.x + r.width / 2, y: r.y + r.height / 2};
+      }
+    }
+    return null;
+  };
+  return pick(/^(PLAY|START|CONTINUE|GO|GOT IT)$/) || pick(/^(NEXT|SKIP)$/);
+}"""
+_COUNTRYLE_BTN_EXCEPT_JS = """(skip) => {
+  const vis = e => e && e.offsetParent !== null;
+  const pick = (re) => {
+    for (const b of Array.from(
+        document.querySelectorAll('button, a')).filter(vis)) {
+      const t = (b.innerText || '').trim().toUpperCase();
+      if (t !== skip && re.test(t)) {
+        const r = b.getBoundingClientRect();
+        if (r.width > 4 && r.height > 4)
+          return {t: t, x: r.x + r.width / 2, y: r.y + r.height / 2};
+      }
+    }
+    return null;
+  };
+  return pick(/^(PLAY|START|CONTINUE|GO|GOT IT)$/) || pick(/^(NEXT|SKIP)$/);
+}"""
+
+
+def _countryle_frame(page, max_rounds=6, wait_ms=500):
     """The playable app lives in a full-page iframe (rm-app-frame ->
     /index.html); the outer document is an ad shell with an empty body - which
-    is why every mount check (all versions) reported 'UI still empty'."""
+    is why every mount check (all versions) reported 'UI still empty'.
+
+    CAPPED + NON-BLOCKING (fix-loop iter 3): at most max_rounds quick
+    scans (~3 s total), each probe a single immediate evaluate
+    (query_selector would block up to its timeout per frame). The old
+    version looped 40x3 s (~120 s) and callers then polled a STALE handle
+    for another 131 s. Callers re-acquire on EVERY wait iteration instead.
+    """
     welcome = None
-    for _ in range(40):                      # 120 s: headed+ads boot is slow
+    for _ in range(max_rounds):
         for fr in page.frames:
             try:
                 u = (fr.url or "")
                 if u == page.url or not u.startswith("http"):
                     continue
-                if fr.query_selector("input") or fr.query_selector("button"):
+                if fr.evaluate("() => !!document.querySelector('input, button')"):
                     return fr
                 if ("welcome" in u or "index.html" in u) and welcome is None:
                     welcome = fr
             except Exception:
                 continue
-        if welcome is not None and _ > 20:
+        if welcome is not None and _ > 2:
             return welcome
-        page.wait_for_timeout(3000)
+        page.wait_for_timeout(wait_ms)
     return welcome
+
+
+def _countryle_live_frame(page, fr):
+    """Return a live frame handle: `fr` if still attached, else a fresh
+    re-acquire. The app iframe navigates (/welcome -> /index.html)
+    mid-onboarding, which detaches the old handle — every poll on it
+    then misses forever (the 131 s stale-frame wait)."""
+    try:
+        if fr is not None and fr.evaluate("() => true"):
+            return fr
+    except Exception:
+        pass
+    try:
+        fresh = _countryle_frame(page)
+    except Exception:
+        fresh = None
+    return fresh if fresh is not None else fr
 
 
 def _s_countryle(page, ans, gid):
     """Countryle: pass the /welcome gate INSIDE the app iframe, then guess."""
+    import time as _time_c
     _close_modals(page)
     # The outer ad shell keeps its #loading-mask ON TOP of the app iframe, so
     # every click lands on the mask (Playwright: 'element click intercepted').
@@ -3223,11 +5110,20 @@ def _s_countryle(page, ans, gid):
         }""")
     except Exception as e:
         _dbg(gid, f"mask eviction failed: {str(e)[:80]}")
-    fr = _countryle_frame(page)
+    # Boot wait = repeated cheap re-acquires (each ~3 s max), NOT one
+    # 120 s blocking scan. The frame handle is fresh on every attempt.
+    fr = None
+    _t_boot0 = _time_c.time()
+    for _boot in range(12):
+        fr = _countryle_frame(page)
+        if fr is not None:
+            break
+        page.wait_for_timeout(2000)
     if fr is None:
         _dbg(gid, "app iframe never produced UI (bot-gate?)")
         return False, "app iframe empty after 60 s"
-    _dbg(gid, f"app frame: {fr.url[:60]}")
+    _dbg(gid, f"app frame acquired after {_time_c.time() - _t_boot0:.1f}s: "
+              f"{fr.url[:60]}")
     # The pageos shell keeps a full-screen #loading-mask spinner OVER the app
     # iframe until ad boot completes; on CI it never completes, so the mask
     # intercepts every click (element AND coordinate) on the onboarding deck.
@@ -3247,22 +5143,18 @@ def _s_countryle(page, ans, gid):
         _last_tap = None
     page._qp_unch = 0
     for _tap in range(16):
+            # Re-acquire EVERY iteration: the iframe navigates mid-deck and
+            # the old handle goes stale (every poll then misses).
+            _fr_new = _countryle_live_frame(page, fr)
+            if _fr_new is not fr:
+                _dbg(gid, "onboarding: frame re-acquired "
+                          f"(was {(fr.url if fr else '')[:40]})")
+                fr = _fr_new
             box = None
             try:
-                box = fr.evaluate("""() => {
-                    const btns = Array.from(document.querySelectorAll('button, a'))
-                        .filter(e => e && e.offsetParent !== null);
-                    for (const b of btns) {
-                        const t = (b.innerText || '').trim().toUpperCase();
-                        if (/^(NEXT|SKIP|PLAY|START|CONTINUE|GO|GOT IT)$/.test(t)) {
-                            const r = b.getBoundingClientRect();
-                            if (r.width > 4 && r.height > 4)
-                                return {t: t, x: r.x + r.width / 2,
-                                        y: r.y + r.height / 2};
-                        }
-                    }
-                    return null;
-                }""")
+                # PLAY/START-first scan (see _COUNTRYLE_BTN_JS): tap PLAY as
+                # soon as it exists instead of starving it behind NEXT.
+                box = fr.evaluate(_COUNTRYLE_BTN_JS)
             except Exception:
                 box = None
             if not box:
@@ -3284,20 +5176,9 @@ def _s_countryle(page, ans, gid):
                 _before = ""
             if _last_tap and box["t"] == _last_tap:
                 try:  # NEXT is a no-op on some decks: rotate the label
-                    _alt = fr.evaluate("""(skip) => {
-    const btns = Array.from(document.querySelectorAll('button, a'))
-        .filter(e => e && e.offsetParent !== null);
-    for (const b of btns) {
-        const t = (b.innerText || '').trim().toUpperCase();
-        if (/^(NEXT|SKIP|PLAY|START|CONTINUE|GO|GOT IT)$/.test(t)
-            && t !== skip) {
-            const r = b.getBoundingClientRect();
-            if (r.width > 4 && r.height > 4)
-                return {t: t, x: r.x + r.width / 2, y: r.y + r.height / 2};
-        }
-    }
-    return null;
-}""", box["t"])
+                    # Same label twice with no slide change: rotate the
+                    # label, PLAY-first (a no-op NEXT must not block PLAY).
+                    _alt = fr.evaluate(_COUNTRYLE_BTN_EXCEPT_JS, box["t"])
                     if _alt:
                         box = _alt
                 except Exception:
@@ -3362,6 +5243,7 @@ def _s_countryle(page, ans, gid):
     _t_play0 = _time2.time()
     for _play in range(2):
         try:
+            fr = _countryle_live_frame(page, fr)
             if fr.query_selector("input"):
                 _dbg(gid, f"PLAY loop: input already visible after "
                           f"{_time2.time() - _t_play0:.1f}s")
@@ -3390,6 +5272,13 @@ def _s_countryle(page, ans, gid):
     _fin = None
     _t_wait0 = _time2.time()
     for _w in range(10):
+        # Re-acquire EVERY wait iteration: the old code polled a handle
+        # captured before onboarding, which went stale on navigation and
+        # missed the input for 131 s while it was on screen.
+        _fr_w = _countryle_live_frame(page, fr)
+        if _fr_w is not fr:
+            _dbg(gid, f"input-wait iter {_w}: frame re-acquired")
+            fr = _fr_w
         try:
             _fin = fr.query_selector("input")
         except Exception:
@@ -3422,6 +5311,7 @@ def _s_countryle(page, ans, gid):
     for n, g in enumerate(seq):
         last = (n == len(seq) - 1)
         _idle_drift(page)
+        fr = _countryle_live_frame(page, fr)
         ok, detail = _type_country_guess(page, fr, g)
         _dbg(gid, f"guess {n + 1}/{len(seq)} {g!r}: ok={ok} ({detail[:80]})")
         if not ok and "no text input" in str(detail):
@@ -3436,20 +5326,8 @@ def _s_countryle(page, ans, gid):
                     _dbg(gid, "deck re-appeared after iframe refresh; re-tapping")
                     for _tap2 in range(10):
                         try:
-                            _b2 = fr.evaluate("""() => {
-                                const btns = Array.from(document.querySelectorAll('button, a'))
-                                    .filter(e => e && e.offsetParent !== null);
-                                for (const b of btns) {
-                                    const t = (b.innerText || '').trim().toUpperCase();
-                                    if (/^(NEXT|SKIP|PLAY|START|CONTINUE|GO|GOT IT)$/.test(t)) {
-                                        const r = b.getBoundingClientRect();
-                                        if (r.width > 4 && r.height > 4)
-                                            return {x: r.x + r.width / 2,
-                                                    y: r.y + r.height / 2};
-                                    }
-                                }
-                                return null;
-                            }""")
+                            # PLAY-first scan (see _COUNTRYLE_BTN_JS).
+                            _b2 = fr.evaluate(_COUNTRYLE_BTN_JS)
                         except Exception:
                             _b2 = None
                         if not _b2:
@@ -3651,6 +5529,34 @@ def _s_waffle(page, ans, gid):
     words = [str(w) for w in (info.get("words") or []) if w]
     if not solution:
         return False, "empty waffle solution"
+    # Served-board verification BEFORE the first swap (fix-loop iter 3).
+    # The site serves by its own calendar (UTC-day math), so at the PM run
+    # it may still serve yesterday's puzzle (#1729) while the engine
+    # answers for today (#1730). Applying today's solution to yesterday's
+    # board can never converge — the swap logic was never the defect.
+    try:
+        _tgt = A.target_date()
+        _prev_entry = A.waffle_puzzle_for(_tgt - timedelta(days=1)) or {}
+        _puzzle_today = info.get("puzzle")
+        _puzzle_prev = _prev_entry.get("puzzle")
+        _board0 = _waffle_board_letters(page)
+        _verdict, _detail = _waffle_served_day(
+            _board0, _puzzle_today, _puzzle_prev)
+        _dbg("waffle", f"served-board check: board={_board0!r} "
+                        f"puzzle[{_tgt}]={str(_puzzle_today)!r} "
+                        f"puzzle[{_tgt - timedelta(days=1)}]"
+                        f"={str(_puzzle_prev)!r} -> {_verdict} ({_detail})")
+        if _verdict == "defer":
+            return False, (f"defer: board matches puzzle["
+                            f"{_tgt - timedelta(days=1)}] — defer, "
+                            f"site has not rolled")
+        if _verdict == "proceed":
+            _dbg("waffle", f"board matches puzzle[{_tgt}]")
+        else:
+            return False, (f"served-board mismatch: {_detail}; "
+                            f"refusing to solve (fail loudly)")
+    except Exception as e:
+        return False, f"served-board check failed: {str(e)[:120]}"
     try:
         board = _waffle_board(page)
         _dbg("waffle", f"board tiles={len(board)}")
@@ -3940,7 +5846,9 @@ def _s_worgle(page, ans, gid):
     except Exception:
         pass
     page.wait_for_timeout(800)
+    _played_wo = []
     for n, g in enumerate(seq):
+        _dbg(gid, f"guess {n + 1}/{len(seq)} {g!r}")
         _idle_drift(page)
         _type_like_a_person(page, str(g).strip(), base_delay=150)
         page.wait_for_timeout(900)
@@ -3954,6 +5862,9 @@ def _s_worgle(page, ans, gid):
         except Exception:
             pass
         _settle(page, base=2800)
+        _played_wo.append(g)
+        _PLAYED[gid] = list(_played_wo)
+        _dbg(gid, f"guess {n + 1}/{len(seq)} {g!r} submitted")
     page.wait_for_timeout(2500)
     try:
         body = (page.evaluate("() => document.body.innerText") or "")
@@ -4267,13 +6178,18 @@ def _s_phrazle(page, ans, gid):
                              else (same.pop() if same else g))
             seq = fixed[::-1]
             print(f"[phrazle] probes re-shaped to {groups}: {seq}")
+    _played_ph = []
     for gi, g in enumerate(seq):
+        _dbg(gid, f"guess {gi + 1}/{len(seq)} {g!r}")
         ok, why = _phrazle_enter_phrase(page, g, groups=groups or None)
         if not ok:
             if gi < len(seq) - 1:
                 _dbg(gid, f"probe {g!r} rejected by site ({why[:60]}); skipping")
                 continue
             return False, f"guess {g!r} rejected locally: {why}"
+        _played_ph.append(g)
+        _PLAYED[gid] = list(_played_ph)
+        _dbg(gid, f"guess {gi + 1}/{len(seq)} {g!r} submitted ({why[:60]})")
     page.wait_for_timeout(2500)
     if not _phrazle_won(page):
         return False, f"board not solved after {len(seq)} phrase guesses (typed {seq})"
@@ -5062,7 +6978,7 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
                 return (ImageClip(str(p)).set_duration(secs).set_fps(24)
                         .resize(width=1920, height=1080))
 
-            play_src = _polish_gameplay(str(final), vdir / "gameplay_1080.mp4")
+            play_src = _polish_gameplay(str(final), vdir / "gameplay_1080.mp4", gid=gid)
             gameplay = VideoFileClip(play_src)
             gd = float(gameplay.duration or 0)
 
@@ -5183,15 +7099,23 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
         chapters = [(0, "The solve")]
     _upload_framed(gid, g, today, short, answers, chapters, final)
     _fpr = _probe_video(final) if final else {}
+    # Visible-content QC (shared helper): never QC PASS a blank video.
+    _fvis_ok, _fvis_detail = _qc_visible_content(
+        gid, vdir, gameplay_path=(vdir / "gameplay_1080.mp4")
+        if (vdir / "gameplay_1080.mp4").exists() else None)
+    if not _fvis_ok:
+        _dbg(gid, f"QC visible-content FAIL: {_fvis_detail}")
     _fqc = {"game": gid, "date": date_key, "solved": bool(solved),
             "evidence": str(evidence)[:300], "video": str(final) if final else None,
             "probe": _fpr, "cursor_events": len(QP.ev_all()),
             "cursor_clips": (QP.LAST_POLISH or {}).get("clips", 0),
             "frame_mode": (QP.LAST_POLISH or {}).get("mode"),
-            "guesses": len(per_mode) * 2}
+            "guesses": len(per_mode) * 2,
+            "visible_content": {"ok": _fvis_ok, "detail": _fvis_detail}}
     _fqc["ok"] = bool(solved and final and str(final).endswith(".mp4") and _fpr.get("ok")
                       and _fpr.get("duration_s", 0) >= 40
-                      and _fpr.get("width") == 1920 and _fpr.get("height") == 1080)
+                      and _fpr.get("width") == 1920 and _fpr.get("height") == 1080
+                      and _fvis_ok)
     _dbg(gid, f"QC {'PASS' if _fqc['ok'] else 'FAIL'}: mp4={_fqc['video']} "
                f"res={_fpr.get('width')}x{_fpr.get('height')} dur={_fpr.get('duration_s')}s solved={solved}")
     try:
@@ -5260,6 +7184,10 @@ def run_one(gid):
     today = tgt.strftime("%B %d, %Y")
     short = tgt.strftime("%b %d")
     print(f"[{gid}] {g['name']} target {date_key}")
+    _RUN_T0[gid] = time.time()
+    _FIRST_TYPE.pop(gid, None)
+    _PLAYED.pop(gid, None)
+    _REJECTED.pop(gid, None)
     _dbg(gid, f"START env tz={os.environ.get('BROWSER_TZ')} "
               f"tzoff={os.environ.get('TZ_OFFSET_MINUTES')} "
               f"fake={os.environ.get('FAKE_DATE_ISO', '') or 'auto'} "
@@ -5336,11 +7264,20 @@ def run_one(gid):
             ctx.add_init_script(script=QP.adhide_js())
         except Exception:
             pass
+        # Phoodle defensive un-hide (fix-loop iter 3): clear <html>
+        # display:none at document start, before recording paints.
+        if gid == "phoodle":
+            try:
+                ctx.add_init_script(script=_PHOODLE_UNHIDE_JS)
+            except Exception:
+                pass
 
         def _route(route):
             try:
                 u = route.request.url
-                if any(x in u for x in ("user-sync", "usync", "setuid", "criteo", "quantserve", "scorecardresearch", "hotjar", "amplitude", "sentry.io", "tiktok", "facebook.net", "connect.facebook", "clarity.ms", "/ads/index", "ads/index.")):
+                # Slow ad hosts aborted: countryle's boot stalled on 504s
+                # from inmobi/aroa.io (plus the already-blocked scorecard).
+                if any(x in u for x in ("user-sync", "usync", "setuid", "criteo", "quantserve", "scorecardresearch", "hotjar", "amplitude", "sentry.io", "tiktok", "facebook.net", "connect.facebook", "clarity.ms", "/ads/index", "ads/index.", "inmobi", "aroa.io")):
                     return route.abort()
             except Exception:
                 pass
@@ -5422,7 +7359,17 @@ def run_one(gid):
             pass
         try:
             pg.goto(g["url"], wait_until="domcontentloaded", timeout=45000)
-            pg.wait_for_timeout(6000)
+            # Startup (fix-loop iter 3): NO fixed 6 s sleep. Phoodle gets
+            # its <html> un-hide first (a hidden root hides the board the
+            # ready-wait looks for), then wait for the game's own
+            # input/board selector (bounded, fail-fast), then ONE modal
+            # sweep — solver _close_modals calls no-op via the per-page
+            # dedup guard instead of re-sweeping.
+            if gid == "phoodle":
+                _phoodle_unhide(pg, gid)
+            _wait_ready(pg, gid)
+            if gid == "phoodle":
+                _phoodle_unhide(pg, gid)
             _close_modals(pg)
             # The site's own answer request has now been captured, so we know
             # which day the board really is. If that differs from the day the
@@ -5484,7 +7431,17 @@ def run_one(gid):
                                   f"page and replaying solver once")
                         try:
                             pg.reload(wait_until="domcontentloaded")
-                            pg.wait_for_timeout(9000)
+                            # No fixed 9 s sleep: ready-wait + fresh modal
+                            # sweep (reset the dedup guard — modals return
+                            # after a reload).
+                            if gid == "phoodle":
+                                _phoodle_unhide(pg, gid)
+                            _wait_ready(pg, gid)
+                            try:
+                                pg._qp_modals_closed = False
+                            except Exception:
+                                pass
+                            _close_modals(pg, _force=True)
                             if gid in ("colordle", "colorfle"):
                                 solved, evidence = solver(pg, ans)
                             else:
@@ -5518,6 +7475,10 @@ def run_one(gid):
             import traceback as _tb
             evidence = f"exception: {str(e)[:200]}"
             _dbg(gid, f"CRASH in solve: {_tb.format_exc()[-800:]}")
+        if gid == "phoodle":
+            # Un-hide before the post-solve screenshot: a re-hidden <html>
+            # would make shot_win (and the QC visible-content check) blank.
+            _phoodle_unhide(pg, gid)
         try:
             pg.screenshot(path=str(vdir / "shot_win.png"))
         except Exception:
@@ -5574,7 +7535,7 @@ def run_one(gid):
         # gameplay intermediate for diagnosis, report video=None.
         _dbg(gid, "skipping final assembly: not solved (no publishable video)")
         try:
-            _polish_gameplay(str(final), vdir / "gameplay_1080.mp4")
+            _polish_gameplay(str(final), vdir / "gameplay_1080.mp4", gid=gid)
         except Exception:
             pass
         final = None
@@ -5584,7 +7545,8 @@ def run_one(gid):
     #   + uniform music + SRT captions + real chapter list
     elif final and HAS and HAS_MOVIEPY and HAS_PIL:
         try:
-            steps = _steps(gid, aval)
+            # Chapters/slides from PLAYED guesses when recorded, else plan.
+            steps = _result_steps(gid, aval)
             nguess = len(steps)
             recap_p = vdir / "recap.png"
             hints_p = vdir / "hints.png"
@@ -5663,7 +7625,7 @@ def run_one(gid):
             # Gameplay is a raw screen recording. Scale it to FILL the frame
             # (never pillarbox) and add a slow push-in so the board is readable
             # and the footage feels produced rather than screen-captured.
-            play_src = _polish_gameplay(str(final), vdir / "gameplay_1080.mp4")
+            play_src = _polish_gameplay(str(final), vdir / "gameplay_1080.mp4", gid=gid)
             gameplay = VideoFileClip(play_src)
             gd = float(gameplay.duration or 0)
 
@@ -5697,17 +7659,29 @@ def run_one(gid):
                         continue
             # Brand intro LAST so the bg song never covers its own audio.
             _intro = HERE / "intro" / "wordsolverx-intro-20s.mp4"
+            _intro_dur = 0.0
             if _intro.exists():
                 try:
                     _ic = VideoFileClip(str(_intro)).resize(width=1920, height=1080)
+                    _intro_dur = float(_ic.duration or 0)
                     clip = concatenate_videoclips([_ic, clip], method="compose")
-                    chapters = [(0, "Intro")] + [(s + float(_ic.duration or 0), t)
+                    chapters = [(0, "Intro")] + [(s + _intro_dur, t)
                                                 for s, t in chapters]
-                    cur += float(_ic.duration or 0)
+                    cur += _intro_dur
                     total = cur
-                    _dbg(gid, f"intro prepended ({_ic.duration:.1f}s, own audio)")
+                    _dbg(gid, f"intro prepended ({_intro_dur:.1f}s, own audio)")
                 except Exception as e:
                     _dbg(gid, f"intro skipped: {str(e)[:120]}")
+            # Worldle all-modes: replace generic chapters with one chapter
+            # per played mode (gameplay-relative segments recorded by the
+            # solver) + Summary. Generic chapters would hide the modes.
+            if gid == "worldle" and _WORLDLE_SEGMENTS:
+                try:
+                    chapters = _s_worldle_final_chapters(_intro_dur, gd)
+                    _dbg(gid, f"worldle chapters wired: n={len(chapters)} "
+                              f"modes={len(_WORLDLE_SEGMENTS)}")
+                except Exception as e:
+                    _dbg(gid, f"worldle chapters wiring failed: {str(e)[:120]}")
             out = str(vdir / f"{gid}_final_{date_key}.mp4")
             clip.write_videofile(out, codec="libx264", audio_codec="aac",
                                  fps=24, verbose=False, logger=None)
@@ -5726,7 +7700,7 @@ def run_one(gid):
         chapters = [(0, "The solve")]
 
     # upload (skips without creds; never upload an unsolved game)
-    nguess = len(_steps(gid, aval))
+    nguess = len(_result_steps(gid, aval))
     if solved and final and HAS:
         def _ts(sec):
             sec = max(0, int(sec))
@@ -5755,6 +7729,13 @@ def run_one(gid):
         except Exception as e:
             print(f"[{gid}] upload error: {str(e)[:200]}")
             vid = None
+    # Visible-content QC (fix-loop iter 3): a blank video must NEVER QC
+    # PASS, even when metadata (solved/res/duration) is fine (phoodle).
+    _vis_ok, _vis_detail = _qc_visible_content(
+        gid, vdir, gameplay_path=(vdir / "gameplay_1080.mp4")
+        if (vdir / "gameplay_1080.mp4").exists() else None)
+    if not _vis_ok:
+        _dbg(gid, f"QC visible-content FAIL: {_vis_detail}")
     _qc = {"game": gid, "date": date_key, "solved": bool(solved),
            "evidence": str(evidence)[:300],
            "video": str(final) if final else None,
@@ -5762,18 +7743,21 @@ def run_one(gid):
            "cursor_events": len(QP.ev_all()),
            "cursor_clips": (QP.LAST_POLISH or {}).get("clips", 0),
            "frame_mode": (QP.LAST_POLISH or {}).get("mode"),
-           "guesses": len(_steps(gid, aval))}
+           "guesses": len(_result_steps(gid, aval)),
+           "visible_content": {"ok": _vis_ok, "detail": _vis_detail}}
     _pr = _qc["probe"] or {}
     _qc["ok"] = bool(solved and final and str(final).endswith(".mp4") and _pr.get("ok")
                      and _pr.get("duration_s", 0) >= 40
-                     and _pr.get("width") == 1920 and _pr.get("height") == 1080)
+                     and _pr.get("width") == 1920 and _pr.get("height") == 1080
+                     and _vis_ok)
     # Fix-loop: QC PASS must NOT print for solved=False. solved is part of ok.
     _dbg(gid, f"QC {'PASS' if _qc['ok'] else 'FAIL'}: mp4={_qc['video']} "
               f"size={_pr.get('size_mb')}MB res={_pr.get('width')}x{_pr.get('height')} "
               f"dur={_pr.get('duration_s')}s cursor_events={_qc['cursor_events']} "
               f"cursor_clips={(QP.LAST_POLISH or {}).get('clips', 0)} "
               f"frame={(QP.LAST_POLISH or {}).get('mode', '?')} "
-              f"solved={solved} guesses={_qc['guesses']}")
+              f"solved={solved} guesses={_qc['guesses']} "
+              f"visible_content={_vis_detail}")
     try:
         (vdir / f"qc_{date_key}.json").write_text(
             json.dumps(_qc, indent=1), encoding="utf-8")
@@ -5782,14 +7766,20 @@ def run_one(gid):
     (vdir / "result.json").write_text(json.dumps(
         {"game": gid, "date": date_key, "solved": solved, "evidence": evidence,
          "video": str(final) if final else None,
-         "guesses": _guesses(gid, aval),
-         "steps": _steps(gid, aval), "chapters": chapters, "qc": _qc}, indent=1))
+         "guesses": ([str(x) for x in _PLAYED[gid]] if _PLAYED.get(gid)
+                     else _guesses(gid, aval)),
+         "rejected": _REJECTED.get(gid, []),
+         "steps": _result_steps(gid, aval), "chapters": chapters, "qc": _qc,
+         "modes": ([dict(r) for r in _WORLDLE_MODES]
+                   if gid == "worldle" else [])}, indent=1))
     _db_save(date_key, gid, {"game": gid, "date": date_key, "solved": solved,
                              "evidence": evidence,
                              "video": str(final) if final else None,
                              "youtube_url": vid if 'vid' in dir() else None})
     _report_game(gid, date_key, answer=f"{aval} ({ans.get('via', '?')})",
-                 guesses=_guesses(gid, aval),
+                 guesses=([str(x) for x in _PLAYED[gid]] if _PLAYED.get(gid)
+                          else _guesses(gid, aval)),
+                 rejected=_REJECTED.get(gid, []),
                  reloads=_RELOADS.get(gid, 0),
                  verify=f"solved={solved} evidence={evidence}",
                  video=_probe_video(final) if final else None,

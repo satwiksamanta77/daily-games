@@ -883,7 +883,254 @@ def _cursor_clips(base_clip, events, ox=0.0, oy=0.0, scx=1.0, scy=1.0):
     return clips
 
 
-def polish_gameplay(src, out_path, crf=17):
+def _probe_duration(src):
+    """ffprobe duration in seconds (0.0 on failure)."""
+    try:
+        import subprocess as _sp
+        _r = _sp.run(["ffprobe", "-v", "error", "-show_entries",
+                      "format=duration", "-of", "csv=p=0", str(src)],
+                     capture_output=True, text=True, timeout=60)
+        return max(0.0, float((_r.stdout or "0").strip() or 0))
+    except Exception:
+        return 0.0
+
+
+def _sample_frame_diffs(src, fps=2.0, width=160):
+    """Mean-abs-diff between consecutive sampled frames.
+
+    Decodes to small grayscale frames via ffmpeg and returns
+    (diffs, fps) where diffs[i] is the mean abs diff between frame i and
+    frame i+1. Empty list on any failure (caller treats as 'unknown').
+    """
+    try:
+        import subprocess as _sp
+        cmd = ["ffmpeg", "-v", "error", "-i", str(src), "-vf",
+               f"fps={fps},scale={width}:-2,format=gray",
+               "-f", "rawvideo", "-pix_fmt", "gray", "-"]
+        p = _sp.run(cmd, capture_output=True, timeout=1800)
+        raw = p.stdout or b""
+        if not raw:
+            return [], fps
+        # Frame size: width x round(width * H / W) — recover from ffprobe.
+        try:
+            _r = _sp.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                          "-show_entries", "stream=width,height",
+                          "-of", "csv=p=0", str(src)],
+                         capture_output=True, text=True, timeout=60)
+            _w0, _h0 = [int(v) for v in _r.stdout.strip().split(",")[:2]]
+            height = max(1, round(width * _h0 / float(_w0)))
+        except Exception:
+            height = 90
+        fsize = width * height
+        if fsize <= 0 or len(raw) < fsize * 2:
+            return [], fps
+        n = len(raw) // fsize
+        frames = [raw[i * fsize:(i + 1) * fsize] for i in range(n)]
+        diffs = []
+        for a, b in zip(frames, frames[1:]):
+            tot = 0
+            for x, y in zip(a, b):
+                tot += abs(x - y)
+            diffs.append(tot / float(fsize))
+        return diffs, fps
+    except Exception:
+        return [], fps
+
+
+# Autocrop thresholds (mean abs diff on 160px-wide gray frames, same scale
+# as the frozen_frac < 1.0 rule used in video analysis).
+_AUTOCROP_FROZEN = 1.0    # below this a frame pair counts as static
+_AUTOCROP_CHANGE = 2.5    # above this a frame pair counts as a real change
+_AUTOCROP_MIN_STATIC_S = 30.0  # only cut static runs longer than this
+_AUTOCROP_KEEP_STATIC_HEAD_S = 2.0  # keep this much of a cut static run
+_AUTOCROP_XFADE_S = 0.5   # crossfade between kept segments (video only)
+
+
+def _autocrop_keep_segments(src, first_typing_s=None, idle_cut_s=None):
+    """Keep-segments (seconds, in source timeline) after autocrop.
+
+    Leading idle: cut everything before the first keystroke minus a ~1 s
+    safety margin. The cut point comes from `idle_cut_s` when given, else
+    `first_typing_s - 1.0` when given, else frame-diff detection (first
+    SUSTAINED + PERSISTENT board change — a change that holds for several
+    frames and leaves the frame different from before, not page-load
+    animation flicker). Mid-recording static waits >30 s are cut to a 2 s
+    head. Returns [] when nothing should be cut (caller keeps src as-is).
+    """
+    dur = _probe_duration(src)
+    if dur <= 0:
+        return []
+    if idle_cut_s is not None:
+        leading_cut = max(0.0, float(idle_cut_s))
+    elif first_typing_s is not None:
+        leading_cut = max(0.0, float(first_typing_s) - 1.0)
+    else:
+        leading_cut = None  # detect below
+    diffs, fps = _sample_frame_diffs(src)
+    if not diffs:
+        # No frame evidence: honour an explicit cut only, else cut nothing.
+        if leading_cut is None:
+            return []
+        if leading_cut < 1.0:
+            return []
+        return [(leading_cut, dur)]
+    if leading_cut is None:
+        # First sustained + persistent change: 3 consecutive diffs above
+        # CHANGE and the frame after them still differs from the frame
+        # before them (a typed guess persists; load animation flickers).
+        leading_cut = 0.0
+        for i in range(len(diffs) - 3):
+            if all(d > _AUTOCROP_CHANGE for d in diffs[i:i + 3]):
+                # Persistent check needs raw frames; approximate with the
+                # following diffs staying non-frozen for one more step.
+                if diffs[i + 3] > _AUTOCROP_FROZEN:
+                    leading_cut = max(0.0, i / fps - 1.0)
+                    break
+    # Static runs: maximal runs of frozen diffs longer than MIN_STATIC_S.
+    # A run covering diffs [i..j] spans frames i..j+1 -> seconds [i/fps, (j+2)/fps].
+    segments = []
+    cur_start = leading_cut
+    i = 0
+    nd = len(diffs)
+    while i < nd:
+        if diffs[i] <= _AUTOCROP_FROZEN:
+            j = i
+            while j + 1 < nd and diffs[j + 1] <= _AUTOCROP_FROZEN:
+                j += 1
+            run_start = i / fps
+            run_end = (j + 2) / fps
+            if run_end - run_start > _AUTOCROP_MIN_STATIC_S and run_start >= leading_cut - 0.01:
+                keep_end = min(run_start + _AUTOCROP_KEEP_STATIC_HEAD_S, run_end)
+                if keep_end > cur_start + 0.5:
+                    segments.append((cur_start, keep_end))
+                cur_start = run_end
+            i = j + 1
+        else:
+            i += 1
+    if dur > cur_start + 0.5:
+        segments.append((cur_start, dur))
+    # Drop slivers that cannot take a crossfade cleanly; they are <1 s of
+    # mostly-static footage between two long static runs.
+    segments = [(a, b) for a, b in segments if b - a >= 1.0]
+    if not segments:
+        return []
+    removed = dur - sum(b - a for a, b in segments)
+    if removed < 1.0:
+        return []
+    return segments
+
+
+def _autocrop_render(src, segments, out_path):
+    """Render keep-segments to out_path. Video-only xfade when possible
+    (no audio + every segment > 1 s); otherwise hard-cut concat for both
+    video and audio. Returns True on success."""
+    import subprocess as _sp
+    if not segments:
+        return False
+    dur = _probe_duration(src)
+    if len(segments) == 1:
+        a, b = segments[0]
+        if a <= 0.01 and b >= dur - 0.01:
+            return False
+        cmd = ["ffmpeg", "-y", "-v", "error", "-ss", str(a), "-to", str(b),
+               "-i", str(src), "-c:v", "libx264", "-preset", "medium",
+               "-crf", "17", "-pix_fmt", "yuv420p", "-r", "24", "-an",
+               str(out_path)]
+        # Preserve audio on a single-segment cut when the source has it.
+        try:
+            _r0 = _sp.run(["ffprobe", "-v", "error", "-select_streams", "a",
+                           "-show_entries", "stream=index",
+                           "-of", "csv=p=0", str(src)],
+                          capture_output=True, text=True, timeout=60)
+            has_audio = bool((_r0.stdout or "").strip())
+        except Exception:
+            has_audio = False
+        if has_audio:
+            cmd = ["ffmpeg", "-y", "-v", "error", "-ss", str(a), "-to", str(b),
+                   "-i", str(src), "-c:v", "libx264", "-preset", "medium",
+                   "-crf", "17", "-pix_fmt", "yuv420p", "-r", "24",
+                   "-c:a", "aac", str(out_path)]
+        r = _sp.run(cmd, capture_output=True, text=True, timeout=1800)
+        return r.returncode == 0 and _QPPath(out_path).exists() \
+            and _QPPath(out_path).stat().st_size > 10000
+    # Multi-segment: trim each, then join.
+    try:
+        _r0 = _sp.run(["ffprobe", "-v", "error", "-select_streams", "a",
+                       "-show_entries", "stream=index",
+                       "-of", "csv=p=0", str(src)],
+                      capture_output=True, text=True, timeout=60)
+        has_audio = bool((_r0.stdout or "").strip())
+    except Exception:
+        has_audio = False
+    use_xfade = (not has_audio) and all(b - a > 1.0 for a, b in segments)
+    parts = []
+    for idx, (a, b) in enumerate(segments):
+        parts.append(f"[0:v]trim=start={a:.3f}:end={b:.3f},setpts=PTS-STARTPTS[v{idx}]")
+    filt = ";".join(parts)
+    if use_xfade:
+        cur = "v0"
+        acc = segments[0][1] - segments[0][0]
+        for idx in range(1, len(segments)):
+            out = f"x{idx}" if idx < len(segments) - 1 else "vout"
+            off = max(0.0, acc - _AUTOCROP_XFADE_S)
+            filt += f";[{cur}][v{idx}]xfade=transition=fade:duration={_AUTOCROP_XFADE_S}:offset={off}[{out}]"
+            cur = out
+            acc = acc + (segments[idx][1] - segments[idx][0]) - _AUTOCROP_XFADE_S
+        cmd = ["ffmpeg", "-y", "-v", "error", "-i", str(src),
+               "-filter_complex", filt, "-map", "[vout]",
+               "-c:v", "libx264", "-preset", "medium", "-crf", "17",
+               "-pix_fmt", "yuv420p", "-r", "24", "-an", str(out_path)]
+    else:
+        filt += ";" + "".join(f"[v{i}]" for i in range(len(segments))) \
+            + f"concat=n={len(segments)}:v=1:a=0[vout]"
+        if has_audio:
+            af = ";".join(
+                f"[0:a]atrim=start={a:.3f}:end={b:.3f},asetpts=PTS-STARTPTS[a{i}]"
+                for i, (a, b) in enumerate(segments))
+            filt += ";" + af + ";" + "".join(f"[a{i}]" for i in range(len(segments))) \
+                + f"concat=n={len(segments)}:v=0:a=1[aout]"
+            cmd = ["ffmpeg", "-y", "-v", "error", "-i", str(src),
+                   "-filter_complex", filt, "-map", "[vout]", "-map", "[aout]",
+                   "-c:v", "libx264", "-preset", "medium", "-crf", "17",
+                   "-pix_fmt", "yuv420p", "-r", "24", "-c:a", "aac", str(out_path)]
+        else:
+            cmd = ["ffmpeg", "-y", "-v", "error", "-i", str(src),
+                   "-filter_complex", filt, "-map", "[vout]",
+                   "-c:v", "libx264", "-preset", "medium", "-crf", "17",
+                   "-pix_fmt", "yuv420p", "-r", "24", "-an", str(out_path)]
+    r = _sp.run(cmd, capture_output=True, text=True, timeout=1800)
+    if r.returncode != 0:
+        print(f"[autocrop] render failed: {(r.stderr or '')[:240]}")
+        return False
+    return _QPPath(out_path).exists() and _QPPath(out_path).stat().st_size > 10000
+
+
+def _apply_autocrop(src, out_path, first_typing_s=None, idle_cut_s=None):
+    """Autocrop `src` -> `out_path`, returning the path to use downstream
+    (`out_path` when a cut was rendered, else `src`). Never raises."""
+    try:
+        if os.environ.get("AUTOCROP", "on").lower() in ("off", "0", "false"):
+            return src
+        segments = _autocrop_keep_segments(src, first_typing_s, idle_cut_s)
+        if not segments:
+            return src
+        if _autocrop_render(src, segments, out_path):
+            dur0 = _probe_duration(src)
+            dur1 = _probe_duration(out_path)
+            print(f"[autocrop] cut {dur0 - dur1:.1f}s "
+                  f"({dur0:.1f}s -> {dur1:.1f}s) segments={segments}")
+            LAST_POLISH.update(autocrop={"cut_s": round(dur0 - dur1, 1),
+                                         "segments": [[round(a, 1), round(b, 1)]
+                                                      for a, b in segments]})
+            return out_path
+        return src
+    except Exception as e:
+        print(f"[autocrop] skipped: {str(e)[:160]}")
+        return src
+
+
+def polish_gameplay(src, out_path, crf=17, first_typing_s=None, idle_cut_s=None,
+                    autocrop=True):
     """Full-frame 1920x1080 polish. Cursor overlay is OFF by default.
 
     Set CURSOR_OVERLAY=on explicitly to re-enable the drawn cursor.
@@ -892,10 +1139,35 @@ def polish_gameplay(src, out_path, crf=17):
     GAMEPLAY_FRAME=card (default) keeps the wallpaper + rounded-frame look the
     other games use; GAMEPLAY_FRAME=fullbleed scales the capture edge-to-edge
     (the style of the manual Recordly waffle video). Both get the same cursor.
+
+    Autocrop (default on, AUTOCROP=off to disable) applies ONLY to the
+    gameplay clip passed here — never to intro/hints/answer card clips,
+    which are separate clips assembled later. It cuts leading idle before
+    the first keystroke (prefer `idle_cut_s`, else `first_typing_s - 1s`
+    safety margin, else first sustained board change from frame diffs) and
+    mid-recording static waits >30 s (kept as a 2 s head + 0.5 s crossfade).
     """
     import subprocess
+    import tempfile
     out_path = str(out_path)
     src = str(src)
+    crop_tmp = None
+    if autocrop:
+        try:
+            # Intermediate lives in a temp dir, never next to out_path:
+            # the workflow uploads videos/<game>/*.mp4, so a
+            # "<stem>.autocrop.mp4" beside the output would leak into
+            # the artifact as a stray video.
+            crop_tmp = str(_QPPath(tempfile.mkdtemp(prefix="autocrop_")) /
+                           "cropped.mp4")
+            cropped = _apply_autocrop(src, crop_tmp, first_typing_s, idle_cut_s)
+            if cropped != src:
+                src = cropped
+            else:
+                crop_tmp = None
+        except Exception as e:
+            print(f"[autocrop] skipped: {str(e)[:160]}")
+            crop_tmp = None
     mode = os.environ.get("GAMEPLAY_FRAME", "card").lower()
     if os.environ.get("CURSOR_OVERLAY", "off").lower() in ("off", "0", "false"):
         evs = []
@@ -913,22 +1185,41 @@ def polish_gameplay(src, out_path, crf=17):
     except Exception:
         _rw, _rh = 1920, 1080
     if mode == "fullbleed":
-        cmd = ["ffmpeg", "-y", "-v", "error", "-i", src, "-vf",
-               "scale=1920:1080:force_original_aspect_ratio=increase,"
-               "crop=1920:1080,format=yuv420p,fps=24",
-               "-c:v", "libx264", "-preset", "medium", "-crf", str(crf),
-               "-c:a", "aac", out_path]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
-        base = out_path if (r.returncode == 0 and _QPPath(out_path).exists()
+        try:
+            cmd = ["ffmpeg", "-y", "-v", "error", "-i", src, "-vf",
+                   "scale=1920:1080:force_original_aspect_ratio=increase,"
+                   "crop=1920:1080,format=yuv420p,fps=24",
+                   "-c:v", "libx264", "-preset", "medium", "-crf", str(crf),
+                   "-c:a", "aac", out_path]
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        except Exception as e:
+            print(f"[polish] fullbleed failed: {str(e)[:160]}")
+            r = None
+        base = out_path if (r is not None and r.returncode == 0 and _QPPath(out_path).exists()
                             and _QPPath(out_path).stat().st_size > 10000) else src
         ox = oy = 0.0
         scx, scy = 1920.0 / float(_rw), 1080.0 / float(_rh)
     else:
-        base = _card_composite(src, out_path, crf)
+        # Polish must never raise (a polish failure must not lose the
+        # gameplay artifact): on any error fall back to the source clip.
+        try:
+            base = _card_composite(src, out_path, crf)
+        except Exception as e:
+            print(f"[polish] card composite failed: {str(e)[:160]}")
+            base = src
         fw, fh = 1792, 1008
         ox, oy = (1920 - fw) / 2.0, (1080 - fh) / 2.0
         scx, scy = fw / float(_rw), fh / float(_rh)
     LAST_POLISH.update(mode=mode, events=len(evs), clips=0, base=base)
+    # Drop the temp-dir autocrop intermediate once the composite has
+    # consumed it — but never when the composite fell back to returning
+    # it as `base`, or the caller would get a deleted file.
+    if crop_tmp and _QPPath(crop_tmp).exists() and crop_tmp != out_path \
+            and base != crop_tmp:
+        try:
+            _QPPath(crop_tmp).unlink()
+        except Exception:
+            pass
     if not evs or base == src and not _QPPath(base).exists():
         return base
     try:
@@ -1001,23 +1292,39 @@ def _card_composite(src, out_path, crf):
     wall = _QPPath(__file__).parent / "wallpapers" / "glassmorphism-3.jpg"
     ok_wall = False
     if wall.exists():
-        r1 = subprocess.run(["ffmpeg", "-y", "-v", "error", "-loop", "1", "-i",
-                             str(wall), "-vf",
-                             "scale=1920:1080:force_original_aspect_ratio=increase,"
-                             "crop=1920:1080,eq=brightness=-0.05:saturation=1.1",
-                             "-c:v", "libx264", "-preset", "medium", "-crf", "20",
-                             "-pix_fmt", "yuv420p", "-r", "24", "-t", str(dur),
-                             str(wall_mp4)], capture_output=True, text=True,
-                            timeout=60)
-        ok_wall = r1.returncode == 0 and wall_mp4.exists()
+        # ROOT-CAUSE FIX (nerdle gameplay_1080.mp4 missing): the wallpaper
+        # used to be pre-rendered at the FULL video duration (e.g. 442 s),
+        # which takes ~250 s+ on CI, but this step allowed only timeout=60,
+        # so it raised TimeoutExpired("Command '['ffmpeg', ...") out of
+        # polish and the gameplay file was never produced. The wallpaper
+        # is a static image, so render only 5 s of it and loop it
+        # (-stream_loop -1) in the final composite — visually identical,
+        # O(1) cost regardless of video length.
+        try:
+            r1 = subprocess.run(["ffmpeg", "-y", "-v", "error", "-loop", "1", "-i",
+                                 str(wall), "-vf",
+                                 "scale=1920:1080:force_original_aspect_ratio=increase,"
+                                 "crop=1920:1080,eq=brightness=-0.05:saturation=1.1",
+                                 "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+                                 "-pix_fmt", "yuv420p", "-r", "24", "-t", "5",
+                                 str(wall_mp4)], capture_output=True, text=True,
+                                timeout=120)
+            ok_wall = r1.returncode == 0 and wall_mp4.exists()
+        except Exception as e:
+            print(f"[polish] wallpaper render failed: {str(e)[:120]}")
+            ok_wall = False
     if not ok_wall:
         wall_mp4 = tmp / "blurred.mp4"
-        r3 = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", src, "-vf",
-                             "scale=1920:1080,gblur=sigma=24,eq=brightness=-0.10:"
-                             "saturation=1.2", "-c:v", "libx264",
-                             "-preset", "medium", "-crf", "20",
-                             "-pix_fmt", "yuv420p", "-r", "24", str(wall_mp4)],
-                            capture_output=True, text=True, timeout=1800)
+        try:
+            r3 = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", src, "-vf",
+                                 "scale=1920:1080,gblur=sigma=24,eq=brightness=-0.10:"
+                                 "saturation=1.2", "-c:v", "libx264",
+                                 "-preset", "medium", "-crf", "20",
+                                 "-pix_fmt", "yuv420p", "-r", "24", str(wall_mp4)],
+                                capture_output=True, text=True, timeout=1800)
+        except Exception as e:
+            print(f"[polish] blurred-bg render failed: {str(e)[:120]}")
+            return src
         if r3.returncode != 0:
             return src
     filt = (
@@ -1030,13 +1337,20 @@ def _card_composite(src, out_path, crf):
         f"[bg][sh]overlay=(W-w)/2:(H-h)/2+8:format=auto[b1];"
         f"[b1][fg]overlay=(W-w)/2:(H-h)/2[b2];"
         f"[b2][rim]overlay=(W-w)/2:(H-h)/2,format=yuv420p,fps=24[v]")
+    # -stream_loop -1 -t dur loops the short wallpaper clip to the full
+    # duration (see the TimeoutExpired fix above); -t here is an INPUT
+    # option on the wallpaper input, not an output cap.
     cmd = ["ffmpeg", "-y", "-v", "error", "-i", src,
            "-i", str(mask_p), "-i", str(shad_p), "-i", str(rim_p),
-           "-t", str(dur), "-i", str(wall_mp4),
+           "-stream_loop", "-1", "-t", str(dur), "-i", str(wall_mp4),
            "-filter_complex", filt, "-map", "[v]", "-map", "0:a?",
            "-c:v", "libx264", "-preset", "medium", "-crf", str(crf),
            "-pix_fmt", "yuv420p", "-r", "24", "-c:a", "aac", out_path]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+    except Exception as e:
+        print(f"[polish] composite failed: {str(e)[:160]}")
+        return src
     if r.returncode == 0 and _QPPath(out_path).exists() \
             and _QPPath(out_path).stat().st_size > 10000:
         return out_path

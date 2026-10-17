@@ -537,13 +537,14 @@ def _cryptojs_decrypt(b64, passphrase):
 WAFFLE_WORKER = "https://api.wafflegame.workers.dev"
 
 
-def waffle(d=None):
-    """Waffle grid: site daily*.txt files (wafflegame.net/dailyN.txt).
+def waffle_puzzle_for(d):
+    """Waffle daily*.txt entry for one exact date, or None.
 
-    The worker API (api.wafflegame.workers.dev) is stale and silently
-    returned the wrong-day puzzle. Fetch daily0/1/2.txt, base64 +
-    UTF-16LE-decode + JSON.parse, and return the entry whose date ==
-    target date. If none matches, raise SystemExit (defer/skip).
+    Pure fetch+decode for a single date (no raise): the served-board check
+    in the runner needs the puzzle string for BOTH the target date and the
+    previous date, so it can tell "site has not rolled yet" apart from
+    "board is something else entirely". Returns the same dict shape as
+    waffle() (answer/solution, puzzle, words, number, date, via).
     """
     import base64 as _b64
     import requests
@@ -568,7 +569,22 @@ def waffle(d=None):
         return {"answer": sol, "puzzle": j.get("puzzle"), "words": words,
                 "number": j.get("number"), "date": key,
                 "via": f"https://wafflegame.net/daily{_n}.txt"}
-    raise SystemExit(f"waffle: no daily*.txt entry for {key} (defer, do not use worker)")
+    return None
+
+
+def waffle(d=None):
+    """Waffle grid: site daily*.txt files (wafflegame.net/dailyN.txt).
+
+    The worker API (api.wafflegame.workers.dev) is stale and silently
+    returned the wrong-day puzzle. Fetch daily0/1/2.txt, base64 +
+    UTF-16LE-decode + JSON.parse, and return the entry whose date ==
+    target date. If none matches, raise SystemExit (defer/skip).
+    """
+    d = d or target_date()
+    hit = waffle_puzzle_for(d)
+    if hit:
+        return hit
+    raise SystemExit(f"waffle: no daily*.txt entry for {d.isoformat()} (defer, do not use worker)")
 
 
 # ---------- worldle ----------
@@ -622,6 +638,216 @@ def worldle(d=None):
         raise SystemExit(f"worldle: code {code!r} not in country list")
     return {"answer": hit["name"], "code": code, "number": number,
             "date": d.isoformat()}
+
+
+def worldle_all_modes(d=None):
+    """Worldle ALL daily rounds, derived from the day's countryCode.
+
+    Every round of the daily game answers for the SAME country, so every
+    per-mode answer below is computed from that one countryCode — nothing
+    is hardcoded for any date or country (no "Togo", no "Lomé" literals).
+
+    CDN sources (all fetched live; the same endpoints the game itself uses,
+    per the bundled main.js data layer, module 83512):
+      day:       data/worldle/games/<year>/<date>.json
+                 {countryCode, landmarkData:{landmarkCode,imageCode},
+                  factData:{generalFactCode,historyFactCode}}
+      country:   data/common/countries/<code>.json
+                 {name, borders, flags, currencyData, population, size,
+                  languageData.languages[], gdpPerCapita, ...}
+      cities:    data/common/cities.json
+                 [{countryCode, names:{en}, capital, population,
+                   coordinates:{lat,lon}}]
+      facts:     data/common/facts/<code>.json
+                 {fillFacts:[{factCode, category,
+                   translations:{en:{question, answer, answers[]}}}]}
+      landmarks: data/common/landmarks.json
+                 [{landmarkCode, names:{en}, images:[...]}]
+      flags:     data/common/flags/<code>.svg (flag round images)
+      shields:   data/common/shields/<code>.svg (emblem round images)
+
+    Round-availability rules mirror the game's own removal logic (bundled
+    main.js, rounds hook, module 22314): capital/orientation removed when
+    there is no capital city or the code is a micro-state (VA/MC/MO/SG/HK/
+    GI); populousCities removed with <4 populated cities; language removed
+    unless exactly 2 languages; currency removed without a population;
+    borders+orientation removed without borders; gdp removed without
+    gdpPerCapita. Emblem/landmark removal depends on the live shield/
+    landmark image content-type, so those are marked "live-check" here and
+    the solver confirms them against the live round list.
+
+    Returns a dict with keys: date, code, name, day, country (raw record),
+    capital {name,lat,lon,population}, borders [{code,name,gdpPerCapita,
+    capital}], populous [{name,population,lat,lon}] (population desc),
+    landmark {landmarkCode,imageCode,name,image_url} | None,
+    facts {factCode:{category,question,answer,answers}},
+    languages [{languageCode,percentage}], gdp {number, compare_answer,
+    compare_candidates}, currency {code,name,nameChoices}, population,
+    size, flags [codes], available {mode: True | reason-string}.
+    """
+    d = d or target_date()
+    import requests as _rq
+
+    def _get(url, required=True):
+        try:
+            r = _rq.get(url, timeout=30,
+                        headers={"User-Agent": "WordSolverX Video"})
+        except Exception as e:
+            if required:
+                raise SystemExit(f"worldle all-modes: CDN fetch failed: {e}")
+            return None
+        if not r.ok:
+            if required:
+                raise SystemExit(
+                    f"worldle all-modes: CDN {r.status_code} for {url}")
+            return None
+        try:
+            return r.json()
+        except Exception:
+            if required:
+                raise SystemExit(
+                    f"worldle all-modes: CDN non-JSON for {url}")
+            return None
+
+    base = "https://cdn-assets.teuteuf.fr/data"
+    day = _get(f"{base}/worldle/games/{d.year}/{d.isoformat()}.json")
+    code = str((day or {}).get("countryCode") or "").upper()
+    if not code:
+        raise SystemExit("worldle all-modes: day JSON has no countryCode")
+    rec = _get(f"{base}/common/countries/{code.lower()}.json") or {}
+    cities = _get(f"{base}/common/cities.json") or []
+    facts_doc = _get(f"{base}/common/facts/{code.lower()}.json",
+                     required=False) or {}
+    landmarks_doc = _get(f"{base}/common/landmarks.json", required=False)
+
+    def _city_name(c):
+        names = c.get("names") or {}
+        return names.get("en") or c.get("name") or ""
+
+    mine = [c for c in cities
+            if str(c.get("countryCode") or "").upper() == code]
+    capitals = []
+    for c in mine:
+        if c.get("capital"):
+            co = c.get("coordinates") or {}
+            capitals.append({"name": _city_name(c),
+                             "lat": co.get("lat"), "lon": co.get("lon"),
+                             "population": c.get("population")})
+    cap_row = next((c for c in mine if c.get("capital")), None)
+    capital = None
+    if cap_row:
+        co = cap_row.get("coordinates") or {}
+        capital = {"name": _city_name(cap_row),
+                   "lat": co.get("lat"), "lon": co.get("lon"),
+                   "population": cap_row.get("population")}
+    populous = sorted(
+        [c for c in mine if c.get("population") is not None],
+        key=lambda c: -(c.get("population") or 0))
+    populous = [{"name": _city_name(c), "population": c.get("population"),
+                 "lat": (c.get("coordinates") or {}).get("lat"),
+                 "lon": (c.get("coordinates") or {}).get("lon")}
+                for c in populous]
+
+    borders = []
+    for b in (rec.get("borders") or []):
+        bcode = str(b).upper()
+        brec = _get(f"{base}/common/countries/{bcode.lower()}.json",
+                    required=False) or {}
+        bcap = None
+        for c in cities:
+            if str(c.get("countryCode") or "").upper() == bcode \
+                    and c.get("capital"):
+                co = c.get("coordinates") or {}
+                bcap = {"name": _city_name(c),
+                        "lat": co.get("lat"), "lon": co.get("lon")}
+                break
+        borders.append({"code": bcode,
+                        "name": brec.get("name") or bcode,
+                        "gdpPerCapita": brec.get("gdpPerCapita"),
+                        "capital": bcap})
+
+    landmark = None
+    ld = (day.get("landmarkData") or {})
+    if ld.get("landmarkCode") is not None and isinstance(landmarks_doc, list):
+        hit = next((x for x in landmarks_doc
+                    if x.get("landmarkCode") == ld.get("landmarkCode")), None)
+        if hit:
+            names = hit.get("names") or {}
+            landmark = {"landmarkCode": ld.get("landmarkCode"),
+                        "imageCode": ld.get("imageCode"),
+                        "name": names.get("en") or "",
+                        "image_url":
+                            f"{base}/common/landmarks/"
+                            f"{ld.get('landmarkCode')}/{ld.get('imageCode')}"
+                            ".jpg"}
+
+    facts = {}
+    for f in (facts_doc.get("fillFacts") or []):
+        tr = ((f.get("translations") or {}).get("en") or {})
+        if f.get("factCode") is not None:
+            facts[f.get("factCode")] = {
+                "category": f.get("category"),
+                "question": tr.get("question") or "",
+                "answer": tr.get("answer") or "",
+                "answers": tr.get("answers") or []}
+
+    # GDP comparison question (locale canYOuGuessHigherGDP): "Among
+    # {country} and its neighbours, which has the highest per-capita GDP?"
+    cands = [(rec.get("name") or code, rec.get("gdpPerCapita"))]
+    for b in borders:
+        cands.append((b["name"], b.get("gdpPerCapita")))
+    cands = [(n, g) for (n, g) in cands if g is not None]
+    gdp_compare = max(cands, key=lambda kv: kv[1])[0] if cands else None
+
+    langs = rec.get("languageData", {}).get("languages") or []
+    languages = [{"languageCode": str(x.get("languageCode") or ""),
+                  "percentage": x.get("percentage")}
+                 for x in langs if x.get("languageCode")]
+
+    # Availability: the game's own removal rules (see docstring). True =
+    # available; a string = removed + reason. Emblem/landmark need the live
+    # image check, so they stay available here and the solver verifies.
+    avail = {"country": True}
+    micro = code in ("VA", "MC", "MO", "SG", "HK", "GI")
+    avail["capital"] = True if (capital and not micro) else (
+        "no capital city in cities.json" if not capital else
+        "micro-state code: capital round removed by game")
+    avail["orientation"] = True if (capital and not micro
+                                    and rec.get("borders")) else (
+        "orientation needs a capital + borders (game removal rule)")
+    avail["neighbours"] = True if rec.get("borders") else (
+        "no borders (game removal rule)")
+    avail["populousCities"] = True if len(populous) >= 4 else (
+        f"only {len(populous)} populated cities (<4, game removal rule)")
+    avail["language"] = True if len(languages) == 2 else (
+        f"{len(languages)} languages (!=2, game removal rule)")
+    avail["currency"] = True if rec.get("population") else (
+        "no population (game removal rule)")
+    avail["gdp"] = True if rec.get("gdpPerCapita") is not None else (
+        "no gdpPerCapita (game removal rule)")
+    avail["flag"] = True
+    avail["trivia"] = True
+    avail["landmark"] = True  # live-check: landmark image content-type
+    avail["emblem"] = True  # live-check: shield content-type
+    avail["size"] = True
+    avail["summary"] = True
+
+    cur = rec.get("currencyData") or {}
+    return {"date": d.isoformat(), "code": code,
+            "name": rec.get("name") or code, "day": day,
+            "country": rec, "capital": capital, "capitals": capitals,
+            "borders": borders,
+            "populous": populous, "landmark": landmark, "facts": facts,
+            "languages": languages,
+            "gdp": {"number": rec.get("gdpPerCapita"),
+                    "compare_answer": gdp_compare,
+                    "compare_candidates": cands},
+            "currency": {"code": cur.get("code"), "name": cur.get("name"),
+                         "nameChoices": cur.get("nameChoices") or []},
+            "population": rec.get("population"),
+            "size": rec.get("size"),
+            "flags": [str(x).lower() for x in (rec.get("flags") or [])],
+            "available": avail}
 
 
 # ---------- countryle ----------
