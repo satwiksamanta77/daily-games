@@ -76,6 +76,10 @@ jobs:
         run: |
           git config user.name "video-bot"
           git config user.email "video-bot@users.noreply.github.com"
+          # Never commit a browser_state.json with completed nerdle
+          # gameStates (fix-loop iter 6: rerun #5 replayed rerun #4's
+          # won boards). Strip them before staging.
+          python strip_nerdle_state.py || true
           git add database/ browser_state.json || true
           git diff --cached --quiet || git commit -m "db: ${{ matrix.game }} $(date -u +%F)"
           for i in 1 2 3 4 5 6 7 8; do git pull --rebase -X theirs --autostash 2>/dev/null && git push 2>/dev/null && break; git rebase --abort 2>/dev/null; sleep 6; done || true
@@ -138,6 +142,10 @@ jobs:
         run: |
           git config user.name "video-bot"
           git config user.email "video-bot@users.noreply.github.com"
+          # Never commit a browser_state.json with completed nerdle
+          # gameStates (fix-loop iter 6: rerun #5 replayed rerun #4's
+          # won boards). Strip them before staging.
+          python strip_nerdle_state.py || true
           git add database/ browser_state.json || true
           git diff --cached --quiet || git commit -m "db: ${{ matrix.game }} $(date -u +%F)"
           for i in 1 2 3 4 5 6 7 8; do git pull --rebase -X theirs --autostash 2>/dev/null && git push 2>/dev/null && break; git rebase --abort 2>/dev/null; sleep 6; done || true
@@ -153,6 +161,25 @@ jobs:
           pattern: video-*
           path: all-artifacts
           merge-multiple: false
+      - name: Exclude unsolved games' finals from the pack
+        # Fix-loop iter 6: the pack zips this run's artifacts, so an
+        # unsolved game's assembled final (nerdle rerun #5: a 33 s final
+        # for solved=False) would ship as if solved. Delete *_final_*.mp4
+        # in any per-game dir whose result.json says solved=False.
+        run: |
+          python - <<'PYEOF'
+          import json, pathlib
+          root = pathlib.Path("all-artifacts")
+          for res in sorted(root.glob("video-*/result.json")):
+              try:
+                  solved = json.loads(res.read_text()).get("solved")
+              except Exception:
+                  continue
+              if solved is False:
+                  for mp4 in res.parent.glob("*_final_*.mp4"):
+                      print(f"bundle filter: dropping unsolved final {mp4}")
+                      mp4.unlink()
+          PYEOF
       - name: Zip into one pack
         run: |
           cd all-artifacts

@@ -891,8 +891,58 @@ def worldle_all_modes(d=None):
     avail["area"] = True
     avail["summary"] = True
 
+    # Country lat/lon bbox (fix-loop iter 6, for the capital pinpoint):
+    # the game's country-outline SVG exposes no bounds/projection, so
+    # the pin needs the country's bbox mapped onto the rendered path's
+    # bbox (country-bbox -> path-bbox linear fit, Mercator latitude).
+    # Source: Natural Earth 110m admin-0 GeoJSON via jsDelivr, matched
+    # on the feature's ISO_A2 property (single fetch, no alpha-3
+    # lookup). Non-required: any fetch failure -> bounds=None and the
+    # capital pin falls back to the old behaviour (decline).
+    bounds = None
+    try:
+        _ne = None
+        for _ne_url in (
+                "https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector"
+                "@master/geojson/ne_110m_admin_0_countries.geojson",
+                "https://raw.githubusercontent.com/nvkelso/"
+                "natural-earth-vector/master/geojson/"
+                "ne_110m_admin_0_countries.geojson"):
+            try:
+                _cand = _rq.get(_ne_url, timeout=30,
+                                headers={"User-Agent": "WordSolverX Video"})
+            except Exception:
+                continue
+            if _cand.ok:
+                _ne = _cand
+                break
+        if _ne is not None and _ne.ok:
+            _lons, _lats = [], []
+            for _feat in (_ne.json().get("features") or []):
+                _props = _feat.get("properties") or {}
+                if str(_props.get("ISO_A2") or "").upper() != code:
+                    continue
+                _geom = _feat.get("geometry") or {}
+
+                def _walk_coords(c):
+                    if isinstance(c, (list, tuple)) and c \
+                            and isinstance(c[0], (int, float)):
+                        _lons.append(float(c[0]))
+                        _lats.append(float(c[1]))
+                    elif isinstance(c, (list, tuple)):
+                        for _sub in c:
+                            _walk_coords(_sub)
+
+                _walk_coords(_geom.get("coordinates") or [])
+                break
+            if _lons and _lats:
+                bounds = {"minLon": min(_lons), "maxLon": max(_lons),
+                          "minLat": min(_lats), "maxLat": max(_lats)}
+    except Exception:
+        bounds = None
+
     cur = rec.get("currencyData") or {}
-    return {"date": d.isoformat(), "code": code,
+    return {"date": d.isoformat(), "code": code, "bounds": bounds,
             "name": rec.get("name") or code, "day": day,
             "country": rec, "capital": capital, "capitals": capitals,
             "borders": borders,

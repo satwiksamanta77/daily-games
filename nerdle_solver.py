@@ -35,6 +35,11 @@ except Exception as e:
     QP_AVAILABLE = False
 
 try:
+    from strip_nerdle_state import strip_nerdle_state_file as _strip_state_file
+except Exception:
+    _strip_state_file = None
+
+try:
     from youtube_upload import upload_to_youtube, fetch_word_analysis
     YOUTUBE_AVAILABLE = True
 except ImportError:
@@ -856,6 +861,87 @@ def _seed_history(state):
     return hists, typed
 
 
+# Fix-loop iteration 6: the site restores an already-completed board from
+# localStorage gameState/miniGameState when the context loads a committed
+# browser_state.json (rerun #5 replayed rerun #4's won boards, typed 0).
+# Every mode therefore starts from a FRESH board: probe the restore gate
+# (which keys are present, whether the loaded board is already won), clear
+# the site's own game-state keys for this origin, and reload so the app
+# boots empty. Clearing AFTER load is not enough — the app hydrates its
+# board from storage at load — so the reload is the reset, not the clear.
+_NERDLE_STATE_KEYS = ("gameState", "miniGameState", "statsState",
+                      "deviceStatsState", "timer")
+
+_NERDLE_RESTORE_PROBE_JS = """() => {
+  const out = {keys: [], guesses: 0, hasSolution: false, wonText: false};
+  for (const k of ['gameState', 'miniGameState', 'statsState',
+                   'deviceStatsState', 'timer']) {
+    const v = localStorage.getItem(k);
+    if (v !== null) {
+      out.keys.push(k);
+      if (k === 'gameState' || k === 'miniGameState') {
+        try {
+          const gs = JSON.parse(v);
+          const arr = gs && gs.guesses;
+          if (Array.isArray(arr)) out.guesses = arr.length;
+          if (gs && (gs.solution || gs.gameStatus === 'WIN' ||
+                     gs.status === 'WIN')) out.hasSolution = true;
+        } catch (e) {}
+      }
+    }
+  }
+  const t = (document.body.innerText || '').toLowerCase();
+  out.wonText = /you won|won in \\d|great job/.test(t);
+  return out;
+}"""
+
+_NERDLE_CLEAR_JS = """(keys) => {
+  const cleared = [];
+  for (const k of keys) {
+    if (localStorage.getItem(k) !== null) {
+      localStorage.removeItem(k);
+      cleared.push(k);
+    }
+  }
+  return cleared;
+}"""
+
+
+async def _nerdle_fresh_board(page, mode):
+    """Probe the restore gate, clear site game state, reload fresh.
+
+    Logs which storage keys were present/cleared and the board state on
+    load (keys, guess count, won-ish text) so the next artifact proves
+    whether the fresh-board reset held. Returns the post-reload probe.
+    """
+    try:
+        before = await page.evaluate(_NERDLE_RESTORE_PROBE_JS)
+    except Exception:
+        before = {}
+    _nlog(f"[{mode['id']}] restore gate on load: keys={before.get('keys')} "
+          f"guesses={before.get('guesses')} hasSolution={before.get('hasSolution')} "
+          f"wonText={before.get('wonText')}")
+    try:
+        cleared = await page.evaluate(_NERDLE_CLEAR_JS, list(_NERDLE_STATE_KEYS))
+    except Exception:
+        cleared = []
+    _nlog(f"[{mode['id']}] gameState cleared: {cleared or 'none present'}")
+    if cleared:
+        try:
+            await page.goto(mode["url"], wait_until="domcontentloaded",
+                            timeout=45000)
+            await page.wait_for_timeout(1500)
+        except Exception as _e:
+            _nlog(f"[{mode['id']}] fresh-board reload failed: {str(_e)[:100]}")
+    try:
+        after = await page.evaluate(_NERDLE_RESTORE_PROBE_JS)
+    except Exception:
+        after = {}
+    _nlog(f"[{mode['id']}] board after reset: keys={after.get('keys')} "
+          f"guesses={after.get('guesses')} wonText={after.get('wonText')}")
+    return after
+
+
 async def play_mode(page, mode, script_dir, official=None):
     """Solve ONE mode: algorithm first (solver-worker entropy guesses);
     official day's answer only when rows_left <= 2 (or solver is empty).
@@ -897,6 +983,9 @@ async def play_mode(page, mode, script_dir, official=None):
             except Exception as e:
                 print(f"[{mode['id']}] goto {att + 1}/3 failed: {e}")
                 await page.wait_for_timeout(2500)
+        # Fresh-board reset (fix-loop iter 6): never replay into a
+        # completed board restored from committed storage state.
+        await _nerdle_fresh_board(page, mode)
         # Fill the frame: the board column is narrow on wide viewports,
         # so zoom per mode (multi-board modes stay at 1.0).
         _zoom = {"classic": 1.2, "micro": 1.35, "mini": 1.3, "midi": 1.25,
@@ -1309,6 +1398,16 @@ async def main():
             print("[nerdle] browser_state.json saved")
         except Exception as _e:
             print(f"[nerdle] state save failed: {str(_e)[:120]}")
+        # Never persist completed nerdle gameStates: strip them from the
+        # saved file so the next run cannot replay into a won board.
+        try:
+            if _strip_state_file is not None:
+                _removed = _strip_state_file(
+                    str(script_dir / "browser_state.json"))
+                if _removed:
+                    print(f"[nerdle] stripped completed gameState: {_removed}")
+        except Exception as _e:
+            print(f"[nerdle] state strip failed: {str(_e)[:120]}")
         # shot_win.png for the artifact (the workflow uploads shot_win.png):
         # screenshot the last mode's page while it is still open; fall back
         # to the last won mode's per-mode shot.
@@ -1404,98 +1503,101 @@ async def main():
                 # Full message to the debug log — the old [:100] truncation
                 # is what hid the TimeoutExpired root cause last run.
                 _nlog(f"[nerdle] polish skipped: {_e}")
-            gameplay = VideoFileClip(str(final))
-            gd = float(gameplay.duration or 0)
-            parts, cursor = [], 0.0
-            def _img(p, d):
-                return ImageClip(p).set_duration(d).set_fps(24).resize(width=1920, height=1080)
-            classic = []
-            if isinstance(official, dict):
-                classic = [e for e in (official.get("classic") or [])][:4]
-            # No answer-bearing slides: the old hints card printed the classic
-            # equations and the definition/facts cards said QUORDLE. Start
-            # each mode with its own NOW PLAYING card instead.
-            # Gameplay split into 9 mode chapters, each prefixed with a NOW PLAYING
-            # card so a viewer landing mid-video can tell which mode is up.
-            # The recording is continuous, so the boundaries come from the
-            # per-mode `starts` timestamps captured while playing.
-            weights = []
-            for i in range(len(NERDLE_MODES)):
-                s = starts[i] if i < len(starts) else 0
-                e = starts[i+1] if i+1 < len(starts) else total
-                weights.append(max(1.0, e - s))
-            tw = sum(weights) or 1.0
-            cuts, acc = [], 0.0
-            for w in weights:
-                cuts.append((acc * gd / tw, (acc + w) * gd / tw))
-                acc += w
-
-            # Chapter times (iteration-3 accumulator fix): chapter[i] =
-            # sum over kept modes j<i of (card_dur_j + segment_dur_j).
-            # The old code appended (cursor + card_sec) with `cursor`
-            # stuck at 0.0 for the whole loop, so all nine mode chapters
-            # landed at 20–40 s of a ~442 s video.
-            mode_parts = []
-            emitted = []  # (mode, card_dur, seg_dur) in final-video order
-            for i, m in enumerate(NERDLE_MODES):
-                if m["id"] in CUT_MODES:
-                    _nlog(f"[nerdle] cutting unwon mode chapter: {m['id']}")
-                    continue
-                a, b = cuts[i]
-                if b - a < 0.5:
-                    continue
-                card_dur = 0.0
-                cp = video_dir / f"mode_{i}.png"
-                try:
-                    QP.generate_mode_card(str(cp), "Nerdle",
-                                          m.get("name", f"Mode {i + 1}"),
-                                          f"Round {i + 1} of {len(NERDLE_MODES)}")
-                    mode_parts.append(_img(str(cp), 2.5))
-                    card_dur = 2.5
-                except Exception as _e:
-                    _nlog(f"[nerdle] mode card failed: {str(_e)[:90]}")
-                mode_parts.append(gameplay.subclip(a, b))
-                emitted.append((m, card_dur, b - a))
-            for _s, (_m, _cd, _sd) in zip(
-                    compute_nerdle_chapter_starts(
-                        [(cd, sd) for (_m, cd, sd) in emitted]), emitted):
-                chapters.append((_s, f"{_m['name']} Solve"))
-            if mode_parts:
-                parts.extend(mode_parts)
-                cursor = sum(cd + sd for (_m, cd, sd) in emitted)
+            if not all_solved:
+                _nlog("[nerdle] skipping final assembly: not solved (no publishable video)")
             else:
-                parts.append(gameplay)
-                cursor = gd
-            # analysis slides (reuse quordle def/freq/facts with nerdle equations as words)
-            # Skipped: they print answers up front and say QUORDLE. The video
-            # is mode cards + real solves only.
-            final_clip = concatenate_videoclips(parts, method="compose")
-            _intro = script_dir / "intro" / "wordsolverx-intro-20s.mp4"
-            if _intro.exists():
-                try:
-                    from moviepy.editor import VideoFileClip as _VFC
-                    _ic = _VFC(str(_intro)).resize(width=1920, height=1080)
-                    final_clip = concatenate_videoclips([_ic, final_clip],
-                                                        method="compose")
-                    chapters = [(0, "Intro")] + [
-                        (s + float(_ic.duration or 0), t) for s, t in chapters]
-                    print(f"[nerdle] intro prepended ({_ic.duration:.1f}s)")
-                except Exception as e:
-                    print(f"[nerdle] intro skipped: {str(e)[:120]}")
-            _nlog(f"[nerdle] chapters: {[(round(float(s), 1), t) for s, t in chapters]}")
-            for _mp3 in ("song1.mp3", "song2.mp3"):
-                _sp = script_dir / _mp3
-                if _sp.exists():
-                    try:
-                        sc = AudioFileClip(str(_sp))
-                        full = afx.audio_loop(sc, duration=final_clip.duration) if sc.duration < final_clip.duration else sc.subclip(0, final_clip.duration)
-                        final_clip = final_clip.set_audio(full)
-                        break
-                    except Exception:
+                gameplay = VideoFileClip(str(final))
+                gd = float(gameplay.duration or 0)
+                parts, cursor = [], 0.0
+                def _img(p, d):
+                    return ImageClip(p).set_duration(d).set_fps(24).resize(width=1920, height=1080)
+                classic = []
+                if isinstance(official, dict):
+                    classic = [e for e in (official.get("classic") or [])][:4]
+                # No answer-bearing slides: the old hints card printed the classic
+                # equations and the definition/facts cards said QUORDLE. Start
+                # each mode with its own NOW PLAYING card instead.
+                # Gameplay split into 9 mode chapters, each prefixed with a NOW PLAYING
+                # card so a viewer landing mid-video can tell which mode is up.
+                # The recording is continuous, so the boundaries come from the
+                # per-mode `starts` timestamps captured while playing.
+                weights = []
+                for i in range(len(NERDLE_MODES)):
+                    s = starts[i] if i < len(starts) else 0
+                    e = starts[i+1] if i+1 < len(starts) else total
+                    weights.append(max(1.0, e - s))
+                tw = sum(weights) or 1.0
+                cuts, acc = [], 0.0
+                for w in weights:
+                    cuts.append((acc * gd / tw, (acc + w) * gd / tw))
+                    acc += w
+
+                # Chapter times (iteration-3 accumulator fix): chapter[i] =
+                # sum over kept modes j<i of (card_dur_j + segment_dur_j).
+                # The old code appended (cursor + card_sec) with `cursor`
+                # stuck at 0.0 for the whole loop, so all nine mode chapters
+                # landed at 20–40 s of a ~442 s video.
+                mode_parts = []
+                emitted = []  # (mode, card_dur, seg_dur) in final-video order
+                for i, m in enumerate(NERDLE_MODES):
+                    if m["id"] in CUT_MODES:
+                        _nlog(f"[nerdle] cutting unwon mode chapter: {m['id']}")
                         continue
-            out = str(video_dir / f"nerdle_final_{date_key}.mp4")
-            final_clip.write_videofile(out, codec='libx264', audio_codec='aac', fps=24)
-            final = out
+                    a, b = cuts[i]
+                    if b - a < 0.5:
+                        continue
+                    card_dur = 0.0
+                    cp = video_dir / f"mode_{i}.png"
+                    try:
+                        QP.generate_mode_card(str(cp), "Nerdle",
+                                              m.get("name", f"Mode {i + 1}"),
+                                              f"Round {i + 1} of {len(NERDLE_MODES)}")
+                        mode_parts.append(_img(str(cp), 2.5))
+                        card_dur = 2.5
+                    except Exception as _e:
+                        _nlog(f"[nerdle] mode card failed: {str(_e)[:90]}")
+                    mode_parts.append(gameplay.subclip(a, b))
+                    emitted.append((m, card_dur, b - a))
+                for _s, (_m, _cd, _sd) in zip(
+                        compute_nerdle_chapter_starts(
+                            [(cd, sd) for (_m, cd, sd) in emitted]), emitted):
+                    chapters.append((_s, f"{_m['name']} Solve"))
+                if mode_parts:
+                    parts.extend(mode_parts)
+                    cursor = sum(cd + sd for (_m, cd, sd) in emitted)
+                else:
+                    parts.append(gameplay)
+                    cursor = gd
+                # analysis slides (reuse quordle def/freq/facts with nerdle equations as words)
+                # Skipped: they print answers up front and say QUORDLE. The video
+                # is mode cards + real solves only.
+                final_clip = concatenate_videoclips(parts, method="compose")
+                _intro = script_dir / "intro" / "wordsolverx-intro-20s.mp4"
+                if _intro.exists():
+                    try:
+                        from moviepy.editor import VideoFileClip as _VFC
+                        _ic = _VFC(str(_intro)).resize(width=1920, height=1080)
+                        final_clip = concatenate_videoclips([_ic, final_clip],
+                                                            method="compose")
+                        chapters = [(0, "Intro")] + [
+                            (s + float(_ic.duration or 0), t) for s, t in chapters]
+                        print(f"[nerdle] intro prepended ({_ic.duration:.1f}s)")
+                    except Exception as e:
+                        print(f"[nerdle] intro skipped: {str(e)[:120]}")
+                _nlog(f"[nerdle] chapters: {[(round(float(s), 1), t) for s, t in chapters]}")
+                for _mp3 in ("song1.mp3", "song2.mp3"):
+                    _sp = script_dir / _mp3
+                    if _sp.exists():
+                        try:
+                            sc = AudioFileClip(str(_sp))
+                            full = afx.audio_loop(sc, duration=final_clip.duration) if sc.duration < final_clip.duration else sc.subclip(0, final_clip.duration)
+                            final_clip = final_clip.set_audio(full)
+                            break
+                        except Exception:
+                            continue
+                out = str(video_dir / f"nerdle_final_{date_key}.mp4")
+                final_clip.write_videofile(out, codec='libx264', audio_codec='aac', fps=24)
+                final = out
         except Exception as e:
             print(f"[assembly] fallback raw: {e}")
 

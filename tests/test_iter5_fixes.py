@@ -87,7 +87,11 @@ class TestIter5SourceGuards(unittest.TestCase):
 
     def test_worldle_language_fallback(self):
         self.assertIn('"kbp": "Kabiye"', SRC)
-        self.assertIn("Q1 auto-submitted", SRC)
+        # Iter 6 replaced the "auto-submitted after first click"
+        # heuristic (it conflated selection with submission): submission
+        # is now the language-guesses array growing, with BOTH names +
+        # Guess per question. See tests/test_iter6_fixes.py.
+        self.assertIn("submitted={submitted}", SRC)
         # Per-question pick: Q1 must try the second language first.
         self.assertIn("names[qidx], names[1 - qidx]", SRC)
 
