@@ -556,7 +556,20 @@ def consent_watch_js():
     try {
       if (el.closest('[class*=consent i],[class*=cookie i],[class*=modal i],' +
           '[class*=dialog i],[class*=tooltip i],[class*=hint i],[role=dialog],' +
-          '[id*=truste],[class*=fc-]')) return true;
+          '[id*=truste],[class*=fc-],[id*=didomi],[class*=didomi i],' +
+          '[id*=cmp i],[class*=cmp i]')) return true;
+      // Shadow-DOM buttons have no light-DOM ancestors: the CMP is
+      // identified by the shadow host itself (e.g. Didomi's
+      // #didomi-host). Fix-loop iter 10: Worldle's Didomi notice lives
+      // in #didomi-host's shadow root, so closest() alone never sees it.
+      try {
+        const rn = el.getRootNode && el.getRootNode();
+        if (rn && rn.host) {
+          const h = (rn.host.id || '') + ' ' +
+            (typeof rn.host.className === 'string' ? rn.host.className : '');
+          if (/didomi|consent|cookie|cmp|truste/i.test(h)) return true;
+        }
+      } catch (e) {}
       let n = el;
       for (let i = 0; i < 4 && n; i++) {
         const cs = getComputedStyle(n);
@@ -567,18 +580,34 @@ def consent_watch_js():
     return false;
   };
   const sweep = () => {
+    // Collect document + same-origin iframe docs + EVERY open shadow
+    // root (Didomi renders its notice inside #didomi-host's shadow
+    // DOM, invisible to plain querySelectorAll — iter 10).
     const roots = [document];
     try {
+      const walk = (root) => {
+        let all = [];
+        try { all = Array.from(root.querySelectorAll('*')); }
+        catch (e) { return; }
+        for (const e of all) {
+          try {
+            if (e.shadowRoot) { roots.push(e.shadowRoot); walk(e.shadowRoot); }
+          } catch (err) {}
+        }
+      };
+      walk(document);
       for (const f of Array.from(document.querySelectorAll('iframe'))) {
-        const d = f.contentDocument;
-        if (d) roots.push(d);
+        try {
+          const d = f.contentDocument;
+          if (d) { roots.push(d); walk(d); }
+        } catch (e) {}
       }
     } catch (e) {}
     for (const root of roots) {
       let els = [];
       try {
         els = Array.from(root.querySelectorAll(
-          'button, a[role=button], [role=button], #truste-consent-button, .fc-cta-consent, [aria-label=dismiss]'));
+          'button, a[role=button], [role=button], #truste-consent-button, .fc-cta-consent, [aria-label=dismiss], #didomi-notice-agree-button'));
       } catch (e) { continue; }
       for (const el of els) {
         if (done.has(el)) continue;

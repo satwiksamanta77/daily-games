@@ -723,6 +723,101 @@ def _kb(page, text, delay=150):
     return True
 
 
+# Synchronous CMP/consent accept pass (fix-loop iter 10). Worldle's
+# Didomi "We value your privacy / Accept all" notice lives inside
+# #didomi-host's shadow DOM, so the light-DOM dialog sweep below never
+# sees it and the old consent watcher (plain querySelectorAll) never
+# clicked it. The notice covered the whole page, the first guess-input
+# click timed out (ElementHandle.click 3000ms), and the worldle job in
+# run 39035133842 failed on country guess 1 with zero guesses
+# submitted. This fragment pierces open shadow roots and clicks the
+# accept button inside a CMP container. Returns 'consent-accept:<id|text>'
+# or null. The CMP-container gate is what keeps it from ever clicking a
+# game button: a "Continue"/"OK" button outside a consent/cookie/CMP
+# container is left alone.
+_CONSENT_ACCEPT_JS = """(() => {
+  const ACCEPT = new Set(['accept all', 'accept all cookies', 'accept',
+    'agree', 'i agree', 'agree and close', 'allow all', 'got it', 'ok',
+    'okay', 'continue']);
+  const CMP = '[class*=consent i],[class*=cookie i],[class*=cmp i],' +
+    '[class*=didomi i],[class*=truste i],[class*=fc-],[class*=modal i],' +
+    '[class*=dialog i],[class*=notice i],[id*=consent i],[id*=cookie i],' +
+    '[id*=didomi],[id*=truste],[role=dialog]';
+  const inCmp = (el) => {
+    try { if (el.closest(CMP)) return true; } catch (e) {}
+    try {
+      const rn = el.getRootNode && el.getRootNode();
+      if (rn && rn.host) {
+        const h = (rn.host.id || '') + ' ' +
+          (typeof rn.host.className === 'string' ? rn.host.className : '');
+        if (/didomi|consent|cookie|cmp|truste/i.test(h)) return true;
+      }
+    } catch (e) {}
+    return false;
+  };
+  const roots = [document];
+  const walk = (root) => {
+    let all = [];
+    try { all = Array.from(root.querySelectorAll('*')); }
+    catch (e) { return; }
+    for (const e of all) {
+      try {
+        if (e.shadowRoot) { roots.push(e.shadowRoot); walk(e.shadowRoot); }
+      } catch (err) {}
+    }
+  };
+  try { walk(document); } catch (e) {}
+  try {
+    for (const f of Array.from(document.querySelectorAll('iframe'))) {
+      try { const d = f.contentDocument; if (d) { roots.push(d); walk(d); } }
+      catch (e) {}
+    }
+  } catch (e) {}
+  for (const root of roots) {
+    let els = [];
+    try {
+      els = Array.from(root.querySelectorAll(
+        'button, [role=button], a, #didomi-notice-agree-button'));
+    } catch (e) { continue; }
+    for (const el of els) {
+      try {
+        if (!el || el.offsetParent === null) continue;
+        const r = el.getBoundingClientRect();
+        if (!r || r.width < 8 || r.height < 8) continue;
+        const t = ((el.innerText || el.getAttribute('aria-label') || ''))
+          .trim().toLowerCase();
+        const isDidomiAgree = el.id === 'didomi-notice-agree-button';
+        if (!isDidomiAgree && (!t || t.length > 30 || !ACCEPT.has(t))) continue;
+        if (!inCmp(el)) continue;
+        el.click();
+        return 'consent-accept:' + (el.id || t);
+      } catch (e) {}
+    }
+  }
+  return null;
+})()"""
+
+
+def _dismiss_consent(page):
+    """Click a CMP/consent accept button if one is covering the page.
+
+    Synchronous counterpart to the consent watcher: _close_modals runs
+    this before any guess input is touched, so a Didomi/TrustArc-style
+    notice can never again sit over the board while the solver clicks
+    at it. Returns the clicked button's id/text, or None.
+    """
+    try:
+        hit = page.evaluate(_CONSENT_ACCEPT_JS)
+    except Exception:
+        return None
+    if hit:
+        try:
+            page.wait_for_timeout(900)
+        except Exception:
+            pass
+    return hit
+
+
 def _dismiss_dialogs(page, rounds=4):
     """Close instruction/consent dialogs that block the board.
 
@@ -732,6 +827,13 @@ def _dismiss_dialogs(page, rounds=4):
         we click the pixel positions where the X / OK controls are drawn.
     """
     for _ in range(rounds):
+        # CMP/consent first: a Didomi-style notice is NOT matched by the
+        # dialog selector below (shadow-DOM host), so without this the
+        # loop breaks immediately with the notice still covering the page.
+        try:
+            _dismiss_consent(page)
+        except Exception:
+            pass
         try:
             open_dlg = page.evaluate("""() => {
                 const sel = 'div[role="dialog"], .modal, .MuiDialog-root, '
