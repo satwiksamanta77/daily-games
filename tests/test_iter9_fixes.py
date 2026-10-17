@@ -167,13 +167,20 @@ class TestCapitalPinpointTab(unittest.TestCase):
     (ANALYSIS6 §2a; rerun #8: markers 4->4, no PINPOINT log line)."""
 
     def test_tab_click_in_capital_path(self):
+        # Iter-14 refactor (ANALYSIS10): the tab click + activation
+        # verification moved into _worldle_capital_activate_pinpoint;
+        # the capital path must call it BEFORE the pin probe/click,
+        # and must refuse to pin when activation fails (the iter-13
+        # "proceed anyway" path is gone).
         src = inspect.getsource(runner._s_worldle_play_capital)
         self.assertIn("PINPOINT", src)
-        self.assertIn("PINPOINT tab clicked", src)
-        self.assertIn("active_after", src)
-        # The tab click happens BEFORE the pin probe/click.
-        self.assertLess(src.index("PINPOINT tab clicked"),
+        self.assertIn("_worldle_capital_activate_pinpoint(page, gid)", src)
+        self.assertLess(src.index("_worldle_capital_activate_pinpoint"),
                         src.index("_worldle_pin_probe"))
+        helper = inspect.getsource(runner._worldle_capital_activate_pinpoint)
+        self.assertIn("PINPOINT", helper)
+        self.assertIn("CAPITAL_TAB_CLICK_JS", helper)
+        self.assertIn("NEVER activated", helper)
 
 
 class TestTriviaTabTryOnEmpty(unittest.TestCase):

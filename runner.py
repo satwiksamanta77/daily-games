@@ -4460,6 +4460,20 @@ def _betweenle_attempt_submit(page, gid, g, cnt_before):
     return _verdict, _cnt1
 
 
+def _betweenle_won_after_guess(page, ans):
+    """Win check after one submitted guess (iter-14 P3).
+
+    Iter-13 played one extra guess (HIKER) on the already-won board:
+    the retry chain fired on a post-win no_change because nothing
+    checked the win between guesses. Read-only wrapper over
+    _strict_win — never raises. Returns (won_bool, evidence)."""
+    try:
+        won, ev = _strict_win(page, ans)
+    except Exception:
+        return False, ""
+    return bool(won), str(ev or "")
+
+
 def _s_betweenle(page, ans, gid):
     _close_modals(page)
     # Post-migration the daily game starts from a DOM menu button labelled
@@ -4730,6 +4744,17 @@ def _s_betweenle(page, ans, gid):
                 page.wait_for_timeout(800)
         except Exception as _e:
             _dbg(gid, f"guess {gi + 1} state read failed: {str(_e)[:60]}")
+        # Iter-14 P3: check win after EACH submitted guess and STOP.
+        # Iter-13 played one extra guess (HIKER) on the already-won
+        # board because the retry chain fired on a post-win no_change
+        # and nothing checked the win between guesses. The final
+        # _strict_win after the loop still runs (it is the verdict);
+        # this break only prevents typing into a won board.
+        _won_after, _won_ev = _betweenle_won_after_guess(page, ans)
+        if _won_after:
+            _dbg(gid, f"board won after {g!r} ({_won_ev}); stopping — "
+                      "no further guesses on a won board")
+            break
     page.wait_for_timeout(2500)
     _enable_flutter_semantics(page)
     ok, ev = _strict_win(page, ans)
@@ -5572,6 +5597,13 @@ def _s_worldle_bool_key_for_statement(text, boolean_facts):
             if m:
                 words.discard(w)
                 words.update((m.group(1), m.group(2)))
+        # Iter-14 P1 (ANALYSIS10 Trivia root cause): the SAME stopword
+        # set stripped from the statement tokens must be stripped from
+        # the KEY words too. Before this, isMonarchy -> {is, monarchy}
+        # scored 1/2 = 0.5 < 0.6 against statement tokens {monarchy}
+        # ("is" stripped), so isMonarchy/isTerritory/hasMetro all
+        # NO-MATCHed. After stripping: {monarchy} = 1.0.
+        words -= stop
         if not words:
             continue
         hits = 0
@@ -6627,6 +6659,143 @@ def _worldle_pin_probe(page, px, py):
         return {}
 
 
+def _worldle_capital_activate_pinpoint(page, gid):
+    """Activate the `2. PINPOINT` tab; NEVER proceed with the tab
+    unconfirmed-active (iter-14 P1, ANALYSIS10 Capital root cause).
+
+    Iter-13 clicked the tab, read active_after=False, and proceeded
+    anyway ("active state not confirmable; proceeding") — the pin
+    click then landed with the NAME tab still active and registered
+    nothing (markers 4->4). Flow: (1) if already active, return True;
+    (2) click via Playwright locator, else JS click; (3) re-check
+    active; (4) if still inactive, dump the tab DOM (aria-selected /
+    class / data-state / actual tab element), retry with alternate
+    selectors (contains-PINPOINT, data-state/data-value, second tab
+    in the tablist); (5) if STILL inactive, return False with the
+    activation evidence — the caller FAILS the mode honestly and
+    the pin is NEVER clicked. Returns (active_bool, detail)."""
+    def _active():
+        try:
+            return bool(page.evaluate("""/* CAPITAL_TAB_ACTIVE_CHECK */
+              () => {
+              const vis = e => e && e.offsetParent !== null;
+              const hit = Array.from(document.querySelectorAll(
+                'button, [role=tab]')).filter(vis)
+                .find(e => /^\\s*2\\.\\s*PINPOINT\\s*$/i
+                  .test(e.innerText || ''));
+              if (!hit) return false;
+              return hit.getAttribute('aria-selected') === 'true' ||
+                /active|selected/i.test(hit.className || '') ||
+                (hit.getAttribute('data-state') || '') === 'active';
+            }"""))
+        except Exception:
+            return False
+
+    def _dump():
+        try:
+            return str(page.evaluate("""/* CAPITAL_TAB_DUMP */
+              () => {
+              const vis = e => e && e.offsetParent !== null;
+              const tabs = Array.from(document.querySelectorAll(
+                'button, [role=tab]')).filter(vis);
+              return tabs.map(e => ({
+                text: (e.innerText || '').trim().slice(0, 40),
+                aria_selected: e.getAttribute('aria-selected'),
+                cls: String(e.className || '').slice(0, 80),
+                data_state: e.getAttribute('data-state'),
+                data_value: e.getAttribute('data-value'),
+                role: e.getAttribute('role'),
+                id: e.id || '',
+                disabled: !!e.disabled,
+                outer: (e.outerHTML || '').slice(0, 220)
+              }));
+            }""") or "")
+        except Exception as e:
+            return f"tab DOM dump failed: {e}"
+
+    if _active():
+        return True, "PINPOINT tab already active"
+    _found = False
+    _via = ""
+    try:
+        for _sel in ("[role=tab]:has-text('PINPOINT')",
+                     "button:has-text('PINPOINT')"):
+            try:
+                _cand = page.locator(_sel).first
+                if _cand.count() > 0 and _cand.is_visible():
+                    _cand.click(timeout=5000)
+                    _found, _via = True, f"locator {_sel}"
+                    break
+            except Exception:
+                continue
+    except Exception:
+        pass
+    if not _found:
+        try:
+            _res = page.evaluate("""/* CAPITAL_TAB_CLICK_JS */
+              () => {
+              const vis = e => e && e.offsetParent !== null;
+              const hit = Array.from(document.querySelectorAll(
+                'button, [role=tab]')).filter(vis)
+                .find(e => /^\\s*2\\.\\s*PINPOINT\\s*$/i
+                  .test(e.innerText || ''));
+              if (!hit) return {found: false};
+              hit.click();
+              return {found: true, via: 'js-click'};
+            }""") or {}
+            _found = bool(_res.get("found"))
+            _via = str(_res.get("via") or "js-click")
+        except Exception:
+            _found = False
+    if not _found:
+        return False, ("2. PINPOINT tab not found (pinpoint sub-round "
+                       "not entered); pin NOT clicked")
+    try:
+        page.wait_for_timeout(1200)
+    except Exception:
+        pass
+    if _active():
+        return True, f"PINPOINT tab activated via {_via}"
+    # Still inactive: dump the tab DOM, then retry with alternate
+    # selectors (contains-PINPOINT without the `2.` anchor,
+    # data-state/data-value match, second tab in the tablist).
+    _dump_text = _dump()
+    _dbg(gid, "worldle capital PINPOINT tab still inactive after "
+              f"{_via}; tab DOM dump: {_dump_text[:1500]}")
+    try:
+        page.evaluate("""/* CAPITAL_TAB_RETRY_CLICK */
+          () => {
+          const vis = e => e && e.offsetParent !== null;
+          const tabs = Array.from(document.querySelectorAll(
+            'button, [role=tab]')).filter(vis);
+          let hit = tabs.find(e => /PINPOINT/i.test(e.innerText || ''));
+          if (!hit) hit = tabs.find(e =>
+            /pinpoint/i.test((e.getAttribute('data-value') || '') + ' ' +
+                             (e.getAttribute('data-state') || '')));
+          if (!hit) {
+            const list = document.querySelector('[role=tablist]');
+            const in_list = list ? Array.from(list.querySelectorAll(
+              'button, [role=tab]')).filter(vis) : [];
+            hit = in_list[1] || null;
+          }
+          if (!hit) return {found: false};
+          hit.click();
+          return {found: true, via: 'retry-alt-selector'};
+        }""")
+    except Exception:
+        pass
+    try:
+        page.wait_for_timeout(1200)
+    except Exception:
+        pass
+    if _active():
+        return True, ("PINPOINT tab activated on retry (alternate "
+                      f"selector); first-attempt dump: {_dump_text[:600]}")
+    return False, ("PINPOINT tab NEVER activated (tab click did not "
+                   f"switch the view); tab DOM dump: {_dump_text[:1500]}; "
+                   "pin NOT clicked — failing the mode honestly")
+
+
 def _s_worldle_play_capital(page, gid, day):
     """Capital: Q0 text/autosuggest name + Q1 map pinpoint.
 
@@ -6671,89 +6840,19 @@ def _s_worldle_play_capital(page, gid, day):
     pin_present = "can you guess where" in body.lower()
     if not pin_present:
         return "attempted", [name], "name played; no pinpoint prompt shown"
-    # ---- PINPOINT tab activation (fix-loop iter 9, ANALYSIS6 §2a) ----
-    # The pinpoint click MUST happen with the `2. PINPOINT` tab active.
-    # Iter 6/7 typed the name, submitted it, then clicked the fitted map
-    # point WITHOUT ever clicking the PINPOINT tab — with the NAME tab
-    # active the map click registers nothing (rerun #8: markers 4->4,
-    # no PINPOINT log line; the bbox fit itself was already correct).
-    # Tab activation via a Playwright LOCATOR click (fix-loop iter 11),
-    # verified by DOM effect — NOT a JS hit.click(), which bypasses the
-    # framework's event handling and can leave the tab visually
-    # "clicked" without switching the view. JS click stays as fallback.
-    _pin_tab = {}
-    try:
-        _loc = None
-        for _sel in ("[role=tab]:has-text('PINPOINT')",
-                     "button:has-text('PINPOINT')"):
-            try:
-                _cand = page.locator(_sel).first
-                if _cand.count() > 0 and _cand.is_visible():
-                    _loc = _cand
-                    break
-            except Exception:
-                continue
-        if _loc is not None:
-            _was = bool(page.evaluate("""() => {
-              const vis = e => e && e.offsetParent !== null;
-              const hit = Array.from(document.querySelectorAll(
-                'button, [role=tab]')).filter(vis)
-                .find(e => /^\\s*2\\.\\s*PINPOINT\\s*$/i
-                  .test(e.innerText || ''));
-              if (!hit) return false;
-              return hit.getAttribute('aria-selected') === 'true' ||
-                /active|selected/i.test(hit.className || '');
-            }"""))
-            _loc.click(timeout=5000)
-            _pin_tab = {"found": True, "was_active": _was,
-                        "via": "locator"}
-    except Exception:
-        _pin_tab = {}
-    if not _pin_tab.get("found"):
-        try:
-            _pin_tab = page.evaluate("""() => {
-              const vis = e => e && e.offsetParent !== null;
-              const hit = Array.from(document.querySelectorAll(
-                'button, [role=tab]')).filter(vis)
-                .find(e => /^\\s*2\\.\\s*PINPOINT\\s*$/i
-                  .test(e.innerText || ''));
-              if (!hit) return {found: false};
-              const was = hit.getAttribute('aria-selected') === 'true' ||
-                /active|selected/i.test(hit.className || '');
-              hit.click();
-              return {found: true, was_active: !!was, via: 'js-click'};
-            }""") or {}
-        except Exception:
-            _pin_tab = {}
-    if not _pin_tab.get("found"):
-        return "partial", [name], \
-            "name played; 2. PINPOINT tab not found (pinpoint sub-round " \
-            "not entered)"
-    _settle(page, base=1200)
-    try:
-        _pin_active = bool(page.evaluate("""() => {
-          const vis = e => e && e.offsetParent !== null;
-          const hit = Array.from(document.querySelectorAll(
-            'button, [role=tab]')).filter(vis)
-            .find(e => /^\\s*2\\.\\s*PINPOINT\\s*$/i
-              .test(e.innerText || ''));
-          if (!hit) return false;
-          return hit.getAttribute('aria-selected') === 'true' ||
-            /active|selected/i.test(hit.className || '');
-        }"""))
-    except Exception:
-        _pin_active = False
-    _dbg(gid, "worldle capital PINPOINT tab clicked: "
-              f"was_active={_pin_tab.get('was_active')} "
-              f"active_after={_pin_active}")
+    # ---- PINPOINT tab activation (fix-loop iter 14, ANALYSIS10) ----
+    # The pinpoint click MUST happen with the `2. PINPOINT` tab ACTIVE.
+    # Iter-13 clicked the tab, read active_after=False, and proceeded
+    # anyway — with the NAME tab still active the map click registered
+    # nothing (markers 4->4). The "proceed anyway" path is GONE: if
+    # the tab never activates, the mode FAILS honestly with the tab
+    # DOM dump as evidence, and the pin is NEVER clicked.
+    _pin_active, _pin_detail = _worldle_capital_activate_pinpoint(page, gid)
+    _dbg(gid, "worldle capital PINPOINT tab activation: "
+              f"active={_pin_active} ({_pin_detail[:200]})")
     if not _pin_active:
-        # The tab click may still have switched the view even when the
-        # active marker is not detectable (no aria-selected / active
-        # class). Do NOT bail: the pin click below is still verified by
-        # marker appearance, so a wrong assumption degrades to partial,
-        # not a fake pin. Logged explicitly.
-        _dbg(gid, "worldle capital PINPOINT tab active state not "
-                  "confirmable; proceeding to pin click (marker-verified)")
+        return "partial", [name], \
+            f"name played; {_pin_detail}"
     # ---- Q1 pinpoint, one pin per capital, prompt order ----
     for ci, c in enumerate(caps):
         lat, lon = c.get("lat"), c.get("lon")
@@ -8042,6 +8141,86 @@ def _worldle_phrase_slot_contains(page, phrase):
         return False
 
 
+def _worldle_phrase_broad_slot_probe(page):
+    """Broad drop-slot probe for the Worldle Q1 PHRASE round (iter 14,
+    P1). The iter-13 primary probe (data-slot / slot / drop-zone /
+    drop-target / position / placeholder classes) returned slots=[]
+    — the slot DOM is still unknown. This probe looks for: (a) empty
+    bordered boxes (computed border > 0, near-empty text); (b)
+    elements with a language-name label + empty content; (c) empty
+    siblings of the chip containers. Returns {slots: [{label, x, y,
+    text, kind}], empty_boxes: [...]} — slots are candidates for
+    drag pairing (labelled by nearby label text, else ordered);
+    empty_boxes is the full diagnostic list logged on failure.
+    The drop-slot DOM shape STILL needs live-browser confirmation;
+    this probe is the best-evidenced widening, not a proven shape."""
+    try:
+        return page.evaluate("""/* WORLDLE-PHRASE-BROAD-SLOT-PROBE */
+          () => {
+          const vis = e => e && e.offsetParent !== null;
+          const norm = s => (s||'').toLowerCase()
+            .replace(/\\s+/g,' ').trim();
+          const out = []; const seen = new Set();
+          const push = (e, kind, label) => {
+            const r = e.getBoundingClientRect();
+            if (r.width < 20 || r.height < 12) return;
+            const key = Math.round(r.x) + ',' + Math.round(r.y);
+            if (seen.has(key)) return;
+            seen.add(key);
+            out.push({label: (label || '').trim().slice(0, 80),
+                      x: r.x + r.width / 2, y: r.y + r.height / 2,
+                      text: (e.innerText || '').trim().slice(0, 120),
+                      kind: kind});
+          };
+          const all = Array.from(document.querySelectorAll('body *'))
+            .filter(vis)
+            .filter(e => !e.closest('nav, header, footer'));
+          // (a) empty bordered boxes: computed border on any side,
+          // near-empty text (a drop slot waiting for a phrase).
+          for (const e of all) {
+            const t = (e.innerText || '').trim();
+            if (t.length > 40) continue;
+            let bordered = false;
+            try {
+              const cs = getComputedStyle(e);
+              bordered = ['Top', 'Right', 'Bottom', 'Left'].some(
+                s => parseFloat(cs['border' + s + 'Width'] || '0') > 0);
+            } catch (err) {}
+            if (bordered && t.length <= 40) push(e, 'bordered-box', t);
+          }
+          // (b) language-name label + empty content: an element whose
+          // own text is a short label and whose next sibling / child
+          // is an empty box (labelled slot pair).
+          for (const e of all) {
+            const t = (e.innerText || '').trim();
+            if (!t || t.length > 40 || t.split(/\\s+/).length > 4) continue;
+            const sib = e.nextElementSibling;
+            if (sib && !(sib.innerText || '').trim())
+              push(sib, 'labelled-sibling', t);
+            for (const ch of Array.from(e.children || [])) {
+              if (!(ch.innerText || '').trim())
+                push(ch, 'labelled-child', t);
+            }
+          }
+          // (c) chip containers' siblings: siblings of elements that
+          // hold phrase-like text, when the sibling itself is empty.
+          for (const e of all) {
+            const t = (e.innerText || '').trim();
+            if (!t || t.length > 200) continue;
+            const parent = e.parentElement;
+            if (!parent) continue;
+            for (const sib of Array.from(parent.children || [])) {
+              if (sib === e) continue;
+              if (!(sib.innerText || '').trim())
+                push(sib, 'chip-sibling', t.slice(0, 40));
+            }
+          }
+          return {slots: out, empty_boxes: out};
+        }""") or {}
+    except Exception as e:
+        return {"slots": [], "empty_boxes": [], "error": str(e)[:100]}
+
+
 def _worldle_phrase_drag(page, gid, picked, codes, names, prompts, ds):
     """Drag-and-drop for the Worldle Q1 PHRASE round (fix-loop iter 11).
 
@@ -8152,9 +8331,35 @@ def _worldle_phrase_drag(page, gid, picked, codes, names, prompts, ds):
     _dbg(gid, "worldle phrase chips: draggable-marked="
               f"{sum(1 for c in _chips if c.get('draggable'))}/"
               f"{len(_chips)} (text-found chips are dragged anyway)")
+    _using_broad_slots = False
     if not _slots:
-        return ("partial", "draggable phrase chips found but no drop "
-                f"slots in DOM; probe={_probe}")
+        # Iter-14 P1: the primary slot probe returned slots=[] in
+        # iter-13 and the drag path returned "partial", so the
+        # click-verify fallback was NEVER reached. Run the broad
+        # probe (empty bordered boxes / labelled empty content /
+        # chip-container siblings); if it finds candidate slots,
+        # pair + drag against them. If it also finds nothing,
+        # return "click-fallback" (NOT "partial") so the caller
+        # reaches the click path, which is still guarded by
+        # click-verify (an unplaced click stops the path). The
+        # drop-slot DOM shape still needs live confirmation.
+        _broad = _worldle_phrase_broad_slot_probe(page)
+        _broad_slots = _broad.get("slots") or []
+        _dbg(gid, "worldle phrase broad slot probe: "
+                  f"slots={_broad_slots} "
+                  f"empty_boxes={len(_broad.get('empty_boxes') or [])} "
+                  f"error={_broad.get('error') or ''}")
+        if _broad_slots:
+            _slots = _broad_slots
+            _using_broad_slots = True
+            _dbg(gid, "worldle phrase: using broad-probe slots for "
+                      f"drag pairing (primary probe found none)")
+        else:
+            return ("click-fallback",
+                    "draggable phrase chips found but no drop slots "
+                    f"in DOM (primary probe + broad probe both empty; "
+                    f"broad empty_boxes={_broad.get('empty_boxes') or []}); "
+                    "falling back to click path (click-verify guards)")
     # ---- Deterministic pairing ----
     _by_code = {str(c).lower(): c for c in codes}
     _name_of = {}
@@ -8198,7 +8403,7 @@ def _worldle_phrase_drag(page, gid, picked, codes, names, prompts, ds):
 
     def _verify(_slot_idx, _phrase):
         try:
-            return bool(page.evaluate("""(args) => {
+            _narrow = bool(page.evaluate("""(args) => {
               const vis = e => e && e.offsetParent !== null;
               // Punctuation-insensitive (iter 12): a chip reading
               // 'Nɔɔyɛ la me.' must match the day phrase without
@@ -8214,8 +8419,36 @@ def _worldle_phrase_drag(page, gid, picked, codes, names, prompts, ds):
               return norm(s.innerText).includes(norm(args.phrase));
             }""", {"sel": _slot_sel, "idx": int(_slot_idx),
                    "phrase": _phrase}))
+            if _narrow:
+                return True
         except Exception:
-            return False
+            pass
+        # Iter-14: when broad-probe slots are in use, the narrow
+        # selector cannot see them — verify position-anchored: the
+        # broad slot at the SAME centre as the target must now
+        # contain the phrase. (A plain "any box contains phrase"
+        # check would false-positive on the chip's own card, which
+        # contains the phrase before placement too.)
+        if _using_broad_slots:
+            try:
+                _target = _slots[int(_slot_idx)] or {}
+                _tx, _ty = _target.get("x"), _target.get("y")
+                _broad_now = _worldle_phrase_broad_slot_probe(page) or {}
+                _norm = lambda s: re.sub(
+                    r"[^a-z0-9 ]+", "",
+                    str(s or "").lower()).strip()
+                for _cand in (_broad_now.get("slots") or []):
+                    if _tx is None or _ty is None:
+                        break
+                    if (abs(float(_cand.get("x") or -9999) - float(_tx)) < 10
+                            and abs(float(_cand.get("y") or -9999)
+                                    - float(_ty)) < 10
+                            and _norm(_phrase)
+                            and _norm(_phrase) in _norm(_cand.get("text"))):
+                        return True
+            except Exception:
+                pass
+        return False
 
     for _code, _chip, _slot_idx in _pairs:
         _phrase = _chip.get("phrase") or ""
@@ -8258,7 +8491,17 @@ def _worldle_phrase_drag(page, gid, picked, codes, names, prompts, ds):
             _placed = _verify(_slot_idx, _phrase)
             _dbg(gid, f"worldle phrase drag smooth {_code} -> slot "
                       f"{_slot_idx} placed={_placed}")
-        if not _placed:
+        if not _placed and _using_broad_slots:
+            # Attempt 3 (DragEvent) is SKIPPED for broad-probe slots:
+            # it addresses slots by index into the NARROW selector
+            # list, which does not contain the broad slots — it
+            # would dispatch the drop onto the wrong element.
+            # Attempts 1-2 (coordinate mouse drags) already cover
+            # pointer-based widgets for broad slots.
+            _dbg(gid, f"worldle phrase DragEvent skipped for {_code} "
+                      "(broad-probe slots; narrow index would "
+                      "target the wrong element)")
+        if not _placed and not _using_broad_slots:
             # Attempt 3: in-page DragEvent sequence with a real
             # DataTransfer (dragstart/dragover/drop/dragend).
             try:
@@ -9427,7 +9670,18 @@ def _s_worldle_comparison_probe(page, prompt_substrs):
             if (/^\\s*\\d+\\s*\\./.test(name)) continue;
             if (/(comparison|guess the)/i.test(name)) continue;
             if (name.split(/\\s+/).length > 5) continue;
+            // Iter-14 P1 (ANALYSIS10 Area root cause): map-control
+            // buttons ('Zoom out icon', 'Previous icon', 'Next icon')
+            // polluted the probe and blocked the pick. Exclude icon/
+            // control elements: resolved name ending in 'icon', any
+            // of aria/title/alt containing 'icon', or a small
+            // icon-only button (<=48x48, no image, no country text).
+            const _iconish = (s) => /icon/i.test(s || '');
+            if (/icon\\s*$/.test(name) || _iconish(aria) ||
+                _iconish(title) || _iconish(alt)) continue;
             const r = e.getBoundingClientRect();
+            if (r.width <= 48 && r.height <= 48 && !img &&
+                !isLabelText(firstLine)) continue;
             const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
             // Dedup is POSITION-aware (iter-12 fix): two distinct
             // cards sharing a generic title must NOT collapse.
@@ -9454,6 +9708,7 @@ def _s_worldle_comparison_probe(page, prompt_substrs):
             out.push({name: name, x: cx, y: cy, has_img: !!img,
                       text: (e.innerText || '').slice(0, 120),
                       aria: aria.slice(0, 80), alt: alt.slice(0, 80),
+                      title: title.slice(0, 80),
                       src: src.slice(0, 160)});
           }
           return {prompt_found: true, options: out};
@@ -9551,8 +9806,24 @@ def _s_worldle_comparison_pick(options, values):
     never clicks, never guesses: EVERY option must resolve to a
     number, or the pick refuses (a tie keeps the first shown, logged).
     """
-    normed = []
+    # Iter-14 P1 (ANALYSIS10 Area root cause): defense in depth
+    # alongside the probe-side JS filter — drop icon/control
+    # options ('Zoom out icon', 'Previous icon', 'Next icon') that
+    # reach the pick: resolved name ending in 'icon', or
+    # aria/title/alt containing 'icon'. Real country names never
+    # match this rule.
+    _real_opts = []
     for o in (options or []):
+        _blob = " ".join(str(o.get(f) or "") for f in
+                         ("aria", "title", "alt"))
+        if re.search(r"icon\s*$", str(o.get("name") or ""),
+                     re.IGNORECASE) or "icon" in _blob.lower():
+            continue  # icon/control option, not a country
+        _real_opts.append(o)
+    # (Pure function: no _dbg here — the caller logs the probe +
+    # the pick result, so unit tests stay hermetic.)
+    normed = []
+    for o in (_real_opts or []):
         k = _s_worldle_cmp_key(o.get("name") or "")
         if k and all(k != x[0] for x in normed):
             normed.append((k, o.get("name")))
@@ -12789,16 +13060,20 @@ def _nerdle_effective_date(now_utc=None):
 
 
 def _nerdle_number_gate(served, api_numbers):
-    """Runner-side mirror of nerdle_solver._nerdle_number_gate (iter 13
-    revised): served puzzle numbers must equal the API's numbers.
-    Returns (blocked, detail, per_mode). See the solver for the full
-    rule (classic hard; other modes block only on an exposed mismatch).
+    """Runner-side mirror of nerdle_solver._nerdle_number_gate (iter 14
+    rework): hard-check served == API ONLY for the 4 proven modes
+    (classic, mini, midi, maxi); micro/minibi/quad/instant/speed are
+    site-rules — an API mismatch there NEVER blocks shipping, and the
+    API is never cited as proof for those modes. Returns
+    (blocked, detail, per_mode). See the solver for the full rule +
+    the per-mode trust table.
     """
     per_mode = {}
     blocked_reasons = []
     if not isinstance(api_numbers, dict) or not api_numbers:
         return True, "no API puzzle numbers (API row missing)", per_mode
     served = served if isinstance(served, dict) else {}
+    _proven = ("classic", "mini", "midi", "maxi")
     for mode, nums in api_numbers.items():
         if mode == "classicPuzzleNumber":
             continue
@@ -12809,33 +13084,64 @@ def _nerdle_number_gate(served, api_numbers):
             if not isinstance(hn, int):
                 blocked_reasons.append("classic header number not exposed")
                 per_mode[mode] = {"api": want, "served": None,
-                                  "status": "blocked: no header"}
+                                  "status": "blocked: no header",
+                                  "trust": "api-proven"}
             elif hn not in want:
                 blocked_reasons.append(
                     f"classic header #{hn} != API {want}")
                 per_mode[mode] = {"api": want, "served": hn,
-                                  "status": "blocked: mismatch"}
+                                  "status": "blocked: mismatch",
+                                  "trust": "api-proven"}
             else:
                 per_mode[mode] = {"api": want, "served": hn,
-                                  "status": "match"}
+                                  "status": "match",
+                                  "trust": "api-proven"}
             if ev.get("matches_target_official") is False:
                 blocked_reasons.append(
                     "classic served solution != API classic answer")
                 per_mode[mode]["answer"] = "mismatch"
             continue
+        if mode in _proven:
+            if not isinstance(hn, int):
+                per_mode[mode] = {"api": want, "served": None,
+                                  "status": "warning: not exposed",
+                                  "trust": "api-proven"}
+            elif hn not in want:
+                blocked_reasons.append(
+                    f"{mode} header #{hn} not in API {want}")
+                per_mode[mode] = {"api": want, "served": hn,
+                                  "status": "blocked: mismatch",
+                                  "trust": "api-proven"}
+            else:
+                per_mode[mode] = {"api": want, "served": hn,
+                                  "status": "match",
+                                  "trust": "api-proven"}
+            if ev.get("matches_target_official") is False:
+                blocked_reasons.append(
+                    f"{mode} served solution != API answer")
+                per_mode[mode]["answer"] = "mismatch"
+            continue
+        # Unproven modes: site rules; API mismatch never blocks.
         if not isinstance(hn, int):
             per_mode[mode] = {"api": want, "served": None,
-                              "status": "warning: not exposed"}
-            continue
-        if hn not in want:
-            blocked_reasons.append(f"{mode} header #{hn} not in API {want}")
+                              "status": "warning: not exposed "
+                              "(site rules; API not authoritative)",
+                              "trust": "site-rules"}
+        elif hn not in want:
             per_mode[mode] = {"api": want, "served": hn,
-                              "status": "blocked: mismatch"}
+                              "status": "warning: header mismatch "
+                              "(site rules; API not authoritative)",
+                              "trust": "site-rules"}
         else:
-            per_mode[mode] = {"api": want, "served": hn, "status": "match"}
+            per_mode[mode] = {"api": want, "served": hn,
+                              "status": "match (site rules)",
+                              "trust": "site-rules"}
+        if ev.get("matches_target_official") is False:
+            per_mode[mode]["answer"] = ("warning: mismatch "
+                                        "(site rules)")
     if blocked_reasons:
         return True, "; ".join(blocked_reasons), per_mode
-    return False, "all exposed served numbers match API numbers", per_mode
+    return False, "all proven-mode served numbers/answers match API", per_mode
 
 
 def run_nerdle_external(g, tgt, date_key, today, short):

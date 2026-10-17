@@ -154,22 +154,37 @@ def _target_date():
     return _nerdle_effective_date()
 
 
-def _nerdle_number_gate(served, api_numbers):
-    """Hard gate (iter 13 revised): served puzzle numbers must equal
-    the API's numbers. Returns (blocked, detail, per_mode dict).
+# Per-mode API trust table (iter 14, evidence-grounded in ANALYSIS10):
+# the site's own API is authoritative for the PROVEN modes ONLY —
+# classic, mini, midi, maxi (proven across two dates: the site's
+# served answers equal the API's for these 4). For the UNPROVEN modes
+# — micro, minibi, quad, instant, speed — the site's served answers
+# DIFFER from the API's (iter-13: site micro 5+3=8 vs API 5+4=9;
+# minibi site 56/7=8, 40/8=5 vs API 18/6=3, 54/6=9; quad site
+# 65-45=20, 98-31=67, 8*6+4=52, 27*5=135 vs API 72-44=28, 126/7=18,
+# 378/6=63, 97-44=53; instant site 28/7-3=1 vs API 9-12/3=5; speed
+# 1/2 equations matched), so for those modes the SITE's served
+# answers rule: an API mismatch NEVER blocks shipping, and the API
+# is never cited as proof for those modes. Gate stays FAIL-CLOSED.
+NERDLE_API_PROVEN_MODES = ("classic", "mini", "midi", "maxi")
+NERDLE_API_UNPROVEN_MODES = ("micro", "minibi", "quad", "instant", "speed")
 
-    - classic: header_number REQUIRED and must equal the API classic
-      number; classic served solution must equal the API classic
-      answer (matches_target_official). Classic is the day proof.
-    - other modes: if the site exposes a header number, it must be a
-      MEMBER of the API's puzzleNumbers for that mode (multi-number
-      modes: minibi [n-1130, 5], quad [4], speed [2]); if the site
-      exposes no number, WARNING (not blocking) — the site does not
-      expose a per-mode number to check.
-    - other modes' answer-mismatch (matches False) is WARNING only:
-      the API's answers disagree with the site for micro/minibi/quad
-      (proven iter-12: site micro 8-7=1 vs API 8/2=4 for the same
-      day), so answer-equality cannot prove a wrong day there.
+
+def _nerdle_number_gate(served, api_numbers):
+    """Hard gate (iter 14 rework): hard-check served == API ONLY for
+    the 4 PROVEN modes (classic, mini, midi, maxi). Returns
+    (blocked, detail, per_mode dict).
+
+    - proven modes: an exposed header_number must be a MEMBER of the
+      API's puzzleNumbers for that mode; a served-answer mismatch
+      (matches_target_official is False) BLOCKS. Classic additionally
+      REQUIRES a header number (missing blocks) — classic is the day
+      proof. For mini/midi/maxi a missing header is a warning (the
+      site may not expose it), but the answer check still gates.
+    - unproven modes (micro/minibi/quad/instant/speed): the SITE's
+      served answers rule. Header mismatch, missing header, and
+      answer mismatch are WARNINGS only — never blocking. Do NOT
+      claim the API proves those modes.
     """
     per_mode = {}
     blocked_reasons = []
@@ -182,37 +197,156 @@ def _nerdle_number_gate(served, api_numbers):
         ev = served.get(mode) or {}
         hn = ev.get("header_number")
         want = [int(n) for n in (nums or [])]
+        proven = mode in NERDLE_API_PROVEN_MODES
         if mode == "classic":
             if not isinstance(hn, int):
                 blocked_reasons.append("classic header number not exposed")
                 per_mode[mode] = {"api": want, "served": None,
-                                  "status": "blocked: no header"}
+                                  "status": "blocked: no header",
+                                  "trust": "api-proven"}
             elif hn not in want:
                 blocked_reasons.append(
                     f"classic header #{hn} != API {want}")
                 per_mode[mode] = {"api": want, "served": hn,
-                                  "status": "blocked: mismatch"}
+                                  "status": "blocked: mismatch",
+                                  "trust": "api-proven"}
             else:
                 per_mode[mode] = {"api": want, "served": hn,
-                                  "status": "match"}
+                                  "status": "match",
+                                  "trust": "api-proven"}
             if ev.get("matches_target_official") is False:
                 blocked_reasons.append(
                     "classic served solution != API classic answer")
                 per_mode[mode]["answer"] = "mismatch"
             continue
+        if proven:
+            if not isinstance(hn, int):
+                per_mode[mode] = {"api": want, "served": None,
+                                  "status": "warning: not exposed",
+                                  "trust": "api-proven"}
+            elif hn not in want:
+                blocked_reasons.append(
+                    f"{mode} header #{hn} not in API {want}")
+                per_mode[mode] = {"api": want, "served": hn,
+                                  "status": "blocked: mismatch",
+                                  "trust": "api-proven"}
+            else:
+                per_mode[mode] = {"api": want, "served": hn,
+                                  "status": "match",
+                                  "trust": "api-proven"}
+            if ev.get("matches_target_official") is False:
+                blocked_reasons.append(
+                    f"{mode} served solution != API answer")
+                per_mode[mode]["answer"] = "mismatch"
+            continue
+        # Unproven modes: site rules; API mismatch never blocks.
         if not isinstance(hn, int):
             per_mode[mode] = {"api": want, "served": None,
-                              "status": "warning: not exposed"}
-            continue
-        if hn not in want:
-            blocked_reasons.append(f"{mode} header #{hn} not in API {want}")
+                              "status": "warning: not exposed "
+                              "(site rules; API not authoritative)",
+                              "trust": "site-rules"}
+        elif hn not in want:
             per_mode[mode] = {"api": want, "served": hn,
-                              "status": "blocked: mismatch"}
+                              "status": "warning: header mismatch "
+                              "(site rules; API not authoritative)",
+                              "trust": "site-rules"}
         else:
-            per_mode[mode] = {"api": want, "served": hn, "status": "match"}
+            per_mode[mode] = {"api": want, "served": hn,
+                              "status": "match (site rules)",
+                              "trust": "site-rules"}
+        if ev.get("matches_target_official") is False:
+            per_mode[mode]["answer"] = ("warning: mismatch "
+                                        "(site rules)")
     if blocked_reasons:
         return True, "; ".join(blocked_reasons), per_mode
-    return False, "all exposed served numbers match API numbers", per_mode
+    return False, "all proven-mode served numbers/answers match API", per_mode
+
+
+def _nerdle_header_number_from_probe(probe):
+    """Multi-strategy header-number capture (iter 14, P0).
+
+    Iter-13's SERVED_JS regex /nerdle\\.\\s*#(\\d+)/i on
+    document.body.innerText matched NOTHING on any mode page, so the
+    number gate blocked a correct solve on header_number=null. The
+    browser-side probe (SERVED_JS) now returns RAW evidence —
+    header_text, per-element #<digits> texts, data-* values, URL,
+    body text — and this pure function applies the strategies in
+    order; first plausible number wins. Returns
+    (number_or_None, strategy_name, raw_header_text). Strategies:
+    header-element, hash-element, data-attribute, url,
+    json-blob-or-body. Plausible = 1..999999. Pure (unit-tested).
+    """
+    probe = probe if isinstance(probe, dict) else {}
+    header_text = str(probe.get("header_text") or "")
+
+    def _nums(text):
+        out = []
+        for pat in (r"nerdle\s*#\s*(\d+)", r"#\s*(\d+)",
+                    r"nerdle\s*(\d+)", r"puzzle\s*#?\s*(\d+)",
+                    r"puzzleNumber\"?\s*[:=]\s*\"?(\d+)",
+                    r"puzzle_number\"?\s*[:=]\s*\"?(\d+)"):
+            for m in re.finditer(pat, str(text or ""), re.IGNORECASE):
+                try:
+                    n = int(m.group(1))
+                except (ValueError, IndexError):
+                    continue
+                if 1 <= n <= 999999 and n not in out:
+                    out.append(n)
+        return out
+
+    # 1. Header element directly (header/h1/h2, header/title classes).
+    got = _nums(header_text)
+    if got:
+        return got[0], "header-element", header_text
+    # 2. Elements containing '#<digits>'-like text.
+    for el_text in (probe.get("hash_texts") or []):
+        got = _nums(el_text)
+        if got:
+            return got[0], "hash-element", header_text
+    # 3. Puzzle number in data-* attributes.
+    for val in (probe.get("data_attrs") or []):
+        got = _nums(str(val))
+        if got:
+            return got[0], "data-attribute", header_text
+        if re.fullmatch(r"\d{1,6}", str(val or "").strip()):
+            return int(str(val).strip()), "data-attribute", header_text
+    # 4. URL (only a #number / /number path segment counts — a bare
+    # date or build id in the URL must never be mistaken for a
+    # puzzle number).
+    url = str(probe.get("url") or "")
+    m = re.search(r"[#/]puzzle[-_]?number[-_/=](\d+)", url, re.IGNORECASE) \
+        or re.search(r"[#](\d{1,6})\b", url)
+    if m:
+        return int(m.group(1)), "url", header_text
+    # 5. JSON blobs / body text (puzzleNumber fields, #<digits>).
+    # This also covers the iter-13 pattern (nerdle. #<digits>),
+    # which needs no separate step: the #\s*(\d+) pattern above
+    # matches it.
+    got = _nums(probe.get("body_text") or "")
+    if got:
+        return got[0], "json-blob-or-body", header_text
+    return None, "none", header_text
+
+
+def _nerdle_speed_matches(site_solutions, official_eqs, boards_n=2):
+    """Speed verification (iter 14, P3): BOTH speed equations must
+    match the API pair. Iter-13 counted matches=True on ANY overlap
+    (1/2 matched) — that is NOT day proof. Returns
+    (matches_bool, detail_str): matches is True only when every
+    played solution is in the official list AND at least boards_n
+    distinct solutions matched; a partial (e.g. 1/2) is recorded
+    honestly as matches=False with a 'partial' detail, and speed is
+    never counted as day proof on a partial. Pure (unit-tested).
+    """
+    site = [str(e) for e in (site_solutions or [])]
+    official = [str(e) for e in (official_eqs or [])]
+    matched = sorted({e for e in site if e in official})
+    if not site or not official:
+        return False, "no site/API solutions to compare"
+    if len(matched) >= max(1, boards_n) and all(e in official for e in site):
+        return True, f"{len(matched)}/{len(site)} equations match API (both)"
+    return False, (f"partial: {len(matched)}/{len(site)} equations match "
+                   f"API (matched={matched}); both required")
 
 
 def classic_puzzle_number(d):
@@ -502,12 +636,46 @@ SERVED_JS = """
   for (const k of keys) {
     if (/date|day|puzzle|number|seed/i.test(k)) dateish[k] = gs[k];
   }
+  // Iter-14 multi-strategy header probe (P0): iter-13's single regex
+  // /nerdle\\.\\s*#(\\d+)/i on body.innerText matched NOTHING on any
+  // mode page, so header_number was null everywhere and the gate
+  // blocked a correct solve. This probe returns RAW evidence; the
+  // Python side (_nerdle_header_number_from_probe) applies the
+  // strategies (header-element, hash-element, data-attribute, url,
+  // json-blob-or-body) — first plausible number wins — and
+  // logs which strategy matched + the raw header text.
+  const headerEls = Array.from(document.querySelectorAll(
+    'header, h1, h2, [class*=header i], [id*=header i], ' +
+    '[class*=title i], [id*=title i]'))
+    .filter(e => e && e.offsetParent !== null);
+  const header_text = headerEls
+    .map(e => (e.innerText || '').trim()).filter(Boolean).join(' | ')
+    .slice(0, 2000);
+  const hash_texts = [];
+  for (const e of Array.from(document.querySelectorAll('body *'))) {
+    if (hash_texts.length >= 20) break;
+    if (!e || e.offsetParent === null) continue;
+    const t = (e.innerText || '').trim();
+    if (t && /#\\s*\\d/.test(t) && t.length <= 200) hash_texts.push(t);
+  }
+  const data_attrs = [];
+  for (const e of Array.from(document.querySelectorAll('body *'))) {
+    if (data_attrs.length >= 20) break;
+    if (!e || !e.dataset) continue;
+    for (const k of Object.keys(e.dataset)) {
+      if (/puzzle|number|game|day/i.test(k) && e.dataset[k])
+        data_attrs.push(k + '=' + e.dataset[k]);
+    }
+  }
   return { page_local: new Date().toString(),
            page_iso: new Date().toISOString(),
            tz_offset_min: new Date().getTimezoneOffset(),
-           header_number: (() => { const m = (document.body.innerText || '')
-               .match(/nerdle\\.\\s*#(\\d+)/i);
-               return m ? parseInt(m[1], 10) : null; })(),
+           header_probe: { header_text: header_text,
+                           hash_texts: hash_texts,
+                           data_attrs: data_attrs,
+                           url: window.location.href,
+                           body_text: (document.body.innerText || '')
+                             .slice(0, 8000) },
            gameState_keys: keys, dateish: dateish };
 } catch (e) { return { error: String(e) }; } }
 """
@@ -1395,19 +1563,40 @@ async def play_mode(page, mode, script_dir, official=None):
             _served = {"error": "evaluate failed"}
         _site_only = [e for e in (site_eqs + gs_eqs) if e]
         _matches = None
+        _speed_detail = ""
         if _site_only and official_eqs:
-            _matches = any(e in official_eqs for e in _site_only)
+            if mode["id"] == "speed":
+                # Iter-14 P3: BOTH speed equations must match — an
+                # ANY-overlap matches=True (1/2) is not day proof and
+                # speed is not counted in the matches rollup on a
+                # partial (see _nerdle_speed_matches).
+                _matches, _speed_detail = _nerdle_speed_matches(
+                    _site_only, official_eqs, boards_n)
+            else:
+                _matches = any(e in official_eqs for e in _site_only)
+        # Iter-14 P0: header number from the multi-strategy probe
+        # (raw evidence -> Python strategies); log which strategy
+        # matched + the raw header text for the rerun artifact.
+        _hn, _hn_strategy, _hn_raw = _nerdle_header_number_from_probe(
+            _served.get("header_probe"))
         SERVED[mode["id"]] = {
             "page_local": _served.get("page_local"),
             "page_iso": _served.get("page_iso"),
             "tz_offset_min": _served.get("tz_offset_min"),
-            "header_number": _served.get("header_number"),
+            "header_number": _hn,
+            "header_strategy": _hn_strategy,
+            "header_text": _hn_raw,
             "gameState_dateish": _served.get("dateish"),
             "site_solutions": _site_only,
             "matches_target_official": _matches}
+        if _speed_detail:
+            SERVED[mode["id"]]["speed_match"] = _speed_detail
         _nlog(f"[{mode['id']}] served page_local={_served.get('page_local')} "
               f"gameState_dateish={_served.get('dateish')} "
-              f"site_solutions={_site_only} matches_target_official={_matches}")
+              f"site_solutions={_site_only} matches_target_official={_matches} "
+              f"header_number={_hn} header_strategy={_hn_strategy} "
+              f"header_text={_hn_raw[:160]!r} "
+              f"{_speed_detail}")
         try:
             # VIDEO_DIR is the resolved videos/nerdle dir (set by main).
             # This used to reference bare `video_dir`, undefined in this
@@ -1663,11 +1852,11 @@ async def main():
         else:
             _results2.append((_mid, _t, _e, _s))
     results = _results2
-    # Fix-loop iter 13 revised — NUMBER GATE (hard): the served puzzle
-    # number on the game site must EQUAL the API's puzzle number per
-    # mode. The iter-12 run flagged matches_target_official=false in
-    # 7/9 modes and shipped the video anyway. A block here sets
-    # all_solved=False (no final assembly, no upload, exit 1).
+    # Fix-loop iter 14 — NUMBER GATE (hard, per-mode trust): hard-check
+    # served == API ONLY for the 4 proven modes (classic/mini/midi/
+    # maxi); unproven modes are site-rules (API mismatch never blocks).
+    # A block here sets all_solved=False (no final assembly, no
+    # upload, exit 1). Gate stays FAIL-CLOSED.
     # Target date + API numbers + served numbers are ALL logged per
     # mode below, so the rerun artifact proves the gate's inputs.
     _wd_blocked, _wd_detail, _wd_per_mode = _nerdle_number_gate(

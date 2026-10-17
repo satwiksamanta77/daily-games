@@ -110,10 +110,19 @@ class TestNerdleNumberGate(unittest.TestCase):
         self.assertTrue(blocked)
 
     def test_other_mode_exposed_mismatch_blocks(self):
+        # SUPERSEDED by iter-14 per-mode trust (see
+        # test_iter14_fixes.TestNerdlePerModeTrust): micro is an
+        # UNPROVEN mode, so its header mismatch is warning-only.
+        # A PROVEN mode (mini) header mismatch still blocks.
         served = self._served(classic=1733, micro=99)
-        blocked, detail, _ = NS._nerdle_number_gate(served, self.API_1018)
-        self.assertTrue(blocked)
-        self.assertIn("micro", detail)
+        blocked, _, per = NS._nerdle_number_gate(served, self.API_1018)
+        self.assertFalse(blocked)
+        self.assertEqual(per["micro"]["trust"], "site-rules")
+        served2 = self._served(classic=1733, mini=99)
+        blocked2, detail2, _ = NS._nerdle_number_gate(
+            served2, self.API_1018)
+        self.assertTrue(blocked2)
+        self.assertIn("mini", detail2)
 
     def test_other_mode_not_exposed_is_warning_only(self):
         # The site may not expose a per-mode number to check; that is
@@ -121,7 +130,10 @@ class TestNerdleNumberGate(unittest.TestCase):
         served = self._served(classic=1733)
         blocked, _, per = NS._nerdle_number_gate(served, self.API_1018)
         self.assertFalse(blocked)
-        self.assertEqual(per["micro"]["status"], "warning: not exposed")
+        # Iter-14 wording carries the site-rules trust reason.
+        self.assertEqual(per["micro"]["status"],
+                         "warning: not exposed "
+                         "(site rules; API not authoritative)")
 
     def test_other_mode_answer_mismatch_does_not_block(self):
         # API answers disagree with the site for micro/minibi/quad
