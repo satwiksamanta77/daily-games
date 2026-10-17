@@ -429,24 +429,34 @@ def generate_mode_card(out_path, game, mode_name, subtitle=""):
 
 
 def generate_facts(out_path, game, date_str, answer, steps,
-                 kind=None, palette=None, scoring=True):
+                 kind=None, palette=None, scoring=True,
+                 guesses_played=None, final_answers=1):
     """Solve breakdown: stat cards instead of a wall of text.
 
     scoring=False for games with NO per-letter feedback (Betweenle,
     Framed, Semantle, Contexto): no "green rows" stat and no
     pattern-derived clue lines — only true facts (submitted guesses,
     guess count, final answer).
+
+    guesses_played overrides the step count when the steps are NOT
+    the submitted guesses (Framed: one step per mode answer, but
+    every mode submits a probe + an answer — 8 submitted guesses,
+    4 mode answers; the old card said "4 guesses played / 1 final
+    answer", iter-13 breakdown fix). final_answers is the number of
+    final answers the card summarizes (1 for single-answer games).
     """
     img, d, f = _base(f"{game} breakdown", date_str)
     d.text((70, 165), "SOLVE BREAKDOWN", fill=TEXT, font=f["t"])
     rows = list(steps or [])
-    ng = len(rows) or 1
+    ng = int(guesses_played) if guesses_played else (len(rows) or 1)
     stats = [(str(ng), "guesses played")]
     if scoring:
         stats.append((str(sum(1 for s in rows
                          if "G" in str(s.get("pattern", "")).upper())),
                  "green rows"))
-    stats.append(("1", "final answer"))
+    stats.append((str(int(final_answers)),
+                  "final answer" if int(final_answers) == 1
+                  else "final answers"))
     x = 70
     for val, lab in stats:
         box = [x, 300, x + 540, 470]
@@ -479,7 +489,7 @@ def generate_facts(out_path, game, date_str, answer, steps,
         d.text((860, y + 30), clue, fill=MUTED, font=cf)
         y += 104
     img.convert("RGB").save(out_path, "PNG", optimize=True)
-    return out_path
+    return stats
 
 
 def generate_teaser(out_path, game, date_str, slug):

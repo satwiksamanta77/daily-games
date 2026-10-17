@@ -213,6 +213,12 @@ class TestRestoreSeed(unittest.TestCase):
         R._REJECTED.update(self._rejected)
 
     def test_seed_from_ledgers_and_stats_panel(self):
+        # Iter 13 SUPERSEDES the old expectation: the stats panel must
+        # NEVER seed a submitted word — it carries the 'WORD'
+        # placeholder during play, and iter-12's seeding produced the
+        # WORD phantom. Ledger words survive; the panel word (DINER
+        # here) is ignored; the GUESS counter (3 = 2 submitted before
+        # this run) only logs the 1 unknown submitted word.
         R._PLAYED["betweenle"] = ["SLATE"]
         # Legacy iter-11 suffix must be cleaned to the plain word.
         R._REJECTED["betweenle"] = ["VIPER (not submitted)"]
@@ -220,9 +226,9 @@ class TestRestoreSeed(unittest.TestCase):
                                     "stats_word": "DINER"})
         used, submitted, rejected = R._betweenle_seed_restored_state(
             page, "betweenle")
-        self.assertEqual(submitted, ["SLATE", "DINER"])
+        self.assertEqual(submitted, ["SLATE"])
         self.assertEqual(rejected, ["VIPER"])
-        self.assertEqual(used, {"SLATE", "DINER", "VIPER"})
+        self.assertEqual(used, {"SLATE", "VIPER"})
         self.assertEqual(R._REJECTED["betweenle"], ["VIPER"])
 
     def test_seed_empty_on_fresh_board(self):

@@ -1699,7 +1699,12 @@ def _betweenle_submitted(page, before_n, word):
     c2 = _betweenle_counters(page)
     if (c2.get("guess_n") or 0) > (before_n or 0):
         return True, c2
-    if word and word.lower() in (c2.get("stats_word") or "").lower():
+    # Stats-panel clause: only a REAL panel word counts. During play
+    # the panel carries the 'WORD' placeholder — iter-12 treated that
+    # as a submitted guess (the WORD phantom).
+    _stats = str(c2.get("stats_word") or "").strip()
+    if (_stats and _stats.upper() != "WORD" and word
+            and word.lower() in _stats.lower()):
         return True, c2
     if (c2.get("guess_n") or 0) > (c1.get("guess_n") or 0):
         return True, c2
@@ -2881,20 +2886,24 @@ def solve_framed_modes(page, answers):
     for mid, mname, murl in FRAMED_MODES:
         ans = answers.get(mid)
         print(f"[framed] --- {mname} ---")
-        # Recording-relative placeholder; overwritten with the
-        # card-anchored value (after board ready) before play.
-        mode_start = _time.time() - _REC_T0.get("framed", started)
+        # Recording-relative MODE-SWITCH time: when the bot starts
+        # navigating to this mode. This is the segment anchor
+        # (t_switch, iter 13 C2) — it is NOT overwritten below.
+        # `mode_start` (the card-anchored, board-ready time) is set
+        # separately after the board is ready.
+        mode_switch = _time.time() - _REC_T0.get("framed", started)
+        mode_start = mode_switch
         _mode_retry = 0
         if not ans:
             per_mode.append({"mode": mid, "solved": False, "why": "no answer",
-                             "t_start": mode_start})
+                             "t_start": mode_start, "t_switch": mode_switch})
             continue
         try:
             ready = _framed_open_mode(page, murl)
         except Exception as e:
             per_mode.append({"mode": mid, "answer": ans, "solved": False,
                              "evidence": f"nav failed: {str(e)[:90]}",
-                             "t_start": mode_start})
+                             "t_start": mode_start, "t_switch": mode_switch})
             continue
         # Framed keeps one shared per-mode guess counter in the browser, so the
         # next mode inherits whatever the previous one spent (Daily's 6 arrived
@@ -2982,7 +2991,8 @@ def solve_framed_modes(page, answers):
                     per_mode.append({"mode": mid, "answer": ans,
                                      "solved": False, "deferred": True,
                                      "evidence": _ev,
-                                     "t_start": mode_start})
+                                     "t_start": mode_start,
+                                     "t_switch": mode_switch})
                     print(f"[framed] {mname}: board never became "
                           "playable (poster DEFERRED: rewarded ad "
                           "never loads in CI)")
@@ -2995,7 +3005,8 @@ def solve_framed_modes(page, answers):
                 _ev = "mode menu never opened into a game board"
             per_mode.append({"mode": mid, "answer": ans, "solved": False,
                              "evidence": _ev,
-                             "t_start": mode_start})
+                             "t_start": mode_start,
+                             "t_switch": mode_switch})
             print(f"[framed] {mname}: board never became playable")
             continue
         # CARD-ANCHORED t_start (fix-loop iter 11): the assembly
@@ -3038,9 +3049,12 @@ def solve_framed_modes(page, answers):
         # "Avatar"), which read as a two-try guess rather than a search.
         guesses, _steps = _framed_probe_path(ans, max_guesses=2)
         ok, ev = False, ""
+        n_sub = 0  # submitted guesses this mode (probes + answers)
         for n, t in enumerate(guesses):
             last = (n == len(guesses) - 1)
             pok, pev = _framed_submit(page, t)
+            if pok:
+                n_sub += 1
             if not pok and "ad-gated" in str(pev):
                 _dbg("framed", f"{mid}: input ad-gated; trying reward unlock")
                 try:
@@ -3090,7 +3104,9 @@ def solve_framed_modes(page, answers):
                 if _framed_board_ready(page):
                     _retry_gs = _framed_probe_path(ans, max_guesses=2)[0]
                     for _n2, _t2 in enumerate(_retry_gs):
-                        _pev2 = _framed_submit(page, _t2)
+                        _pok2, _pev2 = _framed_submit(page, _t2)
+                        if _pok2:
+                            n_sub += 1
                         _dbg("framed", f"retry guess {_n2 + 1}/{len(_retry_gs)} "
                                       f"{mid} {_t2!r} -> {_pev2}")
                     page.wait_for_timeout(6000)
@@ -3106,7 +3122,8 @@ def solve_framed_modes(page, answers):
             except Exception as _re:
                 _dbg("framed", f"{mid}: retry failed: {str(_re)[:80]}")
         per_mode.append({"mode": mid, "answer": ans, "solved": bool(ok),
-                         "evidence": ev, "t_start": mode_start})
+                         "evidence": ev, "t_start": mode_start,
+                         "t_switch": mode_switch, "guesses": n_sub})
         print(f"[framed] {mname}: FINAL solved={ok}")
         if ok:
             solved_modes.append(mid)
@@ -4157,18 +4174,65 @@ def _betweenle_rejection_banner(page):
         return ""
 
 
+def _betweenle_banner_semantic(banner_text):
+    """Pure: semantic content of a rejection-banner excerpt.
+
+    Returns (bounds_tuples, has_invalid) where bounds_tuples is a
+    frozenset of (direction, bound) from "placed in dictionary
+    before/after <BOUND>", and has_invalid is True when an
+    invalid-word marker is present. Excerpt comparison (iter-12) was
+    fragile to surrounding-text changes; the (bound, direction) tuple
+    is what the game actually means. The banner excerpt is already
+    lowercased by _betweenle_extract_banner.
+    """
+    import re as _re
+    t = str(banner_text or "").lower()
+    tuples = set()
+    for m in _re.finditer(r"placed in dictionary (before|after) ([a-z]+)",
+                          t):
+        tuples.add((m.group(1), m.group(2).upper()))
+    invalid = any(s in t for s in (
+        "not a word", "not valid", "invalid word", "not in the word list",
+        "unknown word", "word not in list"))
+    return frozenset(tuples), invalid
+
+
 def _betweenle_new_rejection(before_banner, after_banner):
     """Pure: True only when the AFTER snapshot carries rejection content
     the BEFORE snapshot did not. An unchanged (standing) banner is NOT
     a fresh rejection — iter-11 classified BIKER rejected from a stale
-    standing banner alone, then re-picked it forever."""
-    if not after_banner:
+    standing banner alone, then re-picked it forever. Compared on
+    SEMANTIC tuples (iter 13), not excerpts: surrounding-text changes
+    can no longer fake a fresh rejection."""
+    after_t, after_inv = _betweenle_banner_semantic(after_banner)
+    if not after_t and not after_inv:
         return False
-    if not before_banner:
+    before_t, before_inv = _betweenle_banner_semantic(before_banner)
+    if after_t - before_t:
         return True
-    before_parts = {p.strip() for p in str(before_banner).split("|")}
-    return any(p.strip() and p.strip() not in before_parts
-               for p in str(after_banner).split("|"))
+    return bool(after_inv and not before_inv)
+
+
+def _betweenle_banner_consistent(new_tuples, word):
+    """Pure: True when a fresh bounds banner could be ABOUT this word.
+
+    A (before, B) banner means the entered word violated "must be
+    placed before B" — i.e. the entered word is >= B. An (after, B)
+    banner means it violated "must be placed after B" — i.e. the
+    entered word is <= B. Iter-12's killer: the banner belonged to
+    STALE VIPER ("before DINER") while the bot believed it had typed
+    BIKER (BIKER < DINER, cannot violate "before DINER") — the
+    rejection was misattributed to a word that was never typed.
+    Invalid-word banners carry no bound, so they cannot be attributed
+    this way (treated as consistent — see classifier note).
+    """
+    w = str(word or "").upper()
+    for direction, bound in (new_tuples or ()):
+        if direction == "before" and w < bound:
+            return False
+        if direction == "after" and w > bound:
+            return False
+    return True
 
 
 def _betweenle_classify_submit(before_banner, after_banner,
@@ -4176,19 +4240,30 @@ def _betweenle_classify_submit(before_banner, after_banner,
     """Pure submit classifier (banner BEFORE/AFTER + game counters).
 
     Returns "submitted" when the game's own counters confirm this word
-    (GUESS counter advanced, or the stats panel names this word — the
-    winning guess never advances the counter, ANALYSIS8 §1);
-    "rejected" when a NEW rejection banner appeared for this guess;
+    (GUESS counter advanced — the stats-panel clause only counts when
+    the panel shows a REAL word, never the 'WORD' placeholder the
+    panel carries during play, which iter-12 mistook for a submitted
+    guess); "rejected" when a NEW rejection banner appeared AND its
+    bounds content is consistent with this word; "buffer_failure"
+    when a new bounds banner appeared but is INCONSISTENT with this
+    word — the banner belongs to a stale buffer word, not this guess,
+    so this word was never judged (never mark it rejected);
     "no_change" otherwise (no counter move, no fresh banner: the Enter
     was never delivered — focus/enter-delivery failure, NOT a refusal).
     A standing banner alone can never yield "rejected".
     """
     after = after_counters or {}
+    _stats = str(after.get("stats_word") or "").strip()
+    _stats_real = _stats and _stats.upper() != "WORD"
     if ((after.get("guess_n") or 0) > (before_n or 0) or
-            (word and word.lower() in
-             (after.get("stats_word") or "").lower())):
+            (_stats_real and word and word.lower() in _stats.lower())):
         return "submitted"
     if _betweenle_new_rejection(before_banner, after_banner):
+        _after_t, _ = _betweenle_banner_semantic(after_banner)
+        _before_t, _ = _betweenle_banner_semantic(before_banner)
+        _new_t = _after_t - _before_t
+        if _new_t and not _betweenle_banner_consistent(_new_t, word):
+            return "buffer_failure"
         return "rejected"
     return "no_change"
 
@@ -4315,26 +4390,74 @@ def _betweenle_seed_restored_state(page, gid):
     except Exception:
         cnt = {}
     guess_n = cnt.get("guess_n") or 0
-    stats_word = str(cnt.get("stats_word") or "").strip().upper()
-    if guess_n > 0 and stats_word and _re.fullmatch(r"[A-Z]+", stats_word) \
-            and stats_word not in submitted and stats_word not in rejected:
-        # The game's own stats panel names a submitted word the ledger
-        # does not (e.g. a word submitted before the reboot): the
-        # panel is the same evidence _betweenle_submitted trusts.
-        submitted.append(stats_word)
-        _dbg(gid, f"restore seed: stats panel adds submitted {stats_word!r} "
-                  f"(GUESS {guess_n})")
-    if guess_n > len(submitted):
-        _dbg(gid, f"restore seed: live GUESS counter={guess_n} but ledger "
-                  f"names {len(submitted)} submitted; "
-                  f"{guess_n - len(submitted)} submitted word(s) unknown — "
-                  f"not inventing them; remaining picks stay bounds-bound")
+    # GUESS n/14 is the CURRENT-guess number (1-based index of the
+    # guess being typed), NOT a submitted count: a fresh board reads
+    # 1/14 with zero submitted. Submitted-before-this-run = n - 1.
+    # The stats panel carries the 'WORD' placeholder during play —
+    # iter-12 seeded it as a submitted word (the WORD phantom:
+    # 1/14 -> 3/14 after 2 real submits proved WORD was never
+    # submitted). NEVER seed a submitted word from the stats panel.
+    _submitted_before = max(0, guess_n - 1)
+    if _submitted_before > len(submitted):
+        _dbg(gid, f"restore seed: live GUESS counter={guess_n} means "
+                  f"{_submitted_before} submitted before this run but "
+                  f"ledger names {len(submitted)}; "
+                  f"{_submitted_before - len(submitted)} submitted word(s) "
+                  f"unknown — not inventing them; remaining picks stay "
+                  f"bounds-bound")
     _PLAYED[gid] = list(submitted)
     _REJECTED[gid] = list(rejected)
     used = set(submitted) | set(rejected)
     _dbg(gid, f"restore seed: used={sorted(used)} submitted={submitted} "
               f"rejected={rejected}")
     return used, submitted, rejected
+
+
+def _betweenle_clear_buffer(page, gid):
+    """Clear any stale typing-row word (iter 13).
+
+    After a rejection the game does NOT clear the typing buffer, so
+    the next word's keystrokes land in a full buffer and are dropped
+    (iter-12: VIPER stayed in the row while the bot "played" BIKER
+    then BRANS; each Enter re-submitted stale VIPER). The game's own
+    key handler clears on Backspace (see _type_betweenle_via_keys),
+    so send Backspaces unconditionally before every word — no
+    buffer-content read exists for this canvas app, so the clear is
+    unconditional, never conditional on a read."""
+    try:
+        for _ in range(10):
+            page.keyboard.press("Backspace")
+            page.wait_for_timeout(35)
+        _dbg(gid, "buffer cleared (10 backspaces)")
+    except Exception as _e:
+        _dbg(gid, f"buffer clear failed: {str(_e)[:60]}")
+
+
+def _betweenle_attempt_submit(page, gid, g, cnt_before):
+    """Type one word + Enter + classify. Returns (verdict, counters).
+
+    Verdicts: submitted / rejected / buffer_failure / no_change (see
+    _betweenle_classify_submit). Letters are typed exactly once here;
+    a buffer_failure retry is the CALLER's decision (clear + call again).
+    """
+    _type_like_a_person(page, str(g), base_delay=170)
+    page.wait_for_timeout(300)
+    # Banner BEFORE submit (iter-12 (b)): a rejection banner already
+    # showing here belongs to an EARLIER guess. Only a banner that is
+    # NEW after this submit may classify this word rejected.
+    _banner_before = _betweenle_rejection_banner(page)
+    page.keyboard.press("Enter")
+    _settle(page, base=3000)
+    _cnt1 = _betweenle_counters(page) or {}
+    _banner_after = _betweenle_rejection_banner(page)
+    _verdict = _betweenle_classify_submit(
+        _banner_before, _banner_after, cnt_before, _cnt1, g)
+    _dbg(gid, f"submit check {g!r}: counters GUESS "
+              f"{_cnt1.get('guess_n')}/{_cnt1.get('guess_total')} "
+              f"(was {cnt_before}) stats={_cnt1.get('stats_word')!r} "
+              f"banner new={_betweenle_new_rejection(_banner_before, _banner_after)} "
+              f"verdict={_verdict}")
+    return _verdict, _cnt1
 
 
 def _s_betweenle(page, ans, gid):
@@ -4439,12 +4562,16 @@ def _s_betweenle(page, ans, gid):
         except Exception:
             pass
     _rows_before = 0
+    # Words that failed on BUFFER grounds (stale buffer, never judged
+    # by the game) are excluded from picks this run but must NEVER
+    # poison the rejected set — a never-judged word is not rejected.
+    _buffer_failed_bl = set()
     for gi, g in enumerate(gs):
         # Pick excludes used ∪ rejected (iter-12 (c)): a word already
         # attempted or rejected is never re-picked — iter-11 excluded
         # only `used`, so BIKER was re-picked after its stale-banner
         # misclassification and the loop never reached a new word.
-        _excluded_bl = set(_used_bl) | set(_rejected_bl)
+        _excluded_bl = set(_used_bl) | set(_rejected_bl) | set(_buffer_failed_bl)
         if str(g).upper() in _excluded_bl:
             _dbg(gid, f"skipping {g!r}: already used/rejected "
                       f"(used ∪ rejected)")
@@ -4494,27 +4621,44 @@ def _s_betweenle(page, ans, gid):
         page.mouse.click(960, 500)     # the orange typing row on the canvas
         QP.ev_push(960, 500, "click")
         page.wait_for_timeout(300)
-        _type_like_a_person(page, str(g), base_delay=170)
-        page.wait_for_timeout(300)
-        # Banner BEFORE submit (iter-12 (b)): a rejection banner already
-        # showing here belongs to an EARLIER guess. Only a banner that is
-        # NEW after this submit may classify this word rejected.
-        _banner_before = _betweenle_rejection_banner(page)
-        page.keyboard.press("Enter")
-        _settle(page, base=3000)
-        try:
-            _st = _betweenle_state(page)
-        except Exception:
-            _st = {}
-        _cnt1 = _betweenle_counters(page) or {}
-        _banner_after = _betweenle_rejection_banner(page)
-        _verdict = _betweenle_classify_submit(
-            _banner_before, _banner_after, _cnt_before, _cnt1, g)
-        _dbg(gid, f"submit check {g!r}: counters GUESS "
-                  f"{_cnt1.get('guess_n')}/{_cnt1.get('guess_total')} "
-                  f"(was {_cnt_before}) stats={_cnt1.get('stats_word')!r} "
-                  f"banner new={_betweenle_new_rejection(_banner_before, _banner_after)} "
-                  f"verdict={_verdict}")
+        # Clear any stale buffer word BEFORE typing (iter 13): after a
+        # rejection the game leaves the word in the row; typing into a
+        # full buffer drops the keystrokes and Enter re-submits the
+        # stale word (iter-12 VIPER).
+        _betweenle_clear_buffer(page, gid)
+        _verdict, _cnt1 = _betweenle_attempt_submit(
+            page, gid, g, _cnt_before)
+        if _verdict == "buffer_failure":
+            # The fresh banner belongs to a STALE buffer word, not this
+            # guess — this guess was never judged. Clear and type it
+            # once more; only if the banner is STILL inconsistent do we
+            # give up on this word (as buffer-failed, NOT rejected —
+            # a never-judged word must never poison the rejected set,
+            # or the answer can be excluded forever as in iter-12).
+            _dbg(gid, f"{g!r} buffer_failure: fresh banner inconsistent "
+                      f"with this word — clearing and retyping once")
+            _betweenle_clear_buffer(page, gid)
+            _verdict, _cnt1 = _betweenle_attempt_submit(
+                page, gid, g, _cnt_before)
+        if _verdict == "buffer_failure":
+            _dbg(gid, f"{g!r} still buffer_failure after clear+retype; "
+                      f"skipping as buffer-failed (NOT rejected)")
+            _buffer_failed_bl.add(str(g).upper())
+            continue
+        if _verdict == "no_change":
+            # No counter move + no FRESH banner: before assuming the
+            # Enter was never delivered, check whether this Enter WON
+            # the game — the winning guess does not advance the
+            # counter (ANALYSIS8 §1), so a bare no_change would mark
+            # the ANSWER rejected and lose it from the ledger.
+            try:
+                _won_now, _won_ev = _strict_win(page, ans)
+            except Exception:
+                _won_now, _won_ev = False, ""
+            if _won_now:
+                _dbg(gid, f"{g!r} no counter move but win signal present "
+                          f"({_won_ev}) — this Enter won; counting submitted")
+                _verdict = "submitted"
         if _verdict == "submitted":
             _submitted_bl.append(str(g).upper())
             _PLAYED[gid] = list(_submitted_bl)
@@ -5251,10 +5395,18 @@ def _s_worldle_win_check(page, mode, day, day_string, extra=None):
         ok1 = any((g or {}).get("question") == 1
                   and (g or {}).get("answer") == (g or {}).get("correct")
                   for g in gs)
-        return bool(ok0 and ok1), \
+        # Game-skipped comparison (iter-13 verdict fix): when the game
+        # itself declines the comparison round (not enough neighbours),
+        # there is NO q1 entry to satisfy — the round counts as solved
+        # if the number is correct. The old check demanded ok1 even
+        # when the game had skipped the comparison (iter-12: both tabs
+        # both tabs checked, win_check False, GDP undercounted by 1).
+        _sk, _skdet = _s_worldle_comparison_skipped(page)
+        win = bool(ok0 and (ok1 or _sk))
+        return win, \
             [f"q{q}={'ok' if (ok0 if q == 0 else ok1) else 'X'}"
              for q in (0, 1)], \
-            f"number={ok0} comparison={ok1}; completed={done}"
+            f"number={ok0} comparison={ok1} game_skipped={_sk} ({_skdet}); completed={done}"
     if mode == "populationCurrency":
         gs = _s_worldle_day_guesses(page, "currency-guesses", day_string)
         ok1 = any((g or {}).get("question") == 1
@@ -6194,6 +6346,13 @@ def _s_worldle_live_round_modes(page, gid):
           return false;
         }""", labels)
         if not opened:
+            # Fix-loop iter 13 (G4 proof): every None return logs
+            # EXPLICITLY. Iter-12 had ZERO 'live rounds' log lines
+            # because the reader returned None on silent paths and the
+            # cross-check was skipped without a trace.
+            _dbg(gid, "worldle live rounds reader: dropdown toggle NOT "
+                      "opened (no mode-label toggle matched) -> None "
+                      "(unreadable)")
             return None
         page.wait_for_timeout(700)
         # RAW, OPEN-DROPDOWN-ONLY: every visible leaf entry inside an
@@ -6243,11 +6402,16 @@ def _s_worldle_live_round_modes(page, gid):
             pass
         if isinstance(raw_ev, dict):
             if not raw_ev.get("container"):
+                _dbg(gid, "worldle live rounds reader: no open dropdown "
+                          "container found (leaves < 3) -> None "
+                          "(unreadable)")
                 return None
             raw = list(raw_ev.get("entries") or [])
         elif isinstance(raw_ev, list):
             raw = list(raw_ev)
         else:
+            _dbg(gid, "worldle live rounds reader: unexpected return "
+                      f"type {type(raw_ev).__name__} -> None (unreadable)")
             return None
         inv = {_s_worldle_label_key(v): k
                for k, v in _WORLDLE_MODE_LABELS.items()}
@@ -6797,16 +6961,38 @@ def _s_worldle_play_capital(page, gid, day):
                     const a = r.width * r.height;
                     if (a > bestArea) { bestArea = a; best = el; }
                   }
-                  for (const t of ['mousedown', 'mouseup', 'click'])
-                    best.dispatchEvent(new MouseEvent(t, {bubbles: true,
-                      cancelable: true, clientX: pt.x, clientY: pt.y,
-                      view: window}));
+                  // Pointer events first (iter 13): a web-component
+                  // map may listen for pointerdown/pointerup only — a
+                  // JS-dispatched mouse event never generates pointer
+                  // events, so the old mousedown/mouseup/click-only
+                  // dispatch could reach nothing.
+                  for (const t of ['pointerdown', 'mousedown', 'pointerup',
+                                    'mouseup', 'click']) {
+                    const Ctor = t.startsWith('pointer') ? PointerEvent : MouseEvent;
+                    best.dispatchEvent(new Ctor(t, {bubbles: true,
+                      cancelable: true, composed: true,
+                      clientX: pt.x, clientY: pt.y, view: window}));
+                  }
                   return true;
                 }""", {"x": float(px), "y": float(py)}))
             except Exception:
                 _dispatched = False
             _dbg(gid, "worldle capital pin: fallback dispatch="
                       f"{_dispatched}")
+            _settle(page, base=1200)
+            after = _worldle_pin_probe(page, px, py)
+            after_markers = int(after.get("markers") or 0)
+            _landed = bool(after.get("inMap")) or _marker_appeared(
+                before, after)
+        if not _landed and not _marker_appeared(before, after):
+            # Second fallback (iter 13): the handler may live inside
+            # the map component's shadow tree, where a light-DOM
+            # dispatch never reaches it. Dispatch on the deepest
+            # element at the point, piercing shadow roots.
+            _sh_ok, _sh_det = _s_worldle_dispatch_shadow_click(
+                page, px, py)
+            _dbg(gid, "worldle capital pin: shadow dispatch="
+                      f"{_sh_ok} ({_sh_det})")
             _settle(page, base=1200)
             after = _worldle_pin_probe(page, px, py)
             after_markers = int(after.get("markers") or 0)
@@ -6869,6 +7055,46 @@ def _s_worldle_play_capital(page, gid, day):
                 f"delta (markers {before_markers}->{after_markers}); " \
                 f"name played; probe-v2={_after2}"
 
+
+
+def _s_worldle_dispatch_shadow_click(page, px, py):
+    """Dispatch a full pointer+mouse click sequence on the DEEPEST
+    element at (px, py), piercing shadow roots (fix-loop iter 13).
+
+    The capital map is a teuteuf-geo-map web component: its click
+    handler may live on an element INSIDE the shadow tree. A
+    light-DOM dispatch on the host never reaches a shadow-internal
+    listener (the event targets the host, not the inner element),
+    and a real mouse click can miss when the picked coordinates hit
+    an overlay. This dispatches pointerdown/mousedown/pointerup/
+    mouseup/click (composed) on the deepest element at the point —
+    the element the game actually listens on. Returns (bool, detail).
+    Still only believed if the marker/store arbitration lands."""
+    try:
+        res = page.evaluate("""(pt) => {
+          let el = document.elementFromPoint(pt.x, pt.y);
+          let depth = 0;
+          while (el && el.shadowRoot && depth < 5) {
+            const inner = el.shadowRoot.elementFromPoint(pt.x, pt.y);
+            if (!inner || inner === el) break;
+            el = inner; depth++;
+          }
+          if (!el) return {dispatched: false, tag: null, depth: depth};
+          const init = {bubbles: true, cancelable: true, composed: true,
+                        clientX: pt.x, clientY: pt.y, view: window,
+                        button: 0, buttons: 1};
+          for (const ty of ['pointerdown', 'mousedown', 'pointerup',
+                            'mouseup', 'click']) {
+            const Ctor = ty.startsWith('pointer') ? PointerEvent : MouseEvent;
+            el.dispatchEvent(new Ctor(ty, init));
+          }
+          return {dispatched: true, tag: el.tagName,
+                  cls: String(el.className || '').slice(0, 80),
+                  depth: depth};
+        }""", {"x": float(px), "y": float(py)}) or {}
+    except Exception as e:
+        return False, f"exception: {str(e)[:80]}"
+    return bool(res.get("dispatched")), str(res)
 
 
 def _s_worldle_play_orientation(page, gid, day):
@@ -7496,8 +7722,23 @@ def _s_worldle_play_trivia(page, gid, day):
                                    or "incorrect" in _qlow)
                 _mapped = []
                 for _o in opts:
-                    _k = _s_worldle_bool_key_for_statement(
-                        _o, boolean_facts)
+                    # Exact DB-text match FIRST (iter 13): the DB
+                    # boolean texts ARE the game's statements, so a
+                    # normalized match is certain — the token
+                    # heuristic below (0.6 threshold + margin) can
+                    # NO-MATCH a statement whose wording the heuristic
+                    # scores below threshold (iter-12: 0 want_true
+                    # candidates). Fall back to the heuristic only
+                    # when no DB text matches.
+                    _k = None
+                    for _kk, _txt in (boolean_texts or {}).items():
+                        if _txt and _s_worldle_trivia_match(
+                                _txt, _o, extra_stop=_strip):
+                            _k = _kk
+                            break
+                    if _k is None:
+                        _k = _s_worldle_bool_key_for_statement(
+                            _o, boolean_facts)
                     if _k is not None:
                         _mapped.append((_o, _k, bool(boolean_facts[_k])))
                 _cands = [m for m in _mapped if m[2] == _want_true]
@@ -7530,7 +7771,25 @@ def _s_worldle_play_trivia(page, gid, day):
                     skipped_norm.add(qn)
                     handled_new = True
                     continue
-                if _mapped:
+                if not _mapped:
+                    # Iter 13: this fall-through used to be SILENT
+                    # (straight to NO-MATCH) — the iter-12 "0 want_true
+                    # candidates" skip left no evidence of WHY no
+                    # option mapped. Log the options + keys tried.
+                    _dbg(gid, "worldle trivia boolean-choice: NO option "
+                              f"mapped to any boolean key (options={opts}; "
+                              f"keys={sorted(boolean_facts)}); NOT clicked")
+                elif not _cands:
+                    # Mapped, but every mapped statement has the
+                    # OPPOSITE truth value to the question polarity —
+                    # not "ambiguous": the DB truth values disagree
+                    # with the displayed set (or the polarity read is
+                    # inverted). Never click a known-wrong statement.
+                    _dbg(gid, "worldle trivia boolean-choice: 0 candidates "
+                              f"want_true={_want_true} mapped={_mapped}; "
+                              "all mapped statements have the opposite "
+                              "truth value; NOT clicked")
+                else:
                     _dbg(gid, "worldle trivia boolean-choice: ambiguous "
                               f"({len(_cands)} candidates want_true="
                               f"{_want_true} mapped={_mapped}); NOT clicked")
@@ -7758,6 +8017,31 @@ def _worldle_phrase_pick(phrase_json, prompt, lang_codes, lang_names,
     return None
 
 
+def _worldle_phrase_slot_contains(page, phrase):
+    """True when any drop-slot element's text contains `phrase`
+    (punctuation-insensitive). Used to verify a click actually placed
+    a phrase chip (iter 13): clicks do not place phrase chips, so an
+    unplaced click must stop the path, not be followed by a second
+    click + a submit of a no-op."""
+    try:
+        return bool(page.evaluate("""(phrase) => {
+          const vis = e => e && e.offsetParent !== null;
+          const norm = s => (s||'').toLowerCase()
+            .replace(/[.,!?;:'"«»“”‘’()\-]/g, '')
+            .replace(/\s+/g,' ').trim();
+          const sel = '[data-slot], [class*=slot i], ' +
+            '[class*=drop-zone i], [class*=dropzone i], ' +
+            '[class*=drop-target i], [class*=drop--target i], ' +
+            '[class*=position i], [class*=placeholder i]';
+          const slots = Array.from(document.querySelectorAll(sel))
+            .filter(vis)
+            .filter(e => !e.closest('nav, header, footer'));
+          return slots.some(s => norm(s.innerText).includes(norm(phrase)));
+        }""", phrase))
+    except Exception:
+        return False
+
+
 def _worldle_phrase_drag(page, gid, picked, codes, names, prompts, ds):
     """Drag-and-drop for the Worldle Q1 PHRASE round (fix-loop iter 11).
 
@@ -7855,9 +8139,19 @@ def _worldle_phrase_drag(page, gid, picked, codes, names, prompts, ds):
     _chips = _probe.get("chips") or []
     _slots = _probe.get("slots") or []
     _dbg(gid, f"worldle phrase probe: chips={_chips} slots={_slots}")
-    if not any(c.get("draggable") and c.get("x") is not None
-               for c in _chips):
-        return ("click-fallback", "no draggable phrase chips found")
+    # Iter 13: a chip need NOT carry draggable=true to be dragged —
+    # the widget may implement drag via pointer events on a plain
+    # element (iter-12: chips were found by text, none was marked
+    # draggable, so the drag path was skipped and the click path
+    # clicked into slots that stayed empty). Text-found chips are
+    # drag candidates; attempts 1-2 use real mouse events, which
+    # work for pointer-based drag too. Only when NO chip is found
+    # by text does the click fallback run.
+    if not any(c.get("x") is not None for c in _chips):
+        return ("click-fallback", "no phrase chips found by text")
+    _dbg(gid, "worldle phrase chips: draggable-marked="
+              f"{sum(1 for c in _chips if c.get('draggable'))}/"
+              f"{len(_chips)} (text-found chips are dragged anyway)")
     if not _slots:
         return ("partial", "draggable phrase chips found but no drop "
                 f"slots in DOM; probe={_probe}")
@@ -8279,6 +8573,22 @@ def _s_worldle_play_language(page, gid, day):
                     _all_ok = False
                     break
                 _settle(page, base=800)
+                # Verify placement after EACH click (iter 13): in
+                # iter-12 both options were "clicked" but the slots
+                # stayed empty and the store never changed — clicks
+                # do not place phrase chips. A click that places
+                # nothing stops the path immediately (no second
+                # click, no submit of a no-op), with the slot probe
+                # as evidence.
+                _placed = _worldle_phrase_slot_contains(page, _want)
+                _dbg(gid, "worldle language Q1 phrase click-place "
+                          f"{_want!r} placed={_placed}")
+                if not _placed:
+                    return "partial", list(names), (
+                        f"Q0 language-pick played; Q1 phrase option "
+                        f"{_want!r} clicked but the slot stayed empty "
+                        "(click does not place phrase chips); drag "
+                        "path found no chips by text; NOT submitted")
             if _drag:
                 return "partial", list(names), \
                     "Q0 language-pick played; Q1 phrase translations " \
@@ -8459,6 +8769,12 @@ def _s_worldle_play_gdp(page, gid, day):
         ("highest", "per capita gdp"), lookup, "gdpPerCapita", "gdp")
     if cst == "attempted":
         return "attempted", [str(number), cpick], cdet
+    if cst == "skipped":
+        # The GAME declined the comparison round (not enough
+        # neighbours) — the comparison is N/A; the number alone
+        # decides. Do NOT fall through to clicking a visible option.
+        _dbg(gid, f"worldle gdp comparison game-skipped: {cdet}")
+        return "attempted", [str(number)], cdet
     _dbg(gid, "worldle gdp comparison deliberate branch "
               f"{cst}: {cdet}; falling back to visible-options path")
 
@@ -8519,6 +8835,53 @@ def _s_worldle_play_gdp(page, gid, day):
         "GDP number + comparison (day-prediction fallback) played"
 
 
+def _s_worldle_population_bucket(page, pop):
+    """Click the population bucket button containing `pop`.
+
+    The Population & Currency q0 widget is BUCKET BUTTONS, not a
+    numeric input ('< 3 million', '3 - 5 million', '5 - 8 million',
+    '8+ million'). The old code searched for a numeric input that
+    does not exist and failed every round (iter-12). Parse each
+    button's bounds (million = 1_000_000) and click the bucket with
+    low <= pop < high ('< X' -> high=X; 'X+' -> low=X, no high).
+    Returns the clicked button text or None."""
+    try:
+        hit = page.evaluate("""(num) => {
+          const vis = e => e && e.offsetParent !== null;
+          const parse = s => {
+            const m = (s||'').replace(/[,\\s]/g,'').match(/([\\d.]+)/);
+            if (!m) return null;
+            let v = parseFloat(m[1]);
+            if (/million/i.test(s)) v *= 1000000;
+            else if (/[kK]/.test(s)) v *= 1000;
+            return v;
+          };
+          const els = Array.from(document.querySelectorAll('button'))
+            .filter(vis).filter(e => !e.closest('nav, header, footer'));
+          for (const e of els) {
+            const t = (e.innerText || '').trim();
+            if (!/million/i.test(t)) continue;
+            if (t.startsWith('<')) {
+              const hi = parse(t.slice(1));
+              if (hi !== null && num < hi) { e.click(); return t; }
+            } else if (t.endsWith('+')) {
+              const lo = parse(t.slice(0, -1));
+              if (lo !== null && num >= lo) { e.click(); return t; }
+            } else if (t.includes('-')) {
+              const parts = t.split('-');
+              const lo = parse(parts[0]), hi = parse(parts[1]);
+              if (lo !== null && hi !== null && num >= lo && num < hi) {
+                e.click(); return t;
+              }
+            }
+          }
+          return null;
+        }""", float(pop))
+    except Exception:
+        return None
+    return hit or None
+
+
 def _s_worldle_play_currency(page, gid, day):
     """Population & Currency: q0 = population number (integer as-is).
     q1/q2 meanings are UNCONFIRMED, so every sub-question's prompts +
@@ -8530,18 +8893,28 @@ def _s_worldle_play_currency(page, gid, day):
     cur = day.get("currency") or {}
     if pop is None:
         return "skipped", [], "no population in day data"
-    if not _s_worldle_pick_input(page, ["population"], include_range=True):
+    # The q0 widget is BUCKET BUTTONS ('< 3 million', '3 - 5 million',
+    # '5 - 8 million', '8+ million'), not a numeric input (iter-12:
+    # 'population input not found' every run). Try buckets first; the
+    # input path below is only a fallback for a layout without buckets.
+    _bucket = _s_worldle_population_bucket(page, pop)
+    if _bucket:
+        _dbg(gid, f"worldle population bucket {_bucket!r} clicked for {pop}")
+        _s_worldle_submit_guarded(page, gid, "populationCurrency", ds)
+        _settle(page, base=2000)
+    elif not _s_worldle_pick_input(page, ["population"], include_range=True):
         dump = _s_worldle_dom_dump(page, gid, "populationCurrency")
         return "failed", [], \
             "population input not found; DOM dump logged"
-    ok, detail = _s_worldle_set_picked_value(page, gid, str(int(pop)),
-                                             "population")
-    if not ok:
-        dump = _s_worldle_dom_dump(page, gid, "populationCurrency")
-        return "failed", [], \
-            f"population set failed ({detail}); DOM dump logged"
-    _s_worldle_submit_guarded(page, gid, "populationCurrency", ds)
-    _settle(page, base=2000)
+    else:
+        ok, detail = _s_worldle_set_picked_value(page, gid, str(int(pop)),
+                                                 "population")
+        if not ok:
+            dump = _s_worldle_dom_dump(page, gid, "populationCurrency")
+            return "failed", [], \
+                f"population set failed ({detail}); DOM dump logged"
+        _s_worldle_submit_guarded(page, gid, "populationCurrency", ds)
+        _settle(page, base=2000)
     played = [str(pop)]
     cname, ccode = cur.get("name") or "", cur.get("code") or ""
 
@@ -8967,6 +9340,48 @@ def _s_worldle_comparison_probe(page, prompt_substrs):
             'spoken languages', 'gdp per capita',
             'population & currency', 'populous cities', 'area',
             'summary']);
+          // Generic card titles carry NO country identity: two image
+          // cards both titled 'Image Quiz Item' are two distinct
+          // options (iter-12: the name dedup collapsed them to 1 and
+          // nothing was clicked). Generic names never dedup, and the
+          // sibling label (the name pill below the card) is the
+          // real name source for image cards.
+          const genericNames = new Set(['image quiz item', 'quiz item',
+            'image', 'option', 'choice', 'card']);
+          const isLabelText = (t) => {
+            const s = (t || '').trim();
+            if (!s || s.length < 3 || s.length > 40) return false;
+            if (/^\s*\d+\s*\./.test(s)) return false;
+            if (/(comparison|guess the|which country|surface area|gdp|per capita|vs|versus)/i.test(s)) return false;
+            if (chrome.has(norm(s)) || modeLabels.has(norm(s))) return false;
+            if (s.split(/\s+/).length > 4) return false;
+            return /^[A-Za-zÀ-ÿ'’.\- ]+$/.test(s);
+          };
+          const sibLabel = (e) => {
+            // Direct siblings first (pill below the button), then the
+            // parent's other leaf children (pill in a sibling subtree).
+            const sibs = [];
+            if (e.nextElementSibling) sibs.push(e.nextElementSibling);
+            if (e.previousElementSibling) sibs.push(e.previousElementSibling);
+            for (const c of sibs) {
+              const t = (c.innerText || '').trim();
+              if (c.querySelector('button, img, input, select')) continue;
+              if (isLabelText(t)) return t;
+            }
+            let node = e;
+            for (let depth = 0; depth < 3 && node; depth++) {
+              const parent = node.parentElement;
+              if (!parent) break;
+              for (const cand of parent.querySelectorAll('div, span, p, label')) {
+                if (cand === e || e.contains(cand) || cand.contains(e)) continue;
+                if (cand.querySelector('button, img, input, select')) continue;
+                const t = (cand.innerText || '').trim();
+                if (isLabelText(t)) return t;
+              }
+              node = parent;
+            }
+            return '';
+          };
           const out = []; const seen = new Set();
           const cands = Array.from(container.querySelectorAll(
             'button, [role=option], [role=radio], [role=button], a, ' +
@@ -8977,7 +9392,18 @@ def _s_worldle_comparison_probe(page, prompt_substrs):
             .filter(e => e.getAttribute('aria-selected') === null)
             .filter(e => e.getAttribute('aria-expanded') === null)
             .filter(e => e.getAttribute('aria-haspopup') === null);
-          for (const e of cands) {
+          // Plain-div pills as candidates too: in some layouts the
+          // option card IS a div (pill with the country name, no
+          // button). A pill div qualifies only when it carries a
+          // leaf country-ish label and sits near an image card; the
+          // merge step below drops a pill that is just the label of
+          // an already-collected button card (same name, nearby).
+          const divCands = Array.from(container.querySelectorAll('div'))
+            .filter(vis).filter(e => !e.closest('nav, header, footer'))
+            .filter(e => !e.querySelector('button, img, input, select'))
+            .filter(e => isLabelText(e.innerText || ''));
+          const allCands = cands.concat(divCands);
+          for (const e of allCands) {
             const img = e.querySelector('img');
             const firstLine = (e.innerText || '').split('\\n')
               .map(s => s.trim()).filter(Boolean)[0] || '';
@@ -8985,7 +9411,13 @@ def _s_worldle_comparison_probe(page, prompt_substrs):
             const dval = e.getAttribute('data-value') || '';
             const title = e.getAttribute('title') || '';
             const alt = img ? (img.getAttribute('alt') || '') : '';
-            const name = firstLine || aria || dval || title || alt;
+            const src = img ? (img.getAttribute('src') || '') : '';
+            // Name resolution: a generic first-line title ('Image
+            // Quiz Item') is NOT a name — the sibling label pill is.
+            let name = firstLine || '';
+            if (!name || genericNames.has(norm(name))) {
+              name = sibLabel(e) || aria || dval || title || alt || name;
+            }
             if (!name || name.length > 80) continue;
             if (chrome.has(norm(name))) continue;
             if (modeLabels.has(norm(name))) continue;
@@ -8995,14 +9427,34 @@ def _s_worldle_comparison_probe(page, prompt_substrs):
             if (/^\\s*\\d+\\s*\\./.test(name)) continue;
             if (/(comparison|guess the)/i.test(name)) continue;
             if (name.split(/\\s+/).length > 5) continue;
-            const key = norm(name);
+            const r = e.getBoundingClientRect();
+            const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+            // Dedup is POSITION-aware (iter-12 fix): two distinct
+            // cards sharing a generic title must NOT collapse.
+            // Nested duplicates (button + role=button wrapper) share
+            // a centre and still collapse. A pill div whose name
+            // matches a nearby button card is that card's label, not
+            // a second option — merge it away.
+            let duplicate = false;
+            for (const o of out) {
+              if (norm(o.name) === norm(name) &&
+                  Math.abs(o.x - cx) < 200 && Math.abs(o.y - cy) < 200) {
+                duplicate = true; break;
+              }
+              if (norm(o.name) === norm(name) &&
+                  Math.abs(o.x - cx) < 20 && Math.abs(o.y - cy) < 20) {
+                duplicate = true; break;
+              }
+            }
+            if (duplicate) continue;
+            const key = norm(name) + '|' + Math.round(cx / 20) + ',' +
+              Math.round(cy / 20);
             if (seen.has(key)) continue;
             seen.add(key);
-            const r = e.getBoundingClientRect();
-            out.push({name: name, x: r.x + r.width / 2,
-                      y: r.y + r.height / 2, has_img: !!img,
+            out.push({name: name, x: cx, y: cy, has_img: !!img,
                       text: (e.innerText || '').slice(0, 120),
-                      aria: aria.slice(0, 80), alt: alt.slice(0, 80)});
+                      aria: aria.slice(0, 80), alt: alt.slice(0, 80),
+                      src: src.slice(0, 160)});
           }
           return {prompt_found: true, options: out};
         }""", list(prompt_substrs)) or {}
@@ -9012,8 +9464,12 @@ def _s_worldle_comparison_probe(page, prompt_substrs):
 
 def _s_worldle_click_comparison_option(page, want):
     """Click a comparison option by country name, matching first-line
-    innerText, aria-label, data-value, title, or a descendant img alt
-    (image-card options carry the name in alt, not in button text).
+    innerText, aria-label, data-value, title, a descendant img alt,
+    or the sibling label pill (image-card options carry the generic
+    title 'Image Quiz Item' in button text and the country name in a
+    label pill below the card). Plain-div pills are a fallback only:
+    interactive elements are tried first so a click never lands on a
+    non-interactive label when a button with the same name exists.
     Returns (ok, detail)."""
     try:
         hit = page.evaluate("""/* worldle-comparison-click */
@@ -9023,21 +9479,62 @@ def _s_worldle_click_comparison_option(page, want):
           const normDiac = s => norm(s).normalize('NFD')
             .replace(/[\\u0300-\\u036f]/g, '');
           const w = normDiac(want);
-          const els = Array.from(document.querySelectorAll(
-            'button, [role=option], [role=radio], [role=button], a, ' +
-            'label, [data-value]')).filter(vis)
-            .filter(e => !e.closest('nav, header, footer'));
+          const isLabelText = (t) => {
+            const s = (t || '').trim();
+            if (!s || s.length < 3 || s.length > 40) return false;
+            if (/^\\s*\\d+\\s*\\./.test(s)) return false;
+            if (/(comparison|guess the|which country|surface area|gdp|per capita|vs|versus)/i.test(s)) return false;
+            if (s.split(/\\s+/).length > 4) return false;
+            return /^[A-Za-zÀ-ÿ'’.\\- ]+$/.test(s);
+          };
+          const sibLabel = (e) => {
+            const sibs = [];
+            if (e.nextElementSibling) sibs.push(e.nextElementSibling);
+            if (e.previousElementSibling) sibs.push(e.previousElementSibling);
+            for (const c of sibs) {
+              const t = (c.innerText || '').trim();
+              if (c.querySelector('button, img, input, select')) continue;
+              if (isLabelText(t)) return t;
+            }
+            let node = e;
+            for (let depth = 0; depth < 3 && node; depth++) {
+              const parent = node.parentElement;
+              if (!parent) break;
+              for (const cand of parent.querySelectorAll('div, span, p, label')) {
+                if (cand === e || e.contains(cand) || cand.contains(e)) continue;
+                if (cand.querySelector('button, img, input, select')) continue;
+                const t = (cand.innerText || '').trim();
+                if (isLabelText(t)) return t;
+              }
+              node = parent;
+            }
+            return '';
+          };
+          const genericNames = new Set(['image quiz item', 'quiz item', 'image', 'option', 'choice', 'card']);
           const match = e => {
             const firstLine = (e.innerText || '').split('\\n')
               .map(s => s.trim()).filter(Boolean)[0] || '';
             const img = e.querySelector('img');
-            const vals = [firstLine, e.getAttribute('aria-label') || '',
+            let primary = firstLine || '';
+            if (!primary || genericNames.has(normDiac(primary))) {
+              primary = sibLabel(e) || primary;
+            }
+            const vals = [primary, firstLine, sibLabel(e),
+              e.getAttribute('aria-label') || '',
               e.getAttribute('data-value') || '',
               e.getAttribute('title') || '',
               img ? (img.getAttribute('alt') || '') : ''];
             return vals.some(v => normDiac(v) === w);
           };
-          const hit = els.find(match);
+          const interactive = Array.from(document.querySelectorAll(
+            'button, [role=option], [role=radio], [role=button], a, ' +
+            'label, [data-value]')).filter(vis)
+            .filter(e => !e.closest('nav, header, footer'));
+          const divs = Array.from(document.querySelectorAll('div'))
+            .filter(vis).filter(e => !e.closest('nav, header, footer'))
+            .filter(e => !e.querySelector('button, img, input, select'))
+            .filter(e => isLabelText(e.innerText || ''));
+          const hit = interactive.find(match) || divs.find(match);
           if (!hit) return [false, 'not found'];
           hit.click();
           return [true, (hit.innerText || '').trim().slice(0, 80)];
@@ -9117,6 +9614,25 @@ def _s_worldle_fetch_country_stat(page, names, stat):
     return out
 
 
+def _s_worldle_comparison_skipped(page):
+    """Game-skipped comparison (iter-13): the game itself declines a
+    comparison round when the country lacks enough neighbours, e.g.
+    'The GDP comparison round has been skipped, as Kuwait does not
+    have enough neighbours…'. Returns (bool, matched_sentence).
+    The comparison is N/A in that case — NOT a bot failure — and the
+    round counts as solved if the number is correct."""
+    try:
+        bt = page.evaluate("() => document.body.innerText") or ""
+    except Exception:
+        return False, ""
+    import re as _re
+    m = _re.search(r"[Tt]he [^.\n]{0,80}comparison round has been skipped[^.\n]*\.?",
+                   bt)
+    if m:
+        return True, m.group(0).strip()
+    return False, ""
+
+
 def _s_worldle_play_comparison(page, gid, day, mode, ds, prompt_substrs,
                                lookup, stat, label):
     """Deliberate comparison branch (Area / GDP): probe the live
@@ -9124,12 +9640,25 @@ def _s_worldle_play_comparison(page, gid, day, mode, ds, prompt_substrs,
     shown country's stat from `lookup` (+ the game's own CDN for any
     shown name the day lookup does not cover), click the max, submit
     once. Returns (status, picked_name_or_None, detail) with status in
-    {attempted, partial, not-present}. 'not-present' = the comparison
+    {attempted, partial, not-present, skipped}. 'not-present' = the comparison
     prompt is not showing (caller falls through to the number path);
     'partial' = prompt showing but options unresolvable / unclickable
-    — NOTHING was clicked in that case. The caller arbitrates with the
-    game's win check; this helper never claims a win itself."""
+    — NOTHING was clicked in that case. 'skipped' = the GAME itself
+    declined the comparison round (not enough neighbours) — the
+    comparison is N/A, the caller counts the number alone. The caller
+    arbitrates with the game's win check; this helper never claims a
+    win itself."""
     probe = _s_worldle_comparison_probe(page, prompt_substrs)
+    # Game-skipped comparison first (iter-13): if the game declined
+    # the comparison round, the probe finds no prompt and the caller
+    # must NOT fall through to clicking a stale/visible option — the
+    # comparison is N/A. Check again after opening the tab, because
+    # the skip message may only appear once the tab loads.
+    _sk, _skdet = _s_worldle_comparison_skipped(page)
+    if _sk:
+        _dbg(gid, f"worldle {mode} comparison game-skipped: {_skdet}")
+        return ("skipped", None,
+                f"game skipped the comparison: {_skdet}")
     if not probe.get("prompt_found"):
         # The comparison may live on a COMPARISON tab that needs
         # opening (GDP after the number; Area after the number).
@@ -9152,6 +9681,12 @@ def _s_worldle_play_comparison(page, gid, day, mode, ds, prompt_substrs,
         if opened:
             _settle(page, base=1200)
             probe = _s_worldle_comparison_probe(page, prompt_substrs)
+            # The skip message may only appear once the tab loads.
+            _sk, _skdet = _s_worldle_comparison_skipped(page)
+            if _sk:
+                _dbg(gid, f"worldle {mode} comparison game-skipped: {_skdet}")
+                return ("skipped", None,
+                        f"game skipped the comparison: {_skdet}")
     if not probe.get("prompt_found"):
         return ("not-present", None,
                 "comparison prompt not showing (tabs tried)")
@@ -9707,8 +10242,11 @@ def _s_worldle(page, ans, gid):
     # three lines so a renamed round can never be silently dropped.
     live_ev = _s_worldle_live_round_modes(page, gid)
     live = (live_ev or {}).get("mapped") if live_ev else None
-    # Raw / mapped / unmapped are logged by the live-reader itself
-    # (iter 12, task 5) — the caller does not re-log them.
+    # G4 proof (iter 13): the cross-check outcome is logged on ONE
+    # line here even when the reader returns None, so the log always
+    # shows the cross-check ran (iter-12: zero lines, unverified).
+    _dbg(gid, f"worldle live rounds cross-check: reader returned "
+              f"{'mapped ' + str(sorted(live)) if live is not None else 'None (unreadable)'}")
     avail = day.get("available") or {}
     for mode in _WORLDLE_PLAY_ORDER[1:]:
         label = _WORLDLE_MODE_LABELS.get(mode, mode)
@@ -12237,9 +12775,85 @@ def _report_game(gid, date_key, *, answer=None, guesses=None, rejected=None,
     print(f"========== END REPORT {gid} ==========")
 
 
+def _nerdle_effective_date(now_utc=None):
+    """Website effective date for Nerdle (mirror of
+    nerdle_solver._nerdle_effective_date — keep the two in agreement;
+    test_iter13_fixes asserts it). Boundary constant lives in
+    nerdle_solver.NERDLE_SITE_BOUNDARY_UTC; the (16, 30) default here
+    must match it."""
+    now = now_utc or datetime.utcnow()
+    boundary = now.replace(hour=16, minute=30, second=0, microsecond=0)
+    boundary = boundary + timedelta(seconds=60)
+    eff = now.date() + timedelta(days=1 if now >= boundary else 0)
+    return datetime(eff.year, eff.month, eff.day)
+
+
+def _nerdle_number_gate(served, api_numbers):
+    """Runner-side mirror of nerdle_solver._nerdle_number_gate (iter 13
+    revised): served puzzle numbers must equal the API's numbers.
+    Returns (blocked, detail, per_mode). See the solver for the full
+    rule (classic hard; other modes block only on an exposed mismatch).
+    """
+    per_mode = {}
+    blocked_reasons = []
+    if not isinstance(api_numbers, dict) or not api_numbers:
+        return True, "no API puzzle numbers (API row missing)", per_mode
+    served = served if isinstance(served, dict) else {}
+    for mode, nums in api_numbers.items():
+        if mode == "classicPuzzleNumber":
+            continue
+        ev = served.get(mode) or {}
+        hn = ev.get("header_number")
+        want = [int(n) for n in (nums or [])]
+        if mode == "classic":
+            if not isinstance(hn, int):
+                blocked_reasons.append("classic header number not exposed")
+                per_mode[mode] = {"api": want, "served": None,
+                                  "status": "blocked: no header"}
+            elif hn not in want:
+                blocked_reasons.append(
+                    f"classic header #{hn} != API {want}")
+                per_mode[mode] = {"api": want, "served": hn,
+                                  "status": "blocked: mismatch"}
+            else:
+                per_mode[mode] = {"api": want, "served": hn,
+                                  "status": "match"}
+            if ev.get("matches_target_official") is False:
+                blocked_reasons.append(
+                    "classic served solution != API classic answer")
+                per_mode[mode]["answer"] = "mismatch"
+            continue
+        if not isinstance(hn, int):
+            per_mode[mode] = {"api": want, "served": None,
+                              "status": "warning: not exposed"}
+            continue
+        if hn not in want:
+            blocked_reasons.append(f"{mode} header #{hn} not in API {want}")
+            per_mode[mode] = {"api": want, "served": hn,
+                              "status": "blocked: mismatch"}
+        else:
+            per_mode[mode] = {"api": want, "served": hn, "status": "match"}
+    if blocked_reasons:
+        return True, "; ".join(blocked_reasons), per_mode
+    return False, "all exposed served numbers match API numbers", per_mode
+
+
 def run_nerdle_external(g, tgt, date_key, today, short):
     """Run the merged 9-mode nerdle solver (async, kept as-is) via subprocess."""
     import subprocess as _sp
+    # Fix-loop iter 13 revised: Nerdle's date is the WEBSITE effective
+    # date (16:30 UTC boundary), NOT the pipeline date_key. Rebind so
+    # the already-done check, result filing, DB record and video name
+    # all use the effective date. A pinned pipeline date does NOT pin
+    # Nerdle: in the 15:30-16:30 UTC window the effective date is the
+    # pipeline date - 1, and the solver plays + files that date (the
+    # pipeline-date video is produced by a run after the boundary).
+    _eff = _nerdle_effective_date()
+    _eff_key = _eff.strftime("%Y-%m-%d")
+    if _eff_key != str(date_key):
+        print(f"[nerdle] date basis: pipeline date_key={date_key} but "
+              f"website effective date={_eff_key}; filing under effective date")
+    date_key = _eff_key
     done = _db_already_done(date_key, "nerdle")
     if done:
         print(f"[nerdle] already done for {date_key}, skipping (no duplicate)")
@@ -12261,6 +12875,10 @@ def run_nerdle_external(g, tgt, date_key, today, short):
     env.setdefault("HEADLESS", "true")
     env.setdefault("TZ_OFFSET_MINUTES", "540")
     env.setdefault("BROWSER_TZ", "Pacific/Kiritimati")
+    # Fix-loop iter 13 revised: pass the WEBSITE effective date (computed
+    # once in this function), not the pipeline date_key — the solver
+    # targets the effective date and the browser clock is faked to it.
+    env["NERDLE_EFFECTIVE_DATE"] = str(date_key)
     print(f"[nerdle] target {date_key} (9 modes, one video)")
     try:
         r = _sp.run([sys.executable, str(HERE / "nerdle_solver.py")],
@@ -12286,6 +12904,7 @@ def run_nerdle_external(g, tgt, date_key, today, short):
     flat_res = HERE / "videos" / f"result_{date_key}.json"
     vres = vdir / "result.json"
     solved, evidence = False, "nerdle solver did not report"
+    _wd_blocked, _wd_detail = False, ""
     try:
         src = None
         if flat_res.exists():
@@ -12293,6 +12912,29 @@ def run_nerdle_external(g, tgt, date_key, today, short):
         if src:
             rec = json.loads(src.read_text(encoding="utf-8"))
             solved = bool(rec.get("solved"))
+            # Fix-loop iter 13 revised — NUMBER GATE (runner side, belt
+            # & braces): the solver gates too, but if a final somehow
+            # exists for a number-mismatched board, never ship it.
+            # Re-check from the solver's own record (API numbers +
+            # served numbers), not from the pipeline date.
+            _wd_blocked, _wd_detail, _wd_per_mode = _nerdle_number_gate(
+                rec.get("served"), rec.get("api_puzzle_numbers"))
+            if _wd_blocked:
+                _dbg("nerdle", f"NUMBER GATE BLOCKED: {_wd_detail} "
+                               f"— refusing to ship final")
+                solved = False
+                rec["number_gate"] = {"blocked": True,
+                                      "detail": _wd_detail,
+                                      "per_mode": _wd_per_mode}
+                try:
+                    if final and Path(str(final)).exists():
+                        _q = vdir / f"nerdle_WRONGDAY_BLOCKED_{date_key}.mp4"
+                        Path(str(final)).rename(_q)
+                        _dbg("nerdle", "wrong-day final quarantined -> "
+                                       f"{_q.name}")
+                except Exception as _e_q:
+                    _dbg("nerdle", "wrong-day quarantine failed: "
+                                   f"{str(_e_q)[:80]}")
             evidence = f"modes={rec.get('modes')}"
             try:
                 src.rename(vdir / f"result_{date_key}.json")
@@ -12319,8 +12961,8 @@ def run_nerdle_external(g, tgt, date_key, today, short):
             except Exception as _e_ch2:
                 _dbg("nerdle", f"chapter embed skipped: {str(_e_ch2)[:80]}")
             _pr2 = _probe_video(final) if final and Path(str(final)).exists() else {}
-            _qc2 = {"game": "nerdle", "date": date_key, "solved": bool(rec.get("solved")),
-                     "evidence": str(evidence)[:300], "video": str(final) if final and Path(str(final)).exists() else None,
+            _qc2 = {"game": "nerdle", "date": date_key, "solved": bool(rec.get("solved")) and not _wd_blocked,
+                     "evidence": str(evidence)[:300], "video": None if _wd_blocked else (str(final) if final and Path(str(final)).exists() else None),
                      "probe": _pr2, "cursor_events": len(QP.ev_all()),
                      "cursor_clips": (QP.LAST_POLISH or {}).get("clips", 0),
                      "frame_mode": (QP.LAST_POLISH or {}).get("mode"),
@@ -12349,7 +12991,8 @@ def run_nerdle_external(g, tgt, date_key, today, short):
     except Exception as e:
         evidence = f"result parse: {e}"
     record = {"game": "nerdle", "date": date_key, "solved": solved,
-              "evidence": str(evidence)[:300], "video": str(final) if final.exists() else None}
+              "evidence": (f"NUMBER GATE: {_wd_detail} " if _wd_blocked else "") + str(evidence)[:300],
+              "video": None if _wd_blocked else (str(final) if final.exists() else None)}
     _db_save(date_key, "nerdle", record)
     try:
         _modes = json.loads((vdir / f"result_{date_key}.json").read_text(
@@ -12502,29 +13145,46 @@ def run_framed_all(gid, g, tgt, date_key, today, short):
                             solved, evidence, vpath)
 
 
-def _framed_segment_bounds(per_mode, duration):
-    """Segment bounds for the Framed assembly, from card-anchored marks.
+def _framed_anchor(d):
+    """Segment anchor for one Framed per_mode entry (iter 13, C2):
+    the MODE-SWITCH time (when the bot navigates to the mode), NOT
+    the board-ready time. Inter-mode dead time (page reload + the
+    poster ad gate, ~24-30s) belongs to the mode it precedes, so it
+    must air inside THAT mode's chapter, not the previous mode's.
+    Falls back to t_start for entries without t_switch."""
+    if d.get("t_switch") is not None:
+        return d["t_switch"]
+    return d.get("t_start")
 
-    `t_start` stamps are RECORDING-relative (time.time() - _REC_T0) and
-    the polished gameplay clip starts at recording 0 with autocrop OFF,
-    so the bounds are the RAW t_start values clamped to [0, duration] —
-    NOT rebased by the first mark. The old code subtracted the first
-    mark (`lead`) from every bound, shifting every mode segment ~20s
-    early: each segment showed the previous mode's tail / menu footage
-    and dropped its own mode's final seconds (where the win screen
-    lives), while the card still claimed the segment was that mode.
-    Marks within 2s of the previous kept mark are dropped (same rule as
-    before). Returns (bounds, kept) with bounds strictly increasing,
-    one segment per kept mark, every segment >= 2s (short trailing
-    segments are dropped from BOTH lists).
+
+def _framed_segment_bounds(per_mode, duration):
+    """Segment bounds for the Framed assembly, from mode-switch marks.
+
+    Anchors are MODE-SWITCH times (see _framed_anchor), NOT
+    board-ready times: the old code anchored at board-ready (t_start),
+    so the inter-mode dead time (reload + poster ad gate, ~24-30s)
+    aired inside the PREVIOUS mode's chapter (iter-12: ~30s of
+    poster-gate footage inside the Titleshot chapter). With
+    switch-anchored bounds, a mode's segment runs from its own
+    switch to the next mode's switch, so the gate footage airs in
+    the gated mode's chapter, and the win screen (which precedes
+    the next switch) stays uncut in its own segment.
+    `t_switch` stamps are RECORDING-relative (time.time() - _REC_T0)
+    and the polished gameplay clip starts at recording 0 with
+    autocrop OFF, so the bounds are the RAW anchor values clamped to
+    [0, duration] — NOT rebased by the first mark. Marks within 2s of
+    the previous kept mark are dropped. Returns (bounds, kept) with
+    bounds strictly increasing, one segment per kept mark, every
+    segment >= 2s (short trailing segments are dropped from BOTH
+    lists).
     """
     gd = float(duration or 0)
     marks = sorted(
-        (d for d in (per_mode or []) if d.get("t_start") is not None),
-        key=lambda d: d["t_start"])
+        (d for d in (per_mode or []) if _framed_anchor(d) is not None),
+        key=lambda d: _framed_anchor(d))
     kept, starts = [], []
     for d in marks:
-        st = min(max(float(d["t_start"]), 0.0), gd)
+        st = min(max(float(_framed_anchor(d)), 0.0), gd)
         if not starts or st - starts[-1] > 2.0:
             starts.append(st)
             kept.append(d)
@@ -12599,9 +13259,13 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
                                ", ".join(f"{m}: {answers.get(k, '?')}"
                                          for k, m, _u in FRAMED_MODES),
                                allsteps, scoring=False)
+            _framed_total_guesses = sum(
+                int(d.get("guesses") or 0) for d in per_mode)
             DP.generate_facts(str(facts_p), g["name"], today,
                               f"{len(solved_modes)}/{len(FRAMED_MODES)} modes won",
-                              allsteps, scoring=False)
+                              allsteps, scoring=False,
+                              guesses_played=(_framed_total_guesses or None),
+                              final_answers=len(solved_modes))
             DP.generate_teaser(str(teaser_p), g["name"], today, g["slug"])
 
             def _still(p, secs):
@@ -12624,15 +13288,16 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
             # mode's footage is cut out and prefixed with a card naming it, so a
             # viewer landing mid-video knows exactly which round is on screen.
             marks = sorted(
-                (d for d in per_mode if d.get("t_start") is not None),
-                key=lambda d: d["t_start"])
+                (d for d in per_mode if _framed_anchor(d) is not None),
+                key=lambda d: _framed_anchor(d))
             seg_clips, seg_meta = [], []
             if len(marks) >= 2 and gd > 0:
-                # Card-anchored marks: t_start is recorded AFTER the
-                # board is ready, just before the first guess, so the
-                # card goes at t_start and footage follows it. Bounds
-                # come from _framed_segment_bounds (raw recording-
-                # relative t_starts, NO lead rebase: the polished clip
+                # Switch-anchored marks (iter 13 C2): the card goes
+                # at the segment start = mode switch, and footage
+                # follows it (including that mode's own load/gate
+                # dead time). Bounds come from
+                # _framed_segment_bounds (raw recording-relative
+                # t_switch values, NO lead rebase: the polished clip
                 # starts at recording 0 with autocrop OFF).
                 bounds, kept = _framed_segment_bounds(per_mode, gd)
                 _dbg(gid, f"framed bounds (card-anchored): {bounds}")

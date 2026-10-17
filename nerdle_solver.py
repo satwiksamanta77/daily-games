@@ -82,6 +82,16 @@ NERDLE_MODES = [
 
 NERDLE_START = datetime(2022, 1, 20)
 
+# Website effective-date boundary (ONE named constant, iter 13):
+# the wordsolverx puzzle-window rule for nerdle (boundary 16:30 UTC,
+# offset +1). If the site moves its Nerdle post to 9pm IST, change
+# this to (15, 30) and nothing else. Default 16:30 UTC.
+NERDLE_SITE_BOUNDARY_UTC = (16, 30)
+# The site's rollover grace (puzzle-window rolloverGraceSeconds 60
+# for nerdle): the boundary instant is 16:30:60 UTC. A run inside
+# 16:30:00–16:30:60 still sees the pre-boundary date.
+NERDLE_SITE_ROLLOVER_GRACE_S = 60
+
 
 def _visible_now():
     """UTC 'now' honoring FAKE_DATE_ISO (wall time in TZ_OFFSET_MINUTES zone)."""
@@ -99,12 +109,110 @@ def _visible_now():
     return datetime.utcnow()
 
 
+def _nerdle_effective_date(now_utc=None):
+    """Website effective date (wordsolverx puzzle-window rule, nerdle
+    entry: boundaryHourUtc 16, boundaryMinuteUtc 30,
+    visibleDateOffsetDays 1, rolloverGraceSeconds 60).
+
+    After the boundary (16:30 UTC) -> UTC date + 1; before -> UTC date.
+    16:30 UTC = 22:00 IST = the site's 10pm IST Nerdle post. If the
+    site moves its post to 9pm IST, change ONLY NERDLE_SITE_BOUNDARY_UTC
+    to (15, 30) — do NOT re-derive the rule (iter 13). The 60 s grace
+    is the site's rolloverGraceSeconds: the boundary instant is
+    16:30:60 UTC, so a run inside 16:30:00–16:30:60 still sees the
+    pre-boundary date, exactly as the site does.
+    """
+    now = now_utc or datetime.utcnow()
+    _bh, _bm = NERDLE_SITE_BOUNDARY_UTC
+    boundary = now.replace(hour=_bh, minute=_bm, second=0, microsecond=0)
+    boundary = boundary + timedelta(seconds=NERDLE_SITE_ROLLOVER_GRACE_S)
+    eff = now.date() + timedelta(days=1 if now >= boundary else 0)
+    return datetime(eff.year, eff.month, eff.day)
+
+
 def _target_date():
-    """Site-visible puzzle day = worker's getVisibleDateKey rule:
-    rolls over 15:00 UTC: before -> UTC date, after -> UTC date + 1."""
-    now_utc = _visible_now()
-    vis = now_utc.date() + timedelta(days=1 if now_utc.hour >= 15 else 0)
-    return datetime(vis.year, vis.month, vis.day)
+    """Puzzle day the VIDEO must show = the WEBSITE effective date
+    (wordsolverx puzzle-window rule for nerdle: boundary 16:30 UTC,
+    visibleDateOffsetDays 1 — after 16:30 UTC the effective date is
+    UTC date + 1, before it is the UTC date; 16:30 UTC = 22:00 IST =
+    the site's 10pm IST Nerdle post).
+
+    Uses the REAL UTC wall clock, never FAKE_DATE_ISO / Kiritimati /
+    the pipeline date_key. The runner passes the effective date via
+    NERDLE_EFFECTIVE_DATE (computed once per run, so a run straddling
+    the boundary cannot disagree with itself). A pinned pipeline date
+    does NOT pin Nerdle: Nerdle always follows the website effective
+    date (a pinned rerun for a past date is a re-play of that date's
+    video only if the effective date still equals it).
+    """
+    env_date = os.environ.get("NERDLE_EFFECTIVE_DATE", "").strip()
+    if env_date:
+        try:
+            return datetime.fromisoformat(env_date)
+        except ValueError:
+            pass
+    return _nerdle_effective_date()
+
+
+def _nerdle_number_gate(served, api_numbers):
+    """Hard gate (iter 13 revised): served puzzle numbers must equal
+    the API's numbers. Returns (blocked, detail, per_mode dict).
+
+    - classic: header_number REQUIRED and must equal the API classic
+      number; classic served solution must equal the API classic
+      answer (matches_target_official). Classic is the day proof.
+    - other modes: if the site exposes a header number, it must be a
+      MEMBER of the API's puzzleNumbers for that mode (multi-number
+      modes: minibi [n-1130, 5], quad [4], speed [2]); if the site
+      exposes no number, WARNING (not blocking) — the site does not
+      expose a per-mode number to check.
+    - other modes' answer-mismatch (matches False) is WARNING only:
+      the API's answers disagree with the site for micro/minibi/quad
+      (proven iter-12: site micro 8-7=1 vs API 8/2=4 for the same
+      day), so answer-equality cannot prove a wrong day there.
+    """
+    per_mode = {}
+    blocked_reasons = []
+    if not isinstance(api_numbers, dict) or not api_numbers:
+        return True, "no API puzzle numbers (API row missing)", per_mode
+    served = served if isinstance(served, dict) else {}
+    for mode, nums in api_numbers.items():
+        if mode == "classicPuzzleNumber":
+            continue
+        ev = served.get(mode) or {}
+        hn = ev.get("header_number")
+        want = [int(n) for n in (nums or [])]
+        if mode == "classic":
+            if not isinstance(hn, int):
+                blocked_reasons.append("classic header number not exposed")
+                per_mode[mode] = {"api": want, "served": None,
+                                  "status": "blocked: no header"}
+            elif hn not in want:
+                blocked_reasons.append(
+                    f"classic header #{hn} != API {want}")
+                per_mode[mode] = {"api": want, "served": hn,
+                                  "status": "blocked: mismatch"}
+            else:
+                per_mode[mode] = {"api": want, "served": hn,
+                                  "status": "match"}
+            if ev.get("matches_target_official") is False:
+                blocked_reasons.append(
+                    "classic served solution != API classic answer")
+                per_mode[mode]["answer"] = "mismatch"
+            continue
+        if not isinstance(hn, int):
+            per_mode[mode] = {"api": want, "served": None,
+                              "status": "warning: not exposed"}
+            continue
+        if hn not in want:
+            blocked_reasons.append(f"{mode} header #{hn} not in API {want}")
+            per_mode[mode] = {"api": want, "served": hn,
+                              "status": "blocked: mismatch"}
+        else:
+            per_mode[mode] = {"api": want, "served": hn, "status": "match"}
+    if blocked_reasons:
+        return True, "; ".join(blocked_reasons), per_mode
+    return False, "all exposed served numbers match API numbers", per_mode
 
 
 def classic_puzzle_number(d):
@@ -228,41 +336,59 @@ def decode_instant_hint(hint):
 
 
 def fetch_nerdle_answers(target=None):
-    """All-mode answers from the nerdle-answers worker (same source as site)."""
-    from datetime import timedelta as _td
+    """All-mode answers + puzzle numbers from the nerdle-answers
+    worker (the site's own published answers) for the target date.
+
+    Returns (date_key, equations, numbers) where equations is
+    {mode_id: [equation, ...]} and numbers is {mode_id: [puzzleNumber,
+    ...], "classicPuzzleNumber": N}. Fetches ONLY the dated URL —
+    NEVER falls back to /today (the old fallback silently substituted
+    a different date's answers when the target row was missing).
+    On any failure returns (date_key, {}, None): the caller must
+    DEFER (no API row = unpublished = no video), never blind-play.
+    Public GET only — never /add or /delete.
+    """
     target = target or _target_date()
     date_key = target.strftime("%Y-%m-%d")
-    for u in (f"https://nerdle-answers.nerdleapi.workers.dev/{date_key}?v=2",
-              "https://nerdle-answers.nerdleapi.workers.dev/today?v=2"):
-        try:
-            r = requests.get(u, timeout=20, headers={"User-Agent": "WordSolverX Video"})
-            if not r.ok:
-                continue
-            j = r.json()
-            data = (j.get("data") or j) if isinstance(j, dict) else {}
-            if isinstance(data, dict) and data.get("modes"):
-                m = {}
-                for md in data["modes"]:
-                    eqs = []
-                    for a in (md.get("answers") or []):
-                        if not a.get("answer"):
-                            continue
-                        if a.get("type") == "equation":
-                            eqs.append(a["answer"])
-                        elif a.get("type") == "hint":
-                            dec = decode_instant_hint(a["answer"])
-                            print(f"[nerdle] instant hint {a['answer']} -> {dec!r}")
-                            if dec:
-                                eqs.append(dec)
-                    if eqs:
-                        m[md["id"]] = eqs
-                print(f"[nerdle] answers via {u}: " +
-                      ", ".join(f"{k}={len(v)}eq" for k, v in m.items()))
-                return date_key, m
-        except Exception:
-            continue
-    print("[nerdle] worker unavailable, blind-play fallback (video still records)")
-    return date_key, {}
+    try:
+        r = requests.get(
+            f"https://nerdle-answers.nerdleapi.workers.dev/{date_key}?v=2",
+            timeout=20, headers={"User-Agent": "WordSolverX Video"})
+        if not r.ok:
+            print(f"[nerdle] API no row for {date_key}: HTTP {r.status_code} "
+                  f"-> defer (unpublished)")
+            return date_key, {}, None
+        j = r.json()
+        data = (j.get("data") or j) if isinstance(j, dict) else {}
+        if not (isinstance(data, dict) and data.get("modes")):
+            print(f"[nerdle] API row for {date_key} has no modes -> defer")
+            return date_key, {}, None
+        m, numbers = {}, {}
+        for md in data["modes"]:
+            eqs = []
+            for a in (md.get("answers") or []):
+                if not a.get("answer"):
+                    continue
+                if a.get("type") == "equation":
+                    eqs.append(a["answer"])
+                elif a.get("type") == "hint":
+                    dec = decode_instant_hint(a["answer"])
+                    print(f"[nerdle] instant hint {a['answer']} -> {dec!r}")
+                    if dec:
+                        eqs.append(dec)
+            if eqs:
+                m[md["id"]] = eqs
+            if md.get("puzzleNumbers"):
+                numbers[md["id"]] = [int(n) for n in md["puzzleNumbers"]]
+        if data.get("classicPuzzleNumber") is not None:
+            numbers["classicPuzzleNumber"] = int(data["classicPuzzleNumber"])
+        print(f"[nerdle] answers via API {date_key}: " +
+              ", ".join(f"{k}={len(v)}eq" for k, v in m.items()) +
+              f"; classicPuzzleNumber={numbers.get('classicPuzzleNumber')}")
+        return date_key, m, numbers
+    except Exception as e:
+        print(f"[nerdle] API fetch failed for {date_key}: {e} -> defer")
+        return date_key, {}, None
 
 
 async def block_ads(route):
@@ -379,6 +505,9 @@ SERVED_JS = """
   return { page_local: new Date().toString(),
            page_iso: new Date().toISOString(),
            tz_offset_min: new Date().getTimezoneOffset(),
+           header_number: (() => { const m = (document.body.innerText || '')
+               .match(/nerdle\\.\\s*#(\\d+)/i);
+               return m ? parseInt(m[1], 10) : null; })(),
            gameState_keys: keys, dateish: dateish };
 } catch (e) { return { error: String(e) }; } }
 """
@@ -1272,6 +1401,7 @@ async def play_mode(page, mode, script_dir, official=None):
             "page_local": _served.get("page_local"),
             "page_iso": _served.get("page_iso"),
             "tz_offset_min": _served.get("tz_offset_min"),
+            "header_number": _served.get("header_number"),
             "gameState_dateish": _served.get("dateish"),
             "site_solutions": _site_only,
             "matches_target_official": _matches}
@@ -1322,9 +1452,32 @@ async def main():
     today = target.strftime("%B %d, %Y")
     date_short = target.strftime("%b %d")
     day_num = target.timetuple().tm_yday
-    print(f"[nerdle] target {date_key} puzzle #{classic_puzzle_number(target)}")
+    print(f"[nerdle] target {date_key} puzzle #{classic_puzzle_number(target)} "
+          f"(website effective date, boundary {NERDLE_SITE_BOUNDARY_UTC})")
 
-    _, official = await asyncio.to_thread(fetch_nerdle_answers, target)
+    # Fetch the site's OWN published answers + puzzle numbers BEFORE
+    # playing. No API row for the target date (404) -> HONEST DEFER:
+    # the puzzle is unpublished, so no video (same rule as other
+    # games). Never blind-play, never fall back to /today.
+    _, official, api_numbers = await asyncio.to_thread(
+        fetch_nerdle_answers, target)
+    if not official or not api_numbers:
+        _nlog(f"[nerdle] DEFER: API has no row for target {date_key} "
+              f"(unpublished) — no video")
+        _res_doc = {"game": "nerdle", "date": date_key, "solved": False,
+                    "modes": [], "evidence": f"defer: API no row for {date_key}",
+                    "served": {}, "api_puzzle_numbers": api_numbers,
+                    "number_gate": {"blocked": False, "detail":
+                                    "defer: no API row, never played"}}
+        (video_dir / f"result_{date_key}.json").write_text(
+            json.dumps(_res_doc, indent=1))
+        try:
+            (script_dir / "videos" / f"result_{date_key}.json").write_text(
+                json.dumps(_res_doc, indent=1))
+        except Exception:
+            pass
+        print(f"[nerdle] DEFER: no API row for {date_key}")
+        sys.exit(1)
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=HEADLESS)
@@ -1341,13 +1494,33 @@ async def main():
             **_state_kwargs,
         )
         await context.route("**/*", block_ads)
+        # Fix-loop iter 13 revised: the browser clock must show the
+        # EFFECTIVE date (target 00:05 local), NOT FAKE_DATE_ISO (the
+        # pipeline date, which can differ from the effective date in
+        # the 15:30–16:30 UTC window). With useLocalTime=true the game
+        # serves the browser-local date; faking it to the pipeline
+        # date would serve the pipeline date's puzzle while the gate
+        # checks the effective date's numbers.
         try:
-            fake_iso = os.environ.get("FAKE_DATE_ISO", "").strip()
-            if fake_iso and QP_AVAILABLE:
+            fake_iso = target.strftime("%Y-%m-%dT00:05:00")
+            if QP_AVAILABLE:
                 await context.add_init_script(script=QP.get_fake_date_init_script(fake_iso))
-                print(f"[fakedate] {fake_iso}")
+                print(f"[fakedate] {fake_iso} (effective date)")
         except Exception as e:
             print(f"[fakedate] skipped: {e}")
+        # Fix-loop iter 13 revised: the site's daily index follows
+        # localStorage `useLocalTime` (default false = UTC day). The
+        # browser clock is faked to the EFFECTIVE date 00:05 local
+        # (see above), so with the site's own local-midnight setting
+        # on ("Change game to change at local midnight"), the site
+        # serves the effective date's puzzle — the same date the API
+        # fetch + number gate check.
+        try:
+            await context.add_init_script(
+                script="try{localStorage.setItem('useLocalTime','true')}catch(e){}")
+            print("[nerdle] useLocalTime=true (site local-midnight rollover)")
+        except Exception as e:
+            print(f"[nerdle] useLocalTime init skipped: {e}")
         try:
             if QP_AVAILABLE:
                 await context.add_init_script(script=QP.prepurge_js())
@@ -1490,10 +1663,34 @@ async def main():
         else:
             _results2.append((_mid, _t, _e, _s))
     results = _results2
+    # Fix-loop iter 13 revised — NUMBER GATE (hard): the served puzzle
+    # number on the game site must EQUAL the API's puzzle number per
+    # mode. The iter-12 run flagged matches_target_official=false in
+    # 7/9 modes and shipped the video anyway. A block here sets
+    # all_solved=False (no final assembly, no upload, exit 1).
+    # Target date + API numbers + served numbers are ALL logged per
+    # mode below, so the rerun artifact proves the gate's inputs.
+    _wd_blocked, _wd_detail, _wd_per_mode = _nerdle_number_gate(
+        SERVED, api_numbers)
+    _nlog(f"[nerdle] number gate: target={date_key} "
+          f"api_classic=#{api_numbers.get('classicPuzzleNumber')} "
+          f"blocked={_wd_blocked} detail={_wd_detail}")
+    for _mid, _info in sorted(_wd_per_mode.items()):
+        _nlog(f"[nerdle] number gate { _mid}: api={_info.get('api')} "
+              f"served={_info.get('served')} status={_info.get('status')}")
+    if _wd_blocked:
+        _nlog(f"[nerdle] NUMBER GATE BLOCKED: {_wd_detail} — "
+              f"refusing to ship (target {date_key})")
+    _wd_warnings = [mid for mid, ev in SERVED.items()
+                    if mid != "classic" and isinstance(ev, dict)
+                    and ev.get("matches_target_official") is False]
+    if _wd_warnings:
+        _nlog(f"[nerdle] served-mismatch warnings (not gating): "
+              f"{_wd_warnings}")
     won_modes = [mid for mid, t, e, s in results if s == "won"]
     weak = [(mid, t, e) for mid, t, e, s in results if s != "won"]
     failed = weak
-    all_solved = len(won_modes) >= len(NERDLE_MODES) - 1
+    all_solved = len(won_modes) >= len(NERDLE_MODES) - 1 and not _wd_blocked
     if all_solved and len(won_modes) != len(NERDLE_MODES):
         print(f"[nerdle] shipping with cut modes: "
               f"{[m for m, _t, _e, st in results if st != 'won']}")
@@ -1737,6 +1934,11 @@ async def main():
          **_eq_rep,
          "unproven_modes": _unproven,
          "served": SERVED,
+         "api_puzzle_numbers": api_numbers,
+         "number_gate": {"blocked": _wd_blocked, "detail": _wd_detail,
+                         "per_mode": _wd_per_mode,
+                         "warnings": _wd_warnings,
+                         "use_local_time": True},
          "first_typing_s": _FIRST_TYPE_T}
     (video_dir / f"result_{date_key}.json").write_text(_json.dumps(_res_doc, indent=1))
     # The runner's run_nerdle_external only reads the FLAT
