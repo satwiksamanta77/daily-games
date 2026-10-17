@@ -946,39 +946,71 @@ _AUTOCROP_KEEP_STATIC_HEAD_S = 2.0  # keep this much of a cut static run
 _AUTOCROP_XFADE_S = 0.5   # crossfade between kept segments (video only)
 
 
-def _autocrop_keep_segments(src, first_typing_s=None, idle_cut_s=None):
+def _autocrop_keep_segments(src, first_typing_s=None, idle_cut_s=None,
+                             solve_span_s=None, first_action_label=None):
     """Keep-segments (seconds, in source timeline) after autocrop.
 
-    Leading idle: cut everything before the first keystroke minus a ~1 s
+    Leading idle: cut everything before the first player action minus a ~1 s
     safety margin. The cut point comes from `idle_cut_s` when given, else
     `first_typing_s - 1.0` when given, else frame-diff detection (first
     SUSTAINED + PERSISTENT board change — a change that holds for several
     frames and leaves the frame different from before, not page-load
-    animation flicker). Mid-recording static waits >30 s are cut to a 2 s
-    head. Returns [] when nothing should be cut (caller keeps src as-is).
+    animation flicker). `first_typing_s` is a FIRST-ACTION anchor on the
+    RECORDING timeline (the runner passes the recording-relative time of the
+    first keystroke / swap / colour pick, labelled by `first_action_label`):
+    for non-typing games (waffle drag-swaps, colorfle clicks) it is the first
+    board-state change, NOT a keystroke — the old typing-only trigger had no
+    drag/swap path, so waffle's frame-diff fallback keyed on the final scroll
+    and cut a 59 s solve to 3.75 s. Mid-recording static waits >30 s are cut
+    to a 2 s head.
+
+    Coverage guard: when `solve_span_s` (START->shot_win) is known, the kept
+    footage must cover at least 50% of the solve span. If the leading cut
+    and/or static cuts would drop below that, the leading cut is clamped and
+    static cuts are dropped until the floor holds (a 3.75 s clip for a 59 s
+    solve must never survive). Returns (segments, detail); segments == []
+    means nothing should be cut (caller keeps src as-is).
     """
+    detail = {"leading_cut_s": None, "leading_cut_source": None,
+              "static_cuts": [], "kept_s": 0.0, "duration_s": 0.0,
+              "solve_span_s": (float(solve_span_s) if solve_span_s else None),
+              "coverage_ratio": None, "guard_clamped": False,
+              "first_action_label": first_action_label,
+              "reason_no_cut": None}
     dur = _probe_duration(src)
+    detail["duration_s"] = round(dur, 1)
     if dur <= 0:
-        return []
+        detail["reason_no_cut"] = "unprobed duration"
+        return [], detail
     if idle_cut_s is not None:
         leading_cut = max(0.0, float(idle_cut_s))
+        source = "idle_cut_s"
     elif first_typing_s is not None:
         leading_cut = max(0.0, float(first_typing_s) - 1.0)
+        source = f"first_action_s-1s ({first_action_label or 'typing'})"
     else:
         leading_cut = None  # detect below
+        source = None
     diffs, fps = _sample_frame_diffs(src)
     if not diffs:
         # No frame evidence: honour an explicit cut only, else cut nothing.
         if leading_cut is None:
-            return []
+            detail["reason_no_cut"] = "no frame evidence and no anchor"
+            return [], detail
         if leading_cut < 1.0:
-            return []
-        return [(leading_cut, dur)]
+            detail["reason_no_cut"] = "explicit cut <1s"
+            return [], detail
+        detail["leading_cut_s"] = round(leading_cut, 1)
+        detail["leading_cut_source"] = source
+        segs = [(leading_cut, dur)]
+        return _autocrop_apply_coverage(segs, dur, leading_cut, source,
+                                         [], detail, solve_span_s)
     if leading_cut is None:
         # First sustained + persistent change: 3 consecutive diffs above
         # CHANGE and the frame after them still differs from the frame
         # before them (a typed guess persists; load animation flickers).
         leading_cut = 0.0
+        source = "frame-diff first sustained change"
         for i in range(len(diffs) - 3):
             if all(d > _AUTOCROP_CHANGE for d in diffs[i:i + 3]):
                 # Persistent check needs raw frames; approximate with the
@@ -986,9 +1018,12 @@ def _autocrop_keep_segments(src, first_typing_s=None, idle_cut_s=None):
                 if diffs[i + 3] > _AUTOCROP_FROZEN:
                     leading_cut = max(0.0, i / fps - 1.0)
                     break
+    detail["leading_cut_s"] = round(leading_cut, 1)
+    detail["leading_cut_source"] = source
     # Static runs: maximal runs of frozen diffs longer than MIN_STATIC_S.
     # A run covering diffs [i..j] spans frames i..j+1 -> seconds [i/fps, (j+2)/fps].
     segments = []
+    static_cuts = []
     cur_start = leading_cut
     i = 0
     nd = len(diffs)
@@ -1003,6 +1038,10 @@ def _autocrop_keep_segments(src, first_typing_s=None, idle_cut_s=None):
                 keep_end = min(run_start + _AUTOCROP_KEEP_STATIC_HEAD_S, run_end)
                 if keep_end > cur_start + 0.5:
                     segments.append((cur_start, keep_end))
+                static_cuts.append((round(run_start, 1), round(run_end, 1),
+                                    f"frozen {run_end - run_start:.1f}s > "
+                                    f"{_AUTOCROP_MIN_STATIC_S:.0f}s; kept "
+                                    f"{_AUTOCROP_KEEP_STATIC_HEAD_S:.0f}s head"))
                 cur_start = run_end
             i = j + 1
         else:
@@ -1013,11 +1052,55 @@ def _autocrop_keep_segments(src, first_typing_s=None, idle_cut_s=None):
     # mostly-static footage between two long static runs.
     segments = [(a, b) for a, b in segments if b - a >= 1.0]
     if not segments:
-        return []
+        detail["reason_no_cut"] = "no keepable segments"
+        return [], detail
     removed = dur - sum(b - a for a, b in segments)
     if removed < 1.0:
-        return []
-    return segments
+        detail["reason_no_cut"] = f"removed {removed:.1f}s < 1s"
+        return [], detail
+    return _autocrop_apply_coverage(segments, dur, leading_cut, source,
+                                     static_cuts, detail, solve_span_s)
+
+
+def _autocrop_apply_coverage(segments, dur, leading_cut, source,
+                             static_cuts, detail, solve_span_s):
+    """Enforce the >=50%-of-solve-span floor on a candidate segment list.
+
+    (1) Drop static cuts first (keep the whole tail from the leading cut),
+    (2) then clamp the leading cut if still below the floor. Mutates
+    `detail`; returns (segments, detail)."""
+    detail["static_cuts"] = [list(c) for c in static_cuts]
+    span = float(solve_span_s) if solve_span_s else 0.0
+    kept = sum(b - a for a, b in segments)
+    detail["kept_s"] = round(kept, 1)
+    if span > 0:
+        detail["coverage_ratio"] = round(kept / span, 3) if span else None
+        floor = 0.5 * span
+        if kept < floor and dur > floor:
+            detail["guard_clamped"] = True
+            # (1) Static cuts are what shrank the kept set: drop them and
+            # keep the whole tail from the leading cut.
+            if not (len(segments) == 1 and segments[0] == (leading_cut, dur)):
+                segments = [(leading_cut, dur)]
+                detail["static_cuts"] = []
+                kept = dur - leading_cut
+                detail["kept_s"] = round(kept, 1)
+                detail["coverage_ratio"] = round(kept / span, 3) if span else None
+                detail["leading_cut_source"] = (
+                    f"{source} + static cuts DROPPED by coverage guard "
+                    f"(kept {kept:.1f}s < 50% of solve span {span:.1f}s)")
+            # (2) Still short: clamp the leading cut so the tail meets it.
+            if kept < floor:
+                new_leading = max(0.0, dur - floor)
+                detail["leading_cut_s"] = round(new_leading, 1)
+                detail["leading_cut_source"] = (
+                    f"{source} CLAMPED by coverage guard "
+                    f"(kept {kept:.1f}s < 50% of solve span {span:.1f}s)")
+                segments = [(new_leading, dur)]
+                kept = dur - new_leading
+                detail["kept_s"] = round(kept, 1)
+                detail["coverage_ratio"] = round(kept / span, 3) if span else None
+    return segments, detail
 
 
 def _autocrop_render(src, segments, out_path):
@@ -1105,24 +1188,50 @@ def _autocrop_render(src, segments, out_path):
     return _QPPath(out_path).exists() and _QPPath(out_path).stat().st_size > 10000
 
 
-def _apply_autocrop(src, out_path, first_typing_s=None, idle_cut_s=None):
+def _apply_autocrop(src, out_path, first_typing_s=None, idle_cut_s=None,
+                    solve_span_s=None, first_action_label=None):
     """Autocrop `src` -> `out_path`, returning the path to use downstream
-    (`out_path` when a cut was rendered, else `src`). Never raises."""
+    (`out_path` when a cut was rendered, else `src`). Never raises.
+
+    EVERY cut is logged (leading cut + source, each static cut + reason,
+    coverage vs the solve span) and recorded in LAST_POLISH['autocrop'] so
+    the runner can copy it into the artifact debug log — the rerun-#3
+    truncation was silent in the artifact because only stdout carried it."""
     try:
         if os.environ.get("AUTOCROP", "on").lower() in ("off", "0", "false"):
+            print("[autocrop] skipped: AUTOCROP=off")
+            LAST_POLISH.update(autocrop={"cut_s": 0.0, "skipped": "AUTOCROP=off"})
             return src
-        segments = _autocrop_keep_segments(src, first_typing_s, idle_cut_s)
+        segments, detail = _autocrop_keep_segments(
+            src, first_typing_s, idle_cut_s, solve_span_s, first_action_label)
         if not segments:
+            print(f"[autocrop] no cut: {detail.get('reason_no_cut')} "
+                  f"(dur={detail.get('duration_s')}s)")
+            LAST_POLISH.update(autocrop={**detail, "cut_s": 0.0,
+                                         "segments": []})
             return src
         if _autocrop_render(src, segments, out_path):
             dur0 = _probe_duration(src)
             dur1 = _probe_duration(out_path)
             print(f"[autocrop] cut {dur0 - dur1:.1f}s "
-                  f"({dur0:.1f}s -> {dur1:.1f}s) segments={segments}")
-            LAST_POLISH.update(autocrop={"cut_s": round(dur0 - dur1, 1),
+                  f"({dur0:.1f}s -> {dur1:.1f}s) "
+                  f"leading_cut={detail.get('leading_cut_s')}s "
+                  f"source={detail.get('leading_cut_source')} "
+                  f"static_cuts={detail.get('static_cuts')} "
+                  f"segments={[(round(a, 1), round(b, 1)) for a, b in segments]} "
+                  f"kept={detail.get('kept_s')}s "
+                  f"coverage={detail.get('coverage_ratio')} "
+                  f"of solve_span={detail.get('solve_span_s')}s "
+                  f"guard_clamped={detail.get('guard_clamped')}")
+            LAST_POLISH.update(autocrop={**detail,
+                                         "cut_s": round(dur0 - dur1, 1),
                                          "segments": [[round(a, 1), round(b, 1)]
                                                       for a, b in segments]})
             return out_path
+        print("[autocrop] render failed, keeping source")
+        LAST_POLISH.update(autocrop={**detail, "cut_s": 0.0,
+                                     "render_failed": True,
+                                     "segments": []})
         return src
     except Exception as e:
         print(f"[autocrop] skipped: {str(e)[:160]}")
@@ -1130,7 +1239,8 @@ def _apply_autocrop(src, out_path, first_typing_s=None, idle_cut_s=None):
 
 
 def polish_gameplay(src, out_path, crf=17, first_typing_s=None, idle_cut_s=None,
-                    autocrop=True):
+                    autocrop=True, solve_span_s=None,
+                    first_action_label=None):
     """Full-frame 1920x1080 polish. Cursor overlay is OFF by default.
 
     Set CURSOR_OVERLAY=on explicitly to re-enable the drawn cursor.
@@ -1143,9 +1253,14 @@ def polish_gameplay(src, out_path, crf=17, first_typing_s=None, idle_cut_s=None,
     Autocrop (default on, AUTOCROP=off to disable) applies ONLY to the
     gameplay clip passed here — never to intro/hints/answer card clips,
     which are separate clips assembled later. It cuts leading idle before
-    the first keystroke (prefer `idle_cut_s`, else `first_typing_s - 1s`
-    safety margin, else first sustained board change from frame diffs) and
+    the first player action (prefer `idle_cut_s`, else `first_typing_s - 1s`
+    safety margin where `first_typing_s` is the RECORDING-relative first
+    action — keystroke for typing games, first swap for waffle, first pick
+    for colorfle — else first sustained board change from frame diffs) and
     mid-recording static waits >30 s (kept as a 2 s head + 0.5 s crossfade).
+    When `solve_span_s` (START->shot_win) is given, the kept footage is
+    never cut below 50% of the solve span (coverage guard). Every cut is
+    logged via _apply_autocrop.
     """
     import subprocess
     import tempfile
@@ -1160,7 +1275,8 @@ def polish_gameplay(src, out_path, crf=17, first_typing_s=None, idle_cut_s=None,
             # the artifact as a stray video.
             crop_tmp = str(_QPPath(tempfile.mkdtemp(prefix="autocrop_")) /
                            "cropped.mp4")
-            cropped = _apply_autocrop(src, crop_tmp, first_typing_s, idle_cut_s)
+            cropped = _apply_autocrop(src, crop_tmp, first_typing_s, idle_cut_s,
+                                      solve_span_s, first_action_label)
             if cropped != src:
                 src = cropped
             else:

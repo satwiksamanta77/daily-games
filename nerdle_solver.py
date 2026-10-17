@@ -287,6 +287,44 @@ _DEBUG_LOG = None   # Path to videos/nerdle/debug_<date>.log
 _REC_T0 = None      # time.time() when the recording/mode loop started
 _FIRST_TYPE_T = None  # seconds from _REC_T0 to the first successful typing
 SERVED = {}         # mode_id -> served-date evidence (see SERVED_JS)
+PLAYED = {}         # mode_id -> equations ACTUALLY typed/submitted on site
+
+
+def equations_report(played_by_mode, official_by_mode):
+    """Build the result.json equations block from PLAYED equations.
+
+    `equations` reports what was actually played on the site (the solver's
+    typed guesses, which converge on the site's own solutions via game
+    feedback) — NEVER the official list when they differ. Rerun #3 reported
+    the official answers for 5/9 modes (micro, minibi, quad, speed,
+    instant) although the site's solutions were what was played.
+    `equations_official` records the target-date official list alongside,
+    with a note, so a mismatch is explicit evidence (served puzzle !=
+    official list), not a silent substitution. Pure function (unit-tested).
+    """
+    equations = {}
+    official_out = {}
+    for mid, played in (played_by_mode or {}).items():
+        equations[str(mid)] = [str(e) for e in (played or [])]
+        official_out[str(mid)] = [str(e) for e in
+                                  ((official_by_mode or {}).get(mid) or [])]
+    for mid in (official_by_mode or {}):
+        if str(mid) not in equations:
+            equations[str(mid)] = []
+        if str(mid) not in official_out:
+            official_out[str(mid)] = [str(e) for e in
+                                      (official_by_mode.get(mid) or [])]
+    return {
+        "equations": equations,
+        "equations_official": official_out,
+        "equations_note": (
+            "equations = equations ACTUALLY PLAYED on the site "
+            "(typed guesses converging on the site's own solutions); "
+            "equations_official = target-date official list. When they "
+            "differ, the site served a different puzzle than the official "
+            "list (see served.matches_target_official) — the played "
+            "equations are the true solve, never the official ones."),
+    }
 
 
 def _nlog(msg):
@@ -307,6 +345,7 @@ def _mark_first_type():
     global _FIRST_TYPE_T
     if _FIRST_TYPE_T is None and _REC_T0 is not None:
         _FIRST_TYPE_T = time.time() - _REC_T0
+        _nlog(f"START->first-typing {_FIRST_TYPE_T:.1f}s")
 
 
 def compute_nerdle_chapter_starts(segments):
@@ -914,27 +953,54 @@ async def play_mode(page, mode, script_dir, official=None):
         await sweep_popups(page, tag=f":{mode['id']}")
 
         if mode["id"] == "instant":
-            # hint row is the pre-given starter; exactly one guess allowed
+            # hint row is the pre-given starter; exactly one guess allowed.
+            # Fix-loop iter 4: instant used to claim typed=1/won with ZERO
+            # logged guesses (its guess bypassed the per-guess path). It now
+            # logs through the same per-guess path as every other mode, and
+            # PLAYED records the equation only if it was actually submitted.
             await focus_grid(page)
             if eqs:
+                _submitted = False
                 if state:
                     prev = [eval_count(g) for g in state]
-                    await type_guess(page, eqs[0], cols, prev)
+                    _st, _ct, _ok = await type_guess(page, eqs[0], cols, prev)
+                    _submitted = bool(_ok)
                 else:
+                    _prev0 = [eval_count(g) for g in (state or [])]
                     await page.keyboard.type(eqs[0], delay=200)
                     await page.keyboard.press("Enter")
                     await page.wait_for_timeout(3000)
+                    try:
+                        _fresh = await read_state(page, cols, tries=2)
+                        _submitted = bool(_fresh) and (
+                            [eval_count(g) for g in _fresh] != _prev0
+                            or await check_win())
+                    except Exception:
+                        _submitted = False
                 _mark_first_type()
-                typed = 1
+                if _submitted:
+                    typed = 1
+                    PLAYED[mode["id"]] = [eqs[0]]
+                    _nlog(f"[{mode['id']}] guess 1: {eqs[0]} "
+                          f"(instant hint solve; submitted)")
+                else:
+                    _nlog(f"[{mode['id']}] guess 1: {eqs[0]} "
+                          f"NOT submitted (board did not react); "
+                          f"not counted as played")
+                    PLAYED[mode["id"]] = []
         elif not state:
             print(f"[{mode['id']}] no pb-grid found, legacy direct typing")
             await focus_grid(page)
+            PLAYED[mode["id"]] = []
             for eq in eqs:
                 await page.keyboard.type(eq, delay=200)
                 _mark_first_type()
                 await page.keyboard.press("Enter")
                 await page.wait_for_timeout(2500)
                 typed += 1
+                PLAYED[mode["id"]].append(eq)
+                _nlog(f"[{mode['id']}] guess {typed}: {eq} "
+                      f"(legacy direct typing)")
         else:
             # flush pre-filled starter row (quad/minibi/speed): typing before
             # Enter truncates/discards the first guess
@@ -960,6 +1026,9 @@ async def play_mode(page, mode, script_dir, official=None):
                         pass
                     state = await read_state(page, cols) or state
             hists, typed_guesses = _seed_history(state)
+            # Equations WE typed this run (typed_guesses also holds
+            # pre-filled starter rows from load; PLAYED must be ours only).
+            played_here = []
             usable0 = {i: len(g["rows"]) for i, g in enumerate(state)}
             prev_counts = [eval_count(g) for g in state]
             official_i = 0
@@ -1055,6 +1124,7 @@ async def play_mode(page, mode, script_dir, official=None):
                     break
                 typed += 1
                 typed_guesses.append(nxt)
+                played_here.append(nxt)
                 for b, g in enumerate(state):
                     before = prev[b] if b < len(prev) else -1
                     c = counts[b] if b < len(counts) else before
@@ -1068,6 +1138,7 @@ async def play_mode(page, mode, script_dir, official=None):
                 prev_counts = counts
                 _nlog(f"[{mode['id']}] guess {typed}: {nxt} "
                       f"rows_left~{rows_left - 1} hist={len(hists.get(first_open, []))}")
+            PLAYED[mode["id"]] = list(played_here)
             if not signal:
                 fresh = await read_state(page, cols, tries=3)
                 if fresh and len(fresh) >= boards_n and all(
@@ -1260,6 +1331,21 @@ async def main():
         await browser.close()
 
     # verify gate: every mode must show a REAL on-page win (WIN_JS)
+    # Fix-loop iter 4: a mode with zero LOGGED guesses must NOT claim won
+    # (rerun #3 instant: typed 1, won=True, zero guess lines in a 41 s
+    # gap). Such a mode is UNPROVEN: demoted, cut from chapters, fails
+    # the run unless it is the single allowed miss.
+    _unproven = []
+    _results2 = []
+    for _mid, _t, _e, _s in results:
+        if _s == "won" and not PLAYED.get(_mid):
+            _unproven.append(_mid)
+            _nlog(f"[nerdle] mode {_mid} claims won with ZERO logged "
+                  f"guesses — marking UNPROVEN (not counted as won)")
+            _results2.append((_mid, _t, _e, "unproven"))
+        else:
+            _results2.append((_mid, _t, _e, _s))
+    results = _results2
     won_modes = [mid for mid, t, e, s in results if s == "won"]
     weak = [(mid, t, e) for mid, t, e, s in results if s != "won"]
     failed = weak
@@ -1429,7 +1515,8 @@ async def main():
         mode_lines = []
         if isinstance(official, dict):
             for m in NERDLE_MODES:
-                eqs = official.get(m["id"]) or []
+                # Description lists what was PLAYED, not the official list.
+                eqs = PLAYED.get(m["id"]) or official.get(m["id"]) or []
                 if eqs:
                     mode_lines.append(f"{m['name']}: {' | '.join(eqs)}")
         chap_str = "\n".join(f"{int(s//60)}:{int(s%60):02d} {l}" for s, l in up_chapters)
@@ -1452,15 +1539,19 @@ async def main():
     # expected counts official equations only — they are NOT comparable,
     # so the evidence must not present them as a fraction: judge a mode by
     # signal == "won" only (see counts_note).
+    _eq_rep = equations_report(PLAYED, official if isinstance(official, dict) else {})
     _res_doc = {"game": "nerdle", "date": date_key, "solved": all_solved,
-         "modes": [{"id": mid, "typed": t, "expected": e, "signal": s}
+         "modes": [{"id": mid, "typed": t, "expected": e, "signal": s,
+                    "equations_played": list(PLAYED.get(mid) or []),
+                    "equations_official": list(
+                        (official or {}).get(mid) or [])}
                    for mid, t, e, s in results],
          "counts_note": ("typed counts probes+official guesses; expected "
                          "counts official equations only; they are NOT "
                          "comparable — judge a mode by signal=='won' only."),
          "chapters": [[round(float(s), 1), str(t)] for s, t in chapters],
-         "equations": {str(m["id"]): list((official or {}).get(m["id"]) or [])
-                       for m in NERDLE_MODES},
+         **_eq_rep,
+         "unproven_modes": _unproven,
          "served": SERVED,
          "first_typing_s": _FIRST_TYPE_T}
     (video_dir / f"result_{date_key}.json").write_text(_json.dumps(_res_doc, indent=1))

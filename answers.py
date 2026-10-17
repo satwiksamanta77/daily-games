@@ -683,7 +683,16 @@ def worldle_all_modes(d=None):
     facts {factCode:{category,question,answer,answers}},
     languages [{languageCode,percentage}], gdp {number, compare_answer,
     compare_candidates}, currency {code,name,nameChoices}, population,
-    size, flags [codes], available {mode: True | reason-string}.
+    size, flags [codes], available {mode: True | reason-string} with
+    ONE canonical key set (spokenLanguages, populationCurrency, area -
+    the same ids the runner's _WORLDLE_PLAY_ORDER uses; a previous
+    iteration used language/currency/size here, which made
+    avail.get() return None for those modes in the runner).
+    Also: geogrid {raw geogrid doc}, geogrid_url, boolean_facts
+    {key: bool} from geogrid factsInfo and politicalInfo minus the
+    excluded keys, boolean_texts {key: displayed-question text} when
+    extractable, gdp_lookup {normalized name: gdpPerCapita} and
+    size_lookup {normalized name: size} for the own country + borders.
     """
     d = d or target_date()
     import requests as _rq
@@ -719,6 +728,17 @@ def worldle_all_modes(d=None):
     facts_doc = _get(f"{base}/common/facts/{code.lower()}.json",
                      required=False) or {}
     landmarks_doc = _get(f"{base}/common/landmarks.json", required=False)
+    # Geogrid (boolean trivia question): try the geogrid path first,
+    # then the common/ variants — the exact prefix is not pinned by
+    # static source, so record which URL actually served the doc.
+    geogrid_doc, geogrid_url = None, None
+    for _gu in (f"{base}/geogrid/countries/{code.lower()}.json",
+                f"{base}/common/geogrid/countries/{code.lower()}.json",
+                f"{base}/common/geogrid/{code.lower()}.json"):
+        _gd = _get(_gu, required=False)
+        if isinstance(_gd, dict) and _gd:
+            geogrid_doc, geogrid_url = _gd, _gu
+            break
 
     def _city_name(c):
         names = c.get("names") or {}
@@ -764,6 +784,7 @@ def worldle_all_modes(d=None):
         borders.append({"code": bcode,
                         "name": brec.get("name") or bcode,
                         "gdpPerCapita": brec.get("gdpPerCapita"),
+                        "size": brec.get("size"),
                         "capital": bcap})
 
     landmark = None
@@ -790,6 +811,44 @@ def worldle_all_modes(d=None):
                 "question": tr.get("question") or "",
                 "answer": tr.get("answer") or "",
                 "answers": tr.get("answers") or []}
+
+    # Boolean trivia candidates: geogrid factsInfo ∪ politicalInfo
+    # booleans minus the excluded keys (the game never asks these).
+    _BOOL_EXCLUDE = {"top20ObesityRate", "hasNuclearWeapons",
+                     "sameSexMarriageLegal", "sameSexActivitiesIllegal",
+                     "hasAlcoholBan", "top20AlcoholConsumption"}
+    boolean_facts, boolean_texts = {}, {}
+    if isinstance(geogrid_doc, dict):
+        for _sec in ("factsInfo", "politicalInfo"):
+            _d = geogrid_doc.get(_sec) or {}
+            if not isinstance(_d, dict):
+                continue
+            for _k, _v in _d.items():
+                _bv, _q = None, None
+                if isinstance(_v, bool):
+                    _bv = _v
+                elif isinstance(_v, dict):
+                    for _bk in ("value", "answer", "bool", "isTrue"):
+                        if isinstance(_v.get(_bk), bool):
+                            _bv = _v.get(_bk)
+                            break
+                    for _qk in ("question", "text", "label", "prompt"):
+                        if isinstance(_v.get(_qk), str) and _v.get(_qk):
+                            _q = _v.get(_qk)
+                            break
+                if _bv is not None and _k not in _BOOL_EXCLUDE:
+                    boolean_facts[_k] = _bv
+                    if _q:
+                        boolean_texts[_k] = _q
+
+    def _nm(s):
+        return " ".join(str(s or "").lower().split())
+
+    gdp_lookup = {_nm(rec.get("name") or code): rec.get("gdpPerCapita")}
+    size_lookup = {_nm(rec.get("name") or code): rec.get("size")}
+    for _b in borders:
+        gdp_lookup[_nm(_b.get("name"))] = _b.get("gdpPerCapita")
+        size_lookup[_nm(_b.get("name"))] = _b.get("size")
 
     # GDP comparison question (locale canYOuGuessHigherGDP): "Among
     # {country} and its neighbours, which has the highest per-capita GDP?"
@@ -819,9 +878,9 @@ def worldle_all_modes(d=None):
         "no borders (game removal rule)")
     avail["populousCities"] = True if len(populous) >= 4 else (
         f"only {len(populous)} populated cities (<4, game removal rule)")
-    avail["language"] = True if len(languages) == 2 else (
+    avail["spokenLanguages"] = True if len(languages) == 2 else (
         f"{len(languages)} languages (!=2, game removal rule)")
-    avail["currency"] = True if rec.get("population") else (
+    avail["populationCurrency"] = True if rec.get("population") else (
         "no population (game removal rule)")
     avail["gdp"] = True if rec.get("gdpPerCapita") is not None else (
         "no gdpPerCapita (game removal rule)")
@@ -829,7 +888,7 @@ def worldle_all_modes(d=None):
     avail["trivia"] = True
     avail["landmark"] = True  # live-check: landmark image content-type
     avail["emblem"] = True  # live-check: shield content-type
-    avail["size"] = True
+    avail["area"] = True
     avail["summary"] = True
 
     cur = rec.get("currencyData") or {}
@@ -842,6 +901,12 @@ def worldle_all_modes(d=None):
             "gdp": {"number": rec.get("gdpPerCapita"),
                     "compare_answer": gdp_compare,
                     "compare_candidates": cands},
+            "geogrid": geogrid_doc or {},
+            "geogrid_url": geogrid_url,
+            "boolean_facts": boolean_facts,
+            "boolean_texts": boolean_texts,
+            "gdp_lookup": gdp_lookup,
+            "size_lookup": size_lookup,
             "currency": {"code": cur.get("code"), "name": cur.get("name"),
                          "nameChoices": cur.get("nameChoices") or []},
             "population": rec.get("population"),
@@ -1087,6 +1152,7 @@ def marveldle(d=None, mode="comics"):
     # pick-id is not the target date, the target puzzle is NOT published
     # yet - raise SystemExit so runner DEFERS. NEVER solve yesterday's
     # board and label it today (2026-10-16 HOWARD THE DUCK bug).
+    _pick_s = ""
     try:
         # pick-id endpoint returns plain text (not JSON), so fetch raw text.
         import requests as _rq2
@@ -1097,6 +1163,10 @@ def marveldle(d=None, mode="comics"):
         _want = f"{d.month}/{d.day}/{d.year}"
         if _want not in _pick_s:
             raise SystemExit(f"marveldle: pick-id {_pick_s!r} != target {_want} (not published yet, defer)")
+        # Gate PASS, logged explicitly with the pick-id value (fix-loop
+        # iter 4): rerun #3 proved the gate only by elimination (no
+        # SystemExit, no gate-error line). A pass must say so.
+        print(f"[marveldle] pick-id gate PASS: pick-id={_pick_s!r} target={_want}")
     except SystemExit:
         raise
     except Exception as _e:
@@ -1150,7 +1220,7 @@ def marveldle(d=None, mode="comics"):
             if fb.get("isExact"):
                 return {"answer": seed.get("name"), "id": seed.get("id"),
                         "probes": probes, "date": d.isoformat(),
-                        "via": "live-first-try"}
+                        "via": "live-first-try", "pick_id": _pick_s}
             cands = _elim(cands, seed, fb)
             cands = [c for c in cands if c.get("id") not in tried]
         # Exhaustive (capped) exact-search: the elimination pass can strand
@@ -1164,7 +1234,8 @@ def marveldle(d=None, mode="comics"):
                 continue
             if fb.get("isExact"):
                 return {"answer": c.get("name"), "id": c.get("id"),
-                        "probes": probes, "date": d.isoformat(), "via": "live"}
+                        "probes": probes, "date": d.isoformat(), "via": "live",
+                        "pick_id": _pick_s}
         raise ValueError(f"no exact match among {min(len(cands), 400)} survivors")
     except SystemExit:
         raise
@@ -1177,7 +1248,8 @@ def marveldle(d=None, mode="comics"):
         cm = (e or {}).get("comics") if isinstance(e, dict) else None
         if isinstance(cm, dict) and cm.get("name"):
             return {"answer": cm["name"], "id": cm.get("id"), "probes": [],
-                    "date": d.isoformat(), "via": "snapshot"}
+                    "date": d.isoformat(), "via": "snapshot",
+                    "pick_id": _pick_s}
     except Exception:
         pass
     raise SystemExit(f"marveldle: no answer for {d.isoformat()}")
