@@ -262,8 +262,17 @@ def _nerdle_number_gate(served, api_numbers):
     return False, "all proven-mode served numbers/answers match API", per_mode
 
 
+# Mode names that can prefix a Nerdle header logo line
+# ("maxi nerdle. #1368"). Any OTHER word before "nerdle" ("the",
+# "play", ...) is chrome wording, NOT a mode prefix — it counts as
+# no prefix (classic's header), never as another mode's header.
+_NERDLE_HEADER_MODE_PREFIXES = frozenset(
+    ("classic", "micro", "mini", "midi", "maxi", "minibi", "quad",
+     "speed", "instant"))
+
+
 def _nerdle_own_header_from_probe(probe, mode_id=None):
-    """The mode's OWN header logo line (iter 15, P0).
+    """The mode's OWN header logo line (iter 15, P0; iter 16 relaxed).
 
     Frame-proven format (ANALYSIS11, gameplay g_20 / g_140): the page
     header carries `<mode> nerdle. #<n>` — classic `nerdle. #1732`,
@@ -275,6 +284,18 @@ def _nerdle_own_header_from_probe(probe, mode_id=None):
     counts — a bare `nerdle. #1733` on the mini page is classic's
     number leaking through shared chrome, NOT mini's header, and is
     rejected. Pure (unit-tested).
+
+    Iter-16 (ANALYSIS12 §2): the iter-15 matcher was a FULL-LINE
+    anchor (`^...$` per line) — it captured NOTHING on all 9 modes
+    even though frames show the headers, because the logo line in
+    the DOM is never alone on its line: it sits beside nav text,
+    or "nerdle." and "#1733" are split across lines, or the text
+    comes from textContent (innerText empty for the logo node).
+    The matcher is now a SEARCH on the whole element text
+    (`nerdle.?` + whitespace + `#` + digits, anywhere), and a
+    prefix only counts as a mode prefix when it IS a known mode
+    name — other leading words ("the nerdle. #1733") are chrome
+    wording, not a mode claim.
     """
     import re as _re
     probe = probe if isinstance(probe, dict) else {}
@@ -284,18 +305,22 @@ def _nerdle_own_header_from_probe(probe, mode_id=None):
         if not isinstance(ent, dict):
             continue
         text = str(ent.get("text") or "")
-        for line in text.splitlines():
-            m = _re.match(
-                r"\s*([a-z]+)?\s*nerdle\.?\s*#\s*(\d{1,6})\s*$",
-                line, _re.IGNORECASE)
-            if not m:
-                continue
-            prefix = (m.group(1) or "").lower()
+        # finditer, not search: one container entry can hold SEVERAL
+        # mode logo lines (nav listing every variant); the mode's own
+        # line may not be the first match in that entry.
+        for m in _re.finditer(
+                r"([a-z]+)?\s*nerdle\.?\s*#\s*(\d{1,6})",
+                text, _re.IGNORECASE):
+            raw_prefix = (m.group(1) or "").lower()
+            # Only a KNOWN mode name is a mode prefix; any other word
+            # is chrome wording and counts as no prefix (classic).
+            prefix = raw_prefix if raw_prefix in _NERDLE_HEADER_MODE_PREFIXES \
+                else ""
             own.append({"number": int(m.group(2)),
                         "prefix": prefix,
                         "tag": str(ent.get("tag") or ""),
                         "cls": str(ent.get("cls") or ""),
-                        "text": line.strip()})
+                        "text": m.group(0).strip()})
     if not own:
         return None, None
     if want:
@@ -731,24 +756,68 @@ SERVED_JS = """
   // A container whose innerText merely CONTAINS the line also
   // matches, so the Python side prefers the SMALLEST text (the logo
   // element itself) — entries are ordered shortest-first.
+  // Iter-16 (P0) diagnostics + looser match: visibility via
+  // getBoundingClientRect, NOT offsetParent — a position:fixed header
+  // bar has offsetParent === null in Chrome, so the iter-15
+  // offsetParent filter may have silently skipped the very header
+  // carrying the logo line (collection-stage failure; the exact DOM
+  // cause is unproven, so the probe now returns probe_diag proving
+  // which filter excludes what). Text: innerText first, textContent
+  // fallback (innerText is empty for some SVG / display:contents
+  // nodes). Match: search WITHIN the line, not full-line ^...$ —
+  // the Python side applies the own-header prefix discipline on the
+  // matched substring.
+  const probe_diag = {elements_total: 0, elements_visible_rect: 0,
+    elements_offsetparent_visible: 0, header_els_count: headerEls.length,
+    logo_selector_matched: false, own_headers_raw_count: 0,
+    hash_line_samples: [], nerdle_text_samples: []};
   const own_headers = [];
-  for (const e of Array.from(document.querySelectorAll('body *'))) {
-    if (own_headers.length >= 40) break;
-    if (!e || e.offsetParent === null) continue;
-    const t = (e.innerText || '');
+  const _all = Array.from(document.querySelectorAll('body *'));
+  probe_diag.elements_total = _all.length;
+  for (const e of _all) {
+    if (!e) continue;
+    let visRect = false;
+    try { const _r = e.getBoundingClientRect();
+      visRect = _r.width > 0 && _r.height > 0; } catch (_err) {}
+    if (visRect) probe_diag.elements_visible_rect++;
+    if (e.offsetParent !== null)
+      probe_diag.elements_offsetparent_visible++;
+    if (!visRect) continue;
+    const t = (e.innerText || e.textContent || '');
+    if (t) {
+      if (probe_diag.hash_line_samples.length < 8) {
+        for (const l of t.split('\\n')) {
+          if (l.includes('#') && /[0-9]/.test(l)) {
+            probe_diag.hash_line_samples.push(l.trim().slice(0, 120));
+            if (probe_diag.hash_line_samples.length >= 8) break;
+          }
+        }
+      }
+      if (probe_diag.nerdle_text_samples.length < 8 && /nerdle/i.test(t)) {
+        probe_diag.nerdle_text_samples.push(
+          {tag: e.tagName || '', cls: String(e.className || '').slice(0, 80),
+           text: t.split('\\n').join(' ').replace(/  +/g, ' ').trim().slice(0, 120)});
+      }
+    }
     if (!t || t.length > 300) continue;
     const lines = t.split('\\n').filter(l =>
-      /^\\s*([a-z]+\\s+)?nerdle\\.?\\s*#\\s*\\d{1,6}\\s*$/i.test(l));
-    if (lines.length) own_headers.push(
+      /([a-z]+\\s+)?nerdle\\.?\\s*#\\s*\\d{1,6}/i.test(l));
+    if (lines.length && own_headers.length < 40) own_headers.push(
       {tag: e.tagName || '', cls: String(e.className || ''),
        text: lines.join('\\n')});
   }
   own_headers.sort((a, b) => a.text.length - b.text.length);
+  probe_diag.logo_selector_matched = own_headers.length > 0;
+  probe_diag.own_headers_raw_count = own_headers.length;
   const hash_texts = [];
   for (const e of Array.from(document.querySelectorAll('body *'))) {
     if (hash_texts.length >= 20) break;
-    if (!e || e.offsetParent === null) continue;
-    const t = (e.innerText || '').trim();
+    if (!e) continue;
+    let visRect = false;
+    try { const _r = e.getBoundingClientRect();
+      visRect = _r.width > 0 && _r.height > 0; } catch (_err) {}
+    if (!visRect) continue;
+    const t = (e.innerText || e.textContent || '').trim();
     if (t && /#\\s*\\d/.test(t) && t.length <= 200) hash_texts.push(t);
   }
   const data_attrs = [];
@@ -767,6 +836,7 @@ SERVED_JS = """
                            own_headers: own_headers,
                            hash_texts: hash_texts,
                            data_attrs: data_attrs,
+                           probe_diag: probe_diag,
                            url: window.location.href,
                            body_text: (document.body.innerText || '')
                              .slice(0, 8000) },
@@ -1112,18 +1182,24 @@ CLICK_POWER_JS = """
 
 
 async def _grid_superscript_count(page, ch):
-    """Count leaf grid cells whose text is exactly `ch` (²/³).
+    """Count leaf grid cells whose text CONTAINS `ch` (²/³).
 
     Leaf-only: a container's innerText would count the same cell once
     per ancestor. Returns None when the probe fails (unverified, not
     zero). Used to VERIFY a power-key press landed in a cell.
+
+    Iter-16 (ANALYSIS12 §4): the site renders ² as a superscript
+    INSIDE the digit cell (cell text `1²`), so the old exact-match
+    (`=== ch`) count stayed 0 even when entry worked — a false
+    "FAILED / row will stall" alarm on a maxi board that then played
+    `1²+67+8=76` and won. CONTAINS is the correct predicate.
     """
     try:
         return await page.evaluate("""(ch) => {
           let n = 0;
           for (const e of document.querySelectorAll('div.pb-grid *')) {
             if (e.children.length === 0 &&
-                (e.innerText || '').trim() === ch) n++;
+                (e.innerText || '').includes(ch)) n++;
           }
           return n;
         }""", ch)
@@ -1454,6 +1530,22 @@ async def play_mode(page, mode, script_dir, official=None):
         # Fresh-board reset (fix-loop iter 6): never replay into a
         # completed board restored from committed storage state.
         await _nerdle_fresh_board(page, mode)
+        # Iter-16 (P2): stage timing for the board-reset -> first-guess
+        # window. Iter-15 showed a 37s SILENT gap here (board reset
+        # done 19:50:35, first guess 19:51:12) with ZERO log lines, so
+        # the next artifact could not say what the 37s was. Every
+        # stage below logs its elapsed time; the first solver-worker
+        # call (blocking POST, timeout 30, retry backoff) is timed
+        # because it is the prime suspect for the gap.
+        _t_pre = time.time()
+        _t_last = [_t_pre]
+
+        def _stage(name):
+            _now = time.time()
+            _nlog(f"[{mode['id']}] pre-guess stage {name}: "
+                  f"+{_now - _t_last[0]:.1f}s "
+                  f"(total {_now - _t_pre:.1f}s since board reset)")
+            _t_last[0] = _now
         # Fill the frame: the board column is narrow on wide viewports,
         # so zoom per mode (multi-board modes stay at 1.0).
         _zoom = {"classic": 1.2, "micro": 1.35, "mini": 1.3, "midi": 1.25,
@@ -1464,20 +1556,45 @@ async def play_mode(page, mode, script_dir, official=None):
             print(f"[{mode['id']}] zoom {_zoom}")
         except Exception:
             pass
+        _stage("zoom")
+        # Iter-16: the old fixed 4x(1s + sweep) loop burned 4s+ of pure
+        # idle even when no popup ever appeared. Sweep until two
+        # consecutive sweeps report no action (sweep reports acted=True
+        # whenever it dismisses anything, including a splash), waiting
+        # 1s only after a sweep that acted.
+        _idle_sweeps = 0
         for _ in range(4):
-            await page.wait_for_timeout(1000)
-            await sweep_popups(page, tag=f":{mode['id']}")
-        # popups block input: intro/about splash (Escape), CMP consent (frames)
+            _acted = await sweep_popups(page, tag=f":{mode['id']}")
+            _stage("sweep")
+            if not _acted:
+                _idle_sweeps += 1
+                if _idle_sweeps >= 2:
+                    break
+            else:
+                _idle_sweeps = 0
+                await page.wait_for_timeout(1000)
+        # Iter-16: the old blind 2x(Escape + 400ms) pressed Escape even
+        # with no splash on screen. Press Escape only while the splash
+        # is actually present.
         for _ in range(2):
+            try:
+                _splash = bool(await page.evaluate(SPLASH_JS))
+            except Exception:
+                _splash = False
+            if not _splash:
+                break
             try:
                 await page.keyboard.press("Escape")
             except Exception:
                 pass
             await page.wait_for_timeout(400)
+        _stage("escape")
         await accept_cookies(page)
         await dismiss_modals(page, has_grid=True)
         await accept_cookies(page)
+        _stage("cookies/modals")
         state = await read_state(page, cols, tries=6)
+        _stage(f"read_state state={'found' if state else 'empty'}")
         if not site_eqs:
             try:
                 for body in (await page.evaluate(FETCH_JS) or []):
@@ -1487,7 +1604,9 @@ async def play_mode(page, mode, script_dir, official=None):
                         print(f"[{mode['id']}] site answer via fetch -> {dec}")
             except Exception as e:
                 print(f"[{mode['id']}] fetch fallback failed: {e}")
+        _stage("fetch-fallback")
         gs_eqs = await read_game_state(page, cols)
+        _stage("gameState")
         try:
             page.remove_listener("response", on_resp)
         except Exception:
@@ -1508,6 +1627,7 @@ async def play_mode(page, mode, script_dir, official=None):
                 return False
 
         await sweep_popups(page, tag=f":{mode['id']}")
+        _stage("pre-loop sweep")
 
         if mode["id"] == "instant":
             # hint row is the pre-given starter; exactly one guess allowed.
@@ -1586,6 +1706,7 @@ async def play_mode(page, mode, script_dir, official=None):
             # Equations WE typed this run (typed_guesses also holds
             # pre-filled starter rows from load; PLAYED must be ours only).
             played_here = []
+            _suggest_timed = False  # iter-16 P2: time the 1st worker call
             usable0 = {i: len(g["rows"]) for i, g in enumerate(state)}
             prev_counts = [eval_count(g) for g in state]
             official_i = 0
@@ -1641,7 +1762,15 @@ async def play_mode(page, mode, script_dir, official=None):
                         nxt = eqs[official_i]
                         official_i += 1
                 else:
-                    raw = solver_suggest(mode["id"], hists.get(first_open, []))
+                    if not _suggest_timed:
+                        _stage("solver_suggest start")
+                        raw = solver_suggest(mode["id"],
+                                             hists.get(first_open, []))
+                        _stage("solver_suggest done")
+                        _suggest_timed = True
+                    else:
+                        raw = solver_suggest(mode["id"],
+                                             hists.get(first_open, []))
                     # ²/³ suggestions used to be dropped because keyboard.type
                     # could not enter them; type_equation clicks the board's
                     # own power keys now, so keep them.
@@ -1732,7 +1861,19 @@ async def play_mode(page, mode, script_dir, official=None):
             _served = await page.evaluate(SERVED_JS)
         except Exception:
             _served = {"error": "evaluate failed"}
-        _site_only = [e for e in (site_eqs + gs_eqs) if e]
+        # Iter-16 P3: dedupe the site solutions list (preserve order,
+        # drop exact duplicates) at the reader. site_eqs (answer
+        # files) and gs_eqs (localStorage gameState) each dedupe
+        # internally, but the same equation appears in BOTH sources
+        # (speed: '50-6*7=8' in the answer file AND in gameState),
+        # so the plain concatenation double-counted one board:
+        # ['50-6*7=8', '2+10-6=6', '50-6*7=8']. Downstream
+        # consumers (_nerdle_speed_matches, SERVED) must never see
+        # the same board twice.
+        _site_only = []
+        for _e in (site_eqs + gs_eqs):
+            if _e and _e not in _site_only:
+                _site_only.append(_e)
         _matches = None
         _speed_detail = ""
         if _site_only and official_eqs:
@@ -1753,6 +1894,26 @@ async def play_mode(page, mode, script_dir, official=None):
         # rejected (mini false-positive in iter-14).
         _hn, _hn_strategy, _hn_raw = _nerdle_header_number_from_probe(
             _served.get("header_probe"), mode_id=mode["id"])
+        # Iter-16 (ANALYSIS12 §2): log the RAW probe diagnostics on
+        # every served probe — the raw own_headers list, the
+        # probe_diag counters/samples, and #-line samples — so a
+        # future empty capture is diagnosable from the artifact
+        # instead of guessed. Bounded: first 5 own_headers, first
+        # 8 hash-line samples.
+        _probe = _served.get("header_probe") or {}
+        _diag = _probe.get("probe_diag") or {}
+        _nlog(f"[{mode['id']}] header probe diagnostics: "
+              f"own_headers={str(_probe.get('own_headers') or [])[:1200]} "
+              f"diag_total={_diag.get('elements_total')} "
+              f"vis_rect={_diag.get('elements_visible_rect')} "
+              f"vis_offsetparent="
+              f"{_diag.get('elements_offsetparent_visible')} "
+              f"header_els={_diag.get('header_els_count')} "
+              f"logo_matched={_diag.get('logo_selector_matched')} "
+              f"own_raw_count={_diag.get('own_headers_raw_count')} "
+              f"hash_lines={str(_diag.get('hash_line_samples') or [])[:800]} "
+              f"nerdle_samples="
+              f"{str(_diag.get('nerdle_text_samples') or [])[:800]}")
         SERVED[mode["id"]] = {
             "page_local": _served.get("page_local"),
             "page_iso": _served.get("page_iso"),
@@ -1760,6 +1921,7 @@ async def play_mode(page, mode, script_dir, official=None):
             "header_number": _hn,
             "header_strategy": _hn_strategy,
             "header_text": _hn_raw,
+            "header_probe_diag": _diag,
             "useLocalTime": _served.get("useLocalTime"),
             "gameState_dateish": _served.get("dateish"),
             "site_solutions": _site_only,

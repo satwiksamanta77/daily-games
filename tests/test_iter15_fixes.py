@@ -422,8 +422,11 @@ class TestWorldleLanguagePairing(unittest.TestCase):
         # click-fallback (iter-14: zero log lines).
         self.assertIn("elementFromPoint", SRC_RUNNER)
         self.assertIn("def _worldle_phrase_click_verify", SRC_RUNNER)
-        self.assertIn("_worldle_phrase_click_verify(page, gid, _picked",
-                      SRC_RUNNER)
+        # Caller passes page, gid, _picked (whitespace-normalised:
+        # the iter-16 call spans lines + passes _pairs_in; the
+        # normalised text has a space after "(").
+        self.assertIn("_worldle_phrase_click_verify( page, gid, _picked",
+                      " ".join(SRC_RUNNER.split()))
         self.assertIn('return ("click-fallback"', SRC_RUNNER)
 
 

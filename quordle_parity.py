@@ -1261,10 +1261,38 @@ def _apply_autocrop(src, out_path, first_typing_s=None, idle_cut_s=None,
             src, first_typing_s, idle_cut_s, solve_span_s, first_action_label,
             typing_windows=typing_windows)
         if not segments:
+            # Iter-16 P3: segments==[] is the "cut nothing" SENTINEL
+            # from _autocrop_keep_segments, NOT the footage actually
+            # kept — and detail['kept_s'] is still 0.0 on the
+            # early-return paths (e.g. Colordle: candidate cut 0.7s
+            # below the 1s threshold -> "removed 0.7s < 1s"). Logging
+            # the sentinel verbatim produced "segments=[] kept=0.0s
+            # coverage=None" for a video that kept the FULL source.
+            # Translate the sentinel into what was actually used:
+            # the whole source, no cut applied. Behaviour unchanged
+            # (still returns src); only the recorded log values.
             print(f"[autocrop] no cut: {detail.get('reason_no_cut')} "
                   f"(dur={detail.get('duration_s')}s)")
-            LAST_POLISH.update(autocrop={**detail, "cut_s": 0.0,
-                                         "segments": []})
+            _dur = float(detail.get("duration_s") or 0.0)
+            _span = detail.get("solve_span_s")
+            _cov = (round(_dur / float(_span), 3)
+                    if _span and float(_span) > 0 and _dur > 0 else None)
+            _src = detail.get("leading_cut_source")
+            _lc = detail.get("leading_cut_s")
+            LAST_POLISH.update(autocrop={
+                **detail, "cut_s": 0.0,
+                "segments": ([[0.0, round(_dur, 1)]] if _dur > 0 else []),
+                "kept_s": round(_dur, 1),
+                "coverage_ratio": _cov,
+                # Applied leading cut is 0: the candidate leading cut
+                # (if any) was computed but NOT applied.
+                "leading_cut_s": 0.0,
+                "leading_cut_source": (
+                    f"candidate leading_cut={_lc}s ({_src}) NOT applied: "
+                    f"{detail.get('reason_no_cut')}; no-op, full source kept"
+                    if _src else
+                    f"no cut ({detail.get('reason_no_cut')}); "
+                    f"full source kept")})
             return src
         if _autocrop_render(src, segments, out_path):
             dur0 = _probe_duration(src)
@@ -1285,9 +1313,25 @@ def _apply_autocrop(src, out_path, first_typing_s=None, idle_cut_s=None,
                                                       for a, b in segments]})
             return out_path
         print("[autocrop] render failed, keeping source")
-        LAST_POLISH.update(autocrop={**detail, "cut_s": 0.0,
-                                     "render_failed": True,
-                                     "segments": []})
+        # Same sentinel translation as the no-cut branch above: the
+        # output is the FULL source, so segments/kept/coverage must
+        # describe the full source, not the failed candidate cut.
+        # The failed candidate is preserved as segments_attempted.
+        _dur2 = float(detail.get("duration_s") or 0.0)
+        _span2 = detail.get("solve_span_s")
+        _cov2 = (round(_dur2 / float(_span2), 3)
+                 if _span2 and float(_span2) > 0 and _dur2 > 0 else None)
+        LAST_POLISH.update(autocrop={
+            **detail, "cut_s": 0.0, "render_failed": True,
+            "segments_attempted": [[round(a, 1), round(b, 1)]
+                                   for a, b in segments],
+            "segments": ([[0.0, round(_dur2, 1)]] if _dur2 > 0 else []),
+            "kept_s": round(_dur2, 1),
+            "coverage_ratio": _cov2,
+            "leading_cut_s": 0.0,
+            "leading_cut_source": (
+                "candidate cut NOT applied: render failed; "
+                "full source kept")})
         return src
     except Exception as e:
         print(f"[autocrop] skipped: {str(e)[:160]}")
