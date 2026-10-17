@@ -26,6 +26,12 @@ jobs:
       fail-fast: false
       matrix:
         game: [betweenle, colordle, colorfle, framed, searchle, phrazle, phoodle, contexto, semantle, worldle, worgle, countryle, nerdle]
+    # Workflow-honesty (fix-loop iter 10): game selection lives at the
+    # JOB level. A job whose game is not selected shows SKIPPED,
+    # never Success. The old step-level skip + always() upload/commit
+    # let unselected jobs report green with zero work (hollow-green).
+    # schedule-triggered runs always run (event_name clause).
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.game || '') == '' || inputs.game == matrix.game }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -42,7 +48,7 @@ jobs:
           npm init -y >/dev/null 2>&1 || true
           npm install --no-save seedrandom 2>&1 | tail -1 || true
       - name: Run game (fails on unsolved - saves artifact)
-        if: ${{ (inputs.game || '') == '' || inputs.game == matrix.game }}
+        id: run-game
         env:
           HEADLESS: 'true'
           TZ_OFFSET_MINUTES: '540'
@@ -55,8 +61,37 @@ jobs:
             HEADLESS=false xvfb-run -a python -u runner.py --game "$1";
           else python -u runner.py --game "$1"; fi; }
           RUN ${{ matrix.game }}
+      - name: Verify game produced output (fail on zero work)
+        id: verify-output
+        # Runs only when Run game SUCCEEDED (default success() condition).
+        # If Run game failed (unsolved), this step is skipped and the job
+        # stays failed while Upload still ships the failure artifact.
+        # A no-duplicate skip (result.json skipped=true, no fresh video)
+        # is legitimate auditable work and passes. Anything else with no
+        # result.json, or a fresh attempt with no video, FAILS the job.
+        run: |
+          python - <<'PYEOF'
+          import json, pathlib, sys
+          d = pathlib.Path("videos/${{ matrix.game }}")
+          res = d / "result.json"
+          if not res.is_file():
+              print(f"::error::Run game produced no result.json in {d} (zero auditable work)")
+              sys.exit(1)
+          try:
+              r = json.loads(res.read_text())
+          except Exception as e:
+              print(f"::error::result.json in {d} is not valid JSON: {e}")
+              sys.exit(1)
+          if r.get("skipped") is True:
+              print(f"verify-output: legit no-duplicate skip (evidence={r.get('evidence')})")
+              sys.exit(0)
+          if not list(d.glob("*.mp4")):
+              print(f"::error::Run game produced no video artifact in {d} (fresh attempt, no .mp4)")
+              sys.exit(1)
+          print(f"verify-output: result.json + video present in {d}")
+          PYEOF
       - name: Upload video artifact
-        if: always()
+        if: ${{ always() && steps.run-game.outcome != 'skipped' && steps.verify-output.outcome != 'failure' }}
         uses: actions/upload-artifact@v4
         with:
           name: video-${{ matrix.game }}
@@ -70,9 +105,9 @@ jobs:
             videos/${{ matrix.game }}/shot_win.png
             videos/${{ matrix.game }}/board_*.png
           retention-days: 7
-          if-no-files-found: warn
+          if-no-files-found: error
       - name: Commit database record
-        if: always()
+        if: ${{ always() && steps.run-game.outcome != 'skipped' && steps.verify-output.outcome != 'failure' }}
         run: |
           git config user.name "video-bot"
           git config user.email "video-bot@users.noreply.github.com"
@@ -92,6 +127,12 @@ jobs:
       fail-fast: false
       matrix:
         game: [waffle, canuckle, globle, batterup, marveldle]
+    # Workflow-honesty (fix-loop iter 10): game selection lives at the
+    # JOB level. A job whose game is not selected shows SKIPPED,
+    # never Success. The old step-level skip + always() upload/commit
+    # let unselected jobs report green with zero work (hollow-green).
+    # schedule-triggered runs always run (event_name clause).
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.game || '') == '' || inputs.game == matrix.game }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -108,7 +149,7 @@ jobs:
           npm init -y >/dev/null 2>&1 || true
           npm install --no-save seedrandom 2>&1 | tail -1 || true
       - name: Run game (fails on unsolved - saves artifact)
-        if: ${{ (inputs.game || '') == '' || inputs.game == matrix.game }}
+        id: run-game
         env:
           HEADLESS: 'true'
           TZ_OFFSET_MINUTES: '540'
@@ -121,8 +162,37 @@ jobs:
             HEADLESS=false xvfb-run -a python -u runner.py --game "$1";
           else python -u runner.py --game "$1"; fi; }
           RUN ${{ matrix.game }}
+      - name: Verify game produced output (fail on zero work)
+        id: verify-output
+        # Runs only when Run game SUCCEEDED (default success() condition).
+        # If Run game failed (unsolved), this step is skipped and the job
+        # stays failed while Upload still ships the failure artifact.
+        # A no-duplicate skip (result.json skipped=true, no fresh video)
+        # is legitimate auditable work and passes. Anything else with no
+        # result.json, or a fresh attempt with no video, FAILS the job.
+        run: |
+          python - <<'PYEOF'
+          import json, pathlib, sys
+          d = pathlib.Path("videos/${{ matrix.game }}")
+          res = d / "result.json"
+          if not res.is_file():
+              print(f"::error::Run game produced no result.json in {d} (zero auditable work)")
+              sys.exit(1)
+          try:
+              r = json.loads(res.read_text())
+          except Exception as e:
+              print(f"::error::result.json in {d} is not valid JSON: {e}")
+              sys.exit(1)
+          if r.get("skipped") is True:
+              print(f"verify-output: legit no-duplicate skip (evidence={r.get('evidence')})")
+              sys.exit(0)
+          if not list(d.glob("*.mp4")):
+              print(f"::error::Run game produced no video artifact in {d} (fresh attempt, no .mp4)")
+              sys.exit(1)
+          print(f"verify-output: result.json + video present in {d}")
+          PYEOF
       - name: Upload video artifact
-        if: always()
+        if: ${{ always() && steps.run-game.outcome != 'skipped' && steps.verify-output.outcome != 'failure' }}
         uses: actions/upload-artifact@v4
         with:
           name: video-${{ matrix.game }}
@@ -136,9 +206,9 @@ jobs:
             videos/${{ matrix.game }}/shot_win.png
             videos/${{ matrix.game }}/board_*.png
           retention-days: 7
-          if-no-files-found: warn
+          if-no-files-found: error
       - name: Commit database record
-        if: always()
+        if: ${{ always() && steps.run-game.outcome != 'skipped' && steps.verify-output.outcome != 'failure' }}
         run: |
           git config user.name "video-bot"
           git config user.email "video-bot@users.noreply.github.com"
