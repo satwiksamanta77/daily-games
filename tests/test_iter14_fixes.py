@@ -417,6 +417,10 @@ class _FakePhrasePage:
                     "empty_boxes": list(self.broad_slots)}
         if "args.sel" in js:
             return False  # narrow slot-verify: nothing placed
+        if js.strip().startswith("(phrase)"):
+            # Iter-15 _verify also consults the any-slot check
+            # (_worldle_phrase_slot_contains): nothing placed.
+            return False
         return {"chips": [
             {"code": "ara", "phrase": "اسمي", "draggable": False,
              "x": 100.0, "y": 100.0},
@@ -461,9 +465,12 @@ class TestWorldleLanguageSlotProbe(unittest.TestCase):
             pg, "worldle", self.PICKED, self.CODES, self.NAMES,
             self.PROMPTS, "2026-10-18")
         # Drag attempted but nothing placed (fake never places) ->
-        # honest partial naming the drag failure, NOT a slot-less
-        # partial and NOT a click-fallback.
-        self.assertEqual(status, "partial")
+        # honest click-fallback naming the drag failure, NOT a
+        # slot-less partial. Iter-15 SUPERSEDES the iter-14
+        # expectation of "partial" here: drag failure must now
+        # return "click-fallback" so the caller reaches the
+        # click-verify path (iter-14: zero log lines, unreachable).
+        self.assertEqual(status, "click-fallback")
         self.assertIn("phrase drag failed", detail)
         self.assertGreater(pg.mouse.moves, 0)
 

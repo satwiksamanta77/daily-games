@@ -1168,6 +1168,67 @@ def _enable_flutter_semantics(page):
         return False
 
 
+def _dismiss_teuteuf_banner(page):
+    """Dismiss the "Teuteuf Edu is here!" banner (iter-15 P3).
+
+    The banner overlaps the page header in every Worldle frame and
+    was never dismissed by _close_modals. Best-effort: click the
+    banner's own close/dismiss control; if it has none, hide the
+    smallest banner container (height-capped, so a page-level
+    container is never hidden). Never raises; a no-op when the
+    banner is absent."""
+    try:
+        res = page.evaluate("""/* TEUTEUF-BANNER-DISMISS */
+          () => {
+          const vis = e => e && e.offsetParent !== null;
+          const cands = Array.from(document.querySelectorAll('body *'))
+            .filter(vis)
+            .filter(e => (e.innerText || '').includes('Teuteuf Edu'));
+          if (!cands.length) return 'absent';
+          cands.sort((a, b) => (a.innerText || '').length -
+            (b.innerText || '').length);
+          const leaf = cands[0];
+          let node = leaf;
+          for (let d = 0; d < 6 && node; d++) {
+            const btns = node.querySelectorAll
+              ? Array.from(node.querySelectorAll(
+                  'button, [role=button], [aria-label], a'))
+              : [];
+            const close = btns.find(b => {
+              const t = (((b.getAttribute('aria-label') || '') + ' ' +
+                (b.getAttribute('title') || '') + ' ' +
+                (b.textContent || '')).trim().toLowerCase());
+              return t === 'x' || t === '✕' || t === '×' ||
+                t === 'close' || t.includes('dismiss') ||
+                t.includes('close');
+            });
+            if (close && vis(close)) {
+              close.click();
+              return 'closed-via-button';
+            }
+            node = node.parentElement;
+          }
+          let box = leaf;
+          for (let d = 0; d < 4 && box.parentElement; d++) {
+            const r = box.getBoundingClientRect();
+            if (r.height > 0 && r.height <= 300) {
+              box.style.setProperty('display', 'none', 'important');
+              return 'hidden-container';
+            }
+            box = box.parentElement;
+          }
+          return 'found-no-close';
+        }""")
+    except Exception:
+        return
+    if res not in ("absent", None, ""):
+        try:
+            _dbg(getattr(page, "_qp_gid", "banner"),
+                 f"teuteuf edu banner: {res}")
+        except Exception:
+            pass
+
+
 def _close_modals(page, _force=False):
     """One modal sweep per page state (DEDUP, fix-loop iter 3).
 
@@ -1186,6 +1247,7 @@ def _close_modals(page, _force=False):
     except Exception:
         pass
     _sem = _enable_flutter_semantics(page)
+    _dismiss_teuteuf_banner(page)
     _dismiss_dialogs(page, rounds=2)
     # colorfle/how-to X is a bare span/div — click top-right corner region
     try:
@@ -4460,13 +4522,38 @@ def _betweenle_attempt_submit(page, gid, g, cnt_before):
     return _verdict, _cnt1
 
 
+def _betweenle_stats_won(counters, ans):
+    """Pure win check from the game's own counters (iter-15 P3):
+    the stats panel word equals the answer. The counters are readable
+    in-loop without Flutter semantics; the stats panel shows the
+    winning word the moment the winning guess lands."""
+    try:
+        sw = str((counters or {}).get("stats_word") or "").strip()
+    except Exception:
+        return False
+    return bool(sw) and bool(ans) and sw.upper() == str(ans).strip().upper()
+
+
 def _betweenle_won_after_guess(page, ans):
-    """Win check after one submitted guess (iter-14 P3).
+    """Win check after one submitted guess (iter-14 P3, iter-15 fix).
 
     Iter-13 played one extra guess (HIKER) on the already-won board:
     the retry chain fired on a post-win no_change because nothing
-    checked the win between guesses. Read-only wrapper over
-    _strict_win — never raises. Returns (won_bool, evidence)."""
+    checked the win between guesses. Iter-14 checked _strict_win
+    after each guess, but _strict_win reads Flutter semantics and
+    _enable_flutter_semantics only runs AFTER the loop — in-loop the
+    win was invisible, so HIKER was still typed even though the
+    bot's own counters already showed stats='BIKER' at the win.
+    Iter-15: check stats_word == answer FIRST (readable in-loop, no
+    semantics needed), then _strict_win. Read-only — never raises.
+    Returns (won_bool, evidence)."""
+    try:
+        cnt = _betweenle_counters(page) or {}
+    except Exception:
+        cnt = {}
+    if _betweenle_stats_won(cnt, ans):
+        return True, (f"stats_word={cnt.get('stats_word')!r} == answer "
+                      "(game counters; no semantics needed)")
     try:
         won, ev = _strict_win(page, ans)
     except Exception:
@@ -4837,6 +4924,7 @@ def _install_live_day_probe(page):
                     seen = _LIVE_DAY.setdefault("hosts", {})
                     if host not in seen:
                         seen[host] = iso
+                        _LIVE_DAY.setdefault("urls", {})[host] = url
                 return
             iso = m.group(1)
             host = url.split("/")[2] if "//" in url else url
@@ -4847,9 +4935,14 @@ def _install_live_day_probe(page):
                 pass
             # Keep the FIRST date each host asked for; later calls are usually
             # history/stats fetches for neighbouring days.
+            # Iter-15: also keep the FIRST URL per host — the provenance
+            # behind every live-day reading (ANALYSIS11: the Semantle
+            # 10-14 reading logged neither host nor URL, so the racy
+            # probe reading could not be traced to a request).
             seen = _LIVE_DAY.setdefault("hosts", {})
             if host not in seen:
                 seen[host] = iso
+                _LIVE_DAY.setdefault("urls", {})[host] = url
         except Exception:
             pass
 
@@ -4859,11 +4952,21 @@ def _install_live_day_probe(page):
         pass
 
 
-def _live_day_answer(gid, url=""):
-    """The date the site actually served, deduced from what it asked its API."""
+def _live_day_provenance(gid):
+    """(iso, host, url) behind the live-day reading for `gid`.
+
+    Iter-15: the probe keeps the FIRST date per host (later calls are
+    usually history/stats fetches), but until now the reading logged
+    neither host nor URL — when Semantle's probe read 2026-10-14 on a
+    page serving Game #1722 (Oct-18), nothing in the artifact said
+    WHICH request produced the reading. Every re-key decision now
+    logs this triple. Returns (None, None, None) when no reading.
+    """
     hosts = _LIVE_DAY.get("hosts") or {}
+    urls = _LIVE_DAY.get("urls") or {}
     if not hosts:
-        return _LIVE_DAY.get("date")
+        iso = _LIVE_DAY.get("date")
+        return (iso, None, None) if iso else (None, None, None)
     hints = {
         "searchle": ("searchle",),
         "semantle": ("semantle",),
@@ -4872,9 +4975,40 @@ def _live_day_answer(gid, url=""):
     }.get(gid, ())
     for host, iso in hosts.items():
         if any(h in host.lower() for h in hints):
-            return iso
+            return iso, host, urls.get(host)
     vals = set(hosts.values())
-    return vals.pop() if len(vals) == 1 else None
+    if len(vals) == 1:
+        iso = vals.pop()
+        for host, v in hosts.items():
+            if v == iso:
+                return iso, host, urls.get(host)
+    return None, None, None
+
+
+def _live_day_answer(gid, url=""):
+    """The date the site actually served, deduced from what it asked its API."""
+    iso, _host, _url = _live_day_provenance(gid)
+    return iso
+
+
+def _live_day_displayed_puzzle_number(page):
+    """The site's own displayed puzzle number, e.g. Semantle's header
+    "Game #1722", or None when the page shows none / unreadable.
+
+    Iter-15 cross-check: the displayed number is the site's own day
+    claim. A probe reading that contradicts it is a probe failure,
+    not a re-key. Pure probe (no clicks)."""
+    try:
+        txt = page.evaluate("() => document.body.innerText") or ""
+    except Exception:
+        return None
+    m = re.search(r"Game\s*#\s*(\d{1,6})", str(txt))
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except ValueError:
+        return None
 
 
 def _align_answer_to_live_day(gid, ans, page=None):
@@ -4886,11 +5020,26 @@ def _align_answer_to_live_day(gid, ans, page=None):
     day) the entire guess sequence is for the wrong puzzle and the game cannot
     be won. Re-running the SAME engine for the date the site asked for fixes it
     without inventing a second answer source.
+
+    Iter-15 (P0, ANALYSIS11 Semantle REGRESSION): the re-key had NO
+    plausibility bound and NO provenance — a racy probe reading
+    (first-date-per-host, where a history/archive fetch for a
+    neighbouring day can arrive first) re-keyed Oct-18 -> Oct-14
+    (cry -> suit) and played suit on the Oct-18 board (site header:
+    Game #1722), losing a won game. Now: (1) the live-day host + URL
+    is logged on EVERY re-key decision; (2) the re-key is BOUNDED to
+    ±1 day of the target — a larger jump is a probe failure: keep
+    the target, flag, do NOT swap the answer; (3) the site's own
+    displayed puzzle number, when present, cross-checks the reading
+    (Game #1722 = target-day puzzle contradicts a 10-14 reading).
+    The ±1 bound preserves the legitimate tgt-1 defer (site has not
+    rolled yet): a served==target-1 reading still re-keys, and the
+    caller defers on it.
     """
     try:
-        iso = _live_day_answer(gid)
+        iso, _host, _url = _live_day_provenance(gid)
     except Exception:
-        iso = None
+        iso, _host, _url = None, None, None
     if not iso:
         return ans, None
     try:
@@ -4898,7 +5047,19 @@ def _align_answer_to_live_day(gid, ans, page=None):
         have = A.target_date()
     except Exception:
         return ans, None
+    print(f"[{gid}] live-day decision: probe served={want} target={have} "
+          f"host={_host} url={_url}")
     if want == have:
+        return ans, None
+    if abs((want - have).days) > 1:
+        # Probe failure, not a re-key: a real day-key disagreement is
+        # at most one day (clock/timezone rollover). A 4-day jump is
+        # the probe reading a history/archive/stats fetch. Keep the
+        # target answer, flag, do NOT swap.
+        print(f"[{gid}] live-day RE-KEY REFUSED: probe served={want} is "
+              f"{(want - have).days} days from target {have} (>1 day) — "
+              f"probe failure, keeping target answer; host={_host} "
+              f"url={_url}")
         return ans, None
     fn = getattr(A, gid, None)
     if fn is None:
@@ -4911,8 +5072,37 @@ def _align_answer_to_live_day(gid, ans, page=None):
     new = (fixed or {}).get("answer") or (fixed or {}).get("name")
     if not new:
         return ans, None
+    # Displayed-puzzle cross-check: the site's own header number is
+    # its day claim. If it agrees with the TARGET day's puzzle (or
+    # disagrees with the served day's puzzle), the probe reading is
+    # false — keep the target, do NOT swap.
+    if page is not None:
+        try:
+            _shown = _live_day_displayed_puzzle_number(page)
+        except Exception:
+            _shown = None
+        if _shown is not None:
+            _served_puzzle = (fixed or {}).get("puzzle")
+            _target_puzzle = None
+            try:
+                _target_puzzle = (ans or {}).get("puzzle")
+            except Exception:
+                _target_puzzle = None
+            if (_served_puzzle is not None and _shown != _served_puzzle) \
+                    or (_target_puzzle is not None
+                        and _shown == _target_puzzle):
+                print(f"[{gid}] live-day RE-KEY REFUSED: site displays "
+                      f"Game #{_shown} but probe served={want} "
+                      f"(puzzle={_served_puzzle}) and target {have} "
+                      f"puzzle={_target_puzzle} — displayed number "
+                      f"contradicts the probe reading; keeping target "
+                      f"answer; host={_host} url={_url}")
+                return ans, None
+            print(f"[{gid}] live-day cross-check: site displays "
+                  f"Game #{_shown}, consistent with probe served={want} "
+                  f"(puzzle={_served_puzzle})")
     print(f"[{gid}] site served {want} but engine answered {have}; "
-          f"re-resolved {ans!r} -> {new!r}")
+          f"re-resolved {ans!r} -> {new!r} (host={_host} url={_url})")
     _PLANS.pop(gid, None)
     _HEX.pop(gid, None)
     _COLORS.pop(gid, None)
@@ -6659,6 +6849,60 @@ def _worldle_pin_probe(page, px, py):
         return {}
 
 
+def _worldle_color_luminance(css):
+    """Relative luminance 0..1 for an rgb()/rgba() color string, or
+    None when unparsable. Pure (unit-tested)."""
+    m = re.match(r"rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})",
+                 str(css or ""))
+    if not m:
+        return None
+    try:
+        r, g, b = (int(x) / 255.0 for x in m.groups())
+    except ValueError:
+        return None
+
+    def _lin(c):
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    return 0.2126 * _lin(r) + 0.7152 * _lin(g) + 0.0722 * _lin(b)
+
+
+def _worldle_capital_tab_active(ev):
+    """Decide whether the PINPOINT tab is active from an evidence dict
+    {aria_selected, cls, data_state, bg, sibling_bg, prompt_visible,
+    map_visible} (iter-15 P1, ANALYSIS11 Capital root cause).
+
+    Iter-14 accepted only aria-selected / /active|selected/ class /
+    data-state='active' — but the site marks the active tab with a
+    DARK BACKGROUND (Tailwind bg class containing neither "active"
+    nor "selected"), no aria-selected, no data-state. Frame g_120
+    proved the PINPOINT tab WAS visually active (dark tab + prompt +
+    map) while the checker reported False, so the pin was never
+    clicked. Now also accepts: (a) panel-switch evidence — the
+    PINPOINT prompt text + a visible map means the view switched;
+    (b) the dark-background marker — the PINPOINT tab's computed
+    background is dark AND darker than the NAME tab's (the relative
+    comparison guards against a globally dark theme). Pure
+    (unit-tested). The pin is still NEVER clicked unless this
+    returns True.
+    """
+    ev = ev if isinstance(ev, dict) else {}
+    if ev.get("aria_selected") is True:
+        return True
+    if re.search(r"active|selected", str(ev.get("cls") or ""),
+                 re.IGNORECASE):
+        return True
+    if str(ev.get("data_state") or "") == "active":
+        return True
+    if ev.get("prompt_visible") and ev.get("map_visible"):
+        return True
+    lum = _worldle_color_luminance(ev.get("bg") or "")
+    sib = _worldle_color_luminance(ev.get("sibling_bg") or "")
+    if lum is not None and lum < 0.45:
+        if sib is None or lum < sib - 0.08:
+            return True
+    return False
+
+
 def _worldle_capital_activate_pinpoint(page, gid):
     """Activate the `2. PINPOINT` tab; NEVER proceed with the tab
     unconfirmed-active (iter-14 P1, ANALYSIS10 Capital root cause).
@@ -6675,21 +6919,55 @@ def _worldle_capital_activate_pinpoint(page, gid):
     activation evidence — the caller FAILS the mode honestly and
     the pin is NEVER clicked. Returns (active_bool, detail)."""
     def _active():
+        # Iter-15: collect EVIDENCE in-page, decide in Python
+        # (_worldle_capital_tab_active) so the dark-background and
+        # panel-switch markers are testable without a browser.
         try:
-            return bool(page.evaluate("""/* CAPITAL_TAB_ACTIVE_CHECK */
+            ev = page.evaluate("""/* CAPITAL_TAB_ACTIVE_CHECK */
               () => {
               const vis = e => e && e.offsetParent !== null;
               const hit = Array.from(document.querySelectorAll(
                 'button, [role=tab]')).filter(vis)
                 .find(e => /^\\s*2\\.\\s*PINPOINT\\s*$/i
                   .test(e.innerText || ''));
-              if (!hit) return false;
-              return hit.getAttribute('aria-selected') === 'true' ||
-                /active|selected/i.test(hit.className || '') ||
-                (hit.getAttribute('data-state') || '') === 'active';
-            }"""))
+              if (!hit) return {found: false};
+              const nameTab = Array.from(document.querySelectorAll(
+                'button, [role=tab]')).filter(vis)
+                .find(e => /^\\s*1\\.\\s*NAME\\s*$/i
+                  .test(e.innerText || ''));
+              const bgOf = el => { try {
+                return getComputedStyle(el).backgroundColor || ''; }
+                catch (e) { return ''; } };
+              const bodyText = (document.body.innerText || '')
+                .toLowerCase();
+              const mapVisible = (() => {
+                const cands = Array.from(document.querySelectorAll(
+                  'teuteuf-geo-map, [data-projection], svg, canvas'))
+                  .filter(vis);
+                return cands.some(el => {
+                  const r = el.getBoundingClientRect();
+                  return r.width * r.height > 10000;
+                });
+              })();
+              return {found: true,
+                aria_selected:
+                  hit.getAttribute('aria-selected') === 'true',
+                cls: String(hit.className || ''),
+                data_state: hit.getAttribute('data-state'),
+                bg: bgOf(hit),
+                sibling_bg: nameTab ? bgOf(nameTab) : '',
+                prompt_visible:
+                  bodyText.includes('can you guess where'),
+                map_visible: mapVisible};
+            }""")
         except Exception:
             return False
+        if isinstance(ev, bool):
+            # Legacy shape: the check returned a bare bool.
+            return ev
+        if not isinstance(ev, dict) or not ev.get("found"):
+            return False
+        return bool(_worldle_capital_tab_active(ev))
 
     def _dump():
         try:
@@ -6701,13 +6979,19 @@ def _worldle_capital_activate_pinpoint(page, gid):
               return tabs.map(e => ({
                 text: (e.innerText || '').trim().slice(0, 40),
                 aria_selected: e.getAttribute('aria-selected'),
-                cls: String(e.className || '').slice(0, 80),
+                // Iter-15: FULL class strings — the iter-14 dump
+                // truncated at ~60-80 chars, hiding the suffix that
+                // distinguishes the dark-background active tab.
+                cls: String(e.className || ''),
                 data_state: e.getAttribute('data-state'),
                 data_value: e.getAttribute('data-value'),
                 role: e.getAttribute('role'),
                 id: e.id || '',
                 disabled: !!e.disabled,
-                outer: (e.outerHTML || '').slice(0, 220)
+                computed_bg: (() => { try {
+                  return getComputedStyle(e).backgroundColor || ''; }
+                  catch (err) { return ''; } })(),
+                outer: (e.outerHTML || '').slice(0, 2000)
               }));
             }""") or "")
         except Exception as e:
@@ -6761,7 +7045,7 @@ def _worldle_capital_activate_pinpoint(page, gid):
     # data-state/data-value match, second tab in the tablist).
     _dump_text = _dump()
     _dbg(gid, "worldle capital PINPOINT tab still inactive after "
-              f"{_via}; tab DOM dump: {_dump_text[:1500]}")
+              f"{_via}; tab DOM dump: {_dump_text[:6000]}")
     try:
         page.evaluate("""/* CAPITAL_TAB_RETRY_CLICK */
           () => {
@@ -6790,9 +7074,9 @@ def _worldle_capital_activate_pinpoint(page, gid):
         pass
     if _active():
         return True, ("PINPOINT tab activated on retry (alternate "
-                      f"selector); first-attempt dump: {_dump_text[:600]}")
+                      f"selector); first-attempt dump: {_dump_text[:3000]}")
     return False, ("PINPOINT tab NEVER activated (tab click did not "
-                   f"switch the view); tab DOM dump: {_dump_text[:1500]}; "
+                   f"switch the view); tab DOM dump: {_dump_text[:6000]}; "
                    "pin NOT clicked — failing the mode honestly")
 
 
@@ -8175,6 +8459,50 @@ def _worldle_phrase_broad_slot_probe(page):
           const all = Array.from(document.querySelectorAll('body *'))
             .filter(vis)
             .filter(e => !e.closest('nav, header, footer'));
+          // Iter-15: label recovery for an empty slot box. The
+          // iter-14 probe labelled a box with its OWN text ('' for
+          // an empty box), so the two true slots (frame g_255:
+          // dashed boxes LABELED "Arabic" / "English") came back
+          // unlabelled and the pairing fell back to raw indices.
+          // A slot's label lives in aria/data attributes, a
+          // preceding-sibling label, a sibling label inside the
+          // parent, or a short text element just above the box.
+          const findLabel = (e) => {
+            const attr = (e.getAttribute('aria-label') || '') ||
+              (e.getAttribute('data-label') || '') ||
+              (e.getAttribute('data-language') || '') ||
+              (e.getAttribute('data-slot') || '');
+            if (attr.trim()) return attr.trim();
+            const short = s => { const t = (s || '').trim();
+              return t && t.length <= 40 && t.split(/\s+/).length <= 4
+                ? t : ''; };
+            const sib = e.previousElementSibling;
+            if (sib) { const t = short(sib.innerText);
+              if (t) return t; }
+            const parent = e.parentElement;
+            if (parent) {
+              for (const c of Array.from(parent.children || [])) {
+                if (c === e) continue;
+                const t = short(c.innerText);
+                if (t) return t;
+              }
+            }
+            const r = e.getBoundingClientRect();
+            let best = '', bestDy = 1e9;
+            for (const o of all) {
+              if (o === e) continue;
+              const t = short(o.innerText);
+              if (!t) continue;
+              const or = o.getBoundingClientRect();
+              const dy = r.top - or.bottom;
+              const overlap = Math.min(r.right, or.right) -
+                Math.max(r.left, or.left);
+              if (dy >= 0 && dy <= 80 && overlap > 0 && dy < bestDy) {
+                best = t; bestDy = dy;
+              }
+            }
+            return best;
+          };
           // (a) empty bordered boxes: computed border on any side,
           // near-empty text (a drop slot waiting for a phrase).
           for (const e of all) {
@@ -8186,7 +8514,8 @@ def _worldle_phrase_broad_slot_probe(page):
               bordered = ['Top', 'Right', 'Bottom', 'Left'].some(
                 s => parseFloat(cs['border' + s + 'Width'] || '0') > 0);
             } catch (err) {}
-            if (bordered && t.length <= 40) push(e, 'bordered-box', t);
+            if (bordered && t.length <= 40)
+              push(e, 'bordered-box', findLabel(e) || t);
           }
           // (b) language-name label + empty content: an element whose
           // own text is a short label and whose next sibling / child
@@ -8219,6 +8548,123 @@ def _worldle_phrase_broad_slot_probe(page):
         }""") or {}
     except Exception as e:
         return {"slots": [], "empty_boxes": [], "error": str(e)[:100]}
+
+
+def _worldle_phrase_pair_slots(slots, codes, names):
+    """Pair drop slots to language codes by LABEL + GEOMETRY
+    (iter-15 P1, ANALYSIS11 Language root cause).
+
+    Iter-14 paired by RAW broad-list indices (1, 3) — header-row
+    elements at y≈82 — while the true slots were the two labeled
+    dashed boxes at y≈303 (frame g_255). Pairing is now:
+    (1) cluster candidate slots by centre-y (tolerance 30px) and
+    pick the cluster with exactly len(codes) members, preferring a
+    NON-topmost cluster (the topmost row is page header chrome);
+    when labels exist, a cluster whose labels cover all language
+    names wins outright; (2) within the cluster, pair each code to
+    the slot whose label contains its language name (Arabic→ara,
+    English→eng); (3) with no usable labels, pair left-to-right
+    (x-sorted) slots to codes in day.languages order.
+    Returns [(code, slot_dict), ...] in codes order, or (None,
+    reason) when no deterministic pairing exists. Pure (unit-tested).
+    """
+    codes = [str(c).lower() for c in (codes or [])]
+    names = [str(n) for n in (names or [])]
+    slots = [s for s in (slots or []) if isinstance(s, dict)]
+    if not codes or not slots:
+        return None, "no slots/codes to pair"
+    if len(slots) < len(codes):
+        return None, (f"only {len(slots)} slot candidates for "
+                      f"{len(codes)} languages")
+    name_of = {c: (names[i] if i < len(names) else c)
+               for i, c in enumerate(codes)}
+
+    def _label(s):
+        return str(s.get("label") or s.get("text") or "").strip().lower()
+
+    # (1) y-clustering (tolerance 30px), sorted top-to-bottom.
+    ordered = sorted(slots, key=lambda s: (float(s.get("y") or 0),
+                                           float(s.get("x") or 0)))
+    clusters = []
+    for s in ordered:
+        y = float(s.get("y") or 0)
+        if clusters and abs(y - clusters[-1][0]) <= 30:
+            clusters[-1][1].append(s)
+        else:
+            clusters.append([y, [s]])
+    # Prefer a cluster whose labels cover all language names.
+    def _label_cover(cluster):
+        labs = " ".join(_label(s) for s in cluster)
+        return all((name_of[c].lower() in labs) for c in codes)
+    chosen = None
+    for _y, members in clusters:
+        if len(members) == len(codes) and _label_cover(members):
+            chosen = members
+            break
+    if chosen is None:
+        # Exactly-sized clusters, non-topmost first (header row is
+        # the topmost cluster); among equals prefer the LOWEST row
+        # (the slot boxes sit under the prompt, below header chrome).
+        exact = [m for _y, m in clusters if len(m) == len(codes)]
+        if exact:
+            chosen = exact[-1] if len(exact) > 1 else exact[0]
+    if chosen is None:
+        return None, (f"cannot pair chips to slots deterministically "
+                      f"(slots={len(slots)} codes={len(codes)}; "
+                      f"y-clusters={[len(m) for _y, m in clusters]}); "
+                      "no exactly-sized slot row)")
+    # (2) label pairing inside the chosen row. An EMPTY label
+    # matches nothing ("" is a substring of every string — without
+    # this guard, unlabelled slots "paired by label" in list order
+    # and reported method "label").
+    pairs = []
+    used = set()
+    labelled_all = True
+    for code in codes:
+        want = name_of.get(code, "").lower()
+        hit = None
+        for i, s in enumerate(chosen):
+            if i in used:
+                continue
+            lab = _label(s)
+            if want and lab and (want in lab or lab in want):
+                hit = i
+                break
+        if hit is None:
+            labelled_all = False
+            break
+        used.add(hit)
+        pairs.append((code, chosen[hit]))
+    if labelled_all:
+        return pairs, "label"
+    # (3) no usable labels: left-to-right slots to codes order.
+    by_x = sorted(chosen, key=lambda s: float(s.get("x") or 0))
+    return [(code, s) for code, s in zip(codes, by_x)], "geometry-x"
+
+
+def _worldle_phrase_slot_at_contains(page, slot, phrase):
+    """Position-anchored slot-fill check (iter-15): the broad-probe
+    slot at the SAME centre as `slot` must now contain `phrase`
+    (punctuation-insensitive). Unlike _worldle_phrase_slot_contains
+    (any slot) and the old narrow-index verify (wrong list for broad
+    slots), this cannot false-positive on the chip's own card and
+    cannot address the wrong element."""
+    try:
+        tx, ty = slot.get("x"), slot.get("y")
+        if tx is None or ty is None:
+            return False
+        broad_now = _worldle_phrase_broad_slot_probe(page) or {}
+        norm = lambda s: re.sub(r"[^a-z0-9 ]+", "",
+                                str(s or "").lower()).strip()
+        for cand in (broad_now.get("slots") or []):
+            if (abs(float(cand.get("x") or -9999) - float(tx)) < 10
+                    and abs(float(cand.get("y") or -9999) - float(ty)) < 10
+                    and norm(phrase)
+                    and norm(phrase) in norm(cand.get("text"))):
+                return True
+    except Exception:
+        pass
+    return False
 
 
 def _worldle_phrase_drag(page, gid, picked, codes, names, prompts, ds):
@@ -8360,99 +8806,37 @@ def _worldle_phrase_drag(page, gid, picked, codes, names, prompts, ds):
                     f"in DOM (primary probe + broad probe both empty; "
                     f"broad empty_boxes={_broad.get('empty_boxes') or []}); "
                     "falling back to click path (click-verify guards)")
-    # ---- Deterministic pairing ----
-    _by_code = {str(c).lower(): c for c in codes}
-    _name_of = {}
-    for _c, _n in zip(codes, names):
-        _name_of[str(_c).lower()] = str(_n)
-    _pairs = []  # (code, chip, slot_idx)
-    _labelled = [s for s in _slots if (s.get("label") or "").strip()]
-    if _labelled and len(_labelled) >= len(codes):
-        _used_slots = set()
-        for _ch in _chips:
-            _code = str(_ch.get("code") or "").lower()
-            _want = _name_of.get(_code, "").lower()
-            _hit = None
-            for _si, _s in enumerate(_slots):
-                if _si in _used_slots:
-                    continue
-                _lab = str(_s.get("label") or "").lower()
-                if _want and (_want in _lab or _lab in _want):
-                    _hit = _si
-                    break
-            if _hit is None:
-                return ("partial", "labelled slots do not cover all "
-                        f"languages (code={_code} name={_want}); "
-                        f"probe={_probe}")
-            _used_slots.add(_hit)
-            _pairs.append((_code, _ch, _hit))
-    elif len(_slots) == len(codes) and not _labelled:
-        # Unlabelled ordered slots -> prompt/day.languages order (codes
-        # order as passed in, which follows day.languages).
-        for _ch, _si in zip(_chips, range(len(_slots))):
-            _pairs.append((str(_ch.get("code") or "").lower(), _ch, _si))
-    else:
-        return ("partial", "cannot pair chips to slots deterministically "
-                f"(slots={len(_slots)} codes={len(codes)} "
-                f"labelled={len(_labelled)}); probe={_probe}; no drag")
-    _dbg(gid, f"worldle phrase pairs: {[(c, s) for c, _, s in _pairs]}")
-    _slot_sel = ('[data-slot], [class*=slot i], [class*=drop-zone i], '
-                 '[class*=dropzone i], [class*=drop-target i], '
-                 '[class*=drop--target i], [class*=position i], '
-                 '[class*=placeholder i]')
+    # ---- Deterministic pairing (iter-15): LABEL + GEOMETRY, never
+    # raw broad-list indices (iter-14 paired indices 1, 3 — header-row
+    # elements — while the true slots were the labeled boxes at
+    # y≈303). See _worldle_phrase_pair_slots.
+    _pair_res, _pair_how = _worldle_phrase_pair_slots(_slots, codes, names)
+    if _pair_res is None:
+        return ("partial", f"cannot pair chips to slots: {_pair_how}; "
+                           f"probe={_probe}")
+    _chip_by_code = {str(c.get("code") or "").lower(): c for c in _chips}
+    _pairs = []  # (code, chip, slot_dict)
+    for _code, _slot in _pair_res:
+        _chip = _chip_by_code.get(str(_code).lower())
+        if _chip is None:
+            return ("partial", "pairing found a slot for "
+                               f"{_code} but no chip by that code; "
+                               f"probe={_probe}")
+        _pairs.append((_code, _chip, _slot))
+    _pair_desc = [(c, {"label": s.get("label"), "x": s.get("x"),
+                       "y": s.get("y")}) for c, _, s in _pairs]
+    _dbg(gid, f"worldle phrase pairs ({_pair_how}): {_pair_desc}")
 
-    def _verify(_slot_idx, _phrase):
-        try:
-            _narrow = bool(page.evaluate("""(args) => {
-              const vis = e => e && e.offsetParent !== null;
-              // Punctuation-insensitive (iter 12): a chip reading
-              // 'Nɔɔyɛ la me.' must match the day phrase without
-              // its trailing period, and vice versa.
-              const norm = s => (s||'').toLowerCase()
-                .replace(/[.,!?;:"'«»“”‘’()\\-]/g, '')
-                .replace(/\\s+/g,' ').trim();
-              const slots = Array.from(document.querySelectorAll(args.sel))
-                .filter(vis)
-                .filter(e => !e.closest('nav, header, footer'));
-              const s = slots[args.idx];
-              if (!s) return false;
-              return norm(s.innerText).includes(norm(args.phrase));
-            }""", {"sel": _slot_sel, "idx": int(_slot_idx),
-                   "phrase": _phrase}))
-            if _narrow:
-                return True
-        except Exception:
-            pass
-        # Iter-14: when broad-probe slots are in use, the narrow
-        # selector cannot see them — verify position-anchored: the
-        # broad slot at the SAME centre as the target must now
-        # contain the phrase. (A plain "any box contains phrase"
-        # check would false-positive on the chip's own card, which
-        # contains the phrase before placement too.)
-        if _using_broad_slots:
-            try:
-                _target = _slots[int(_slot_idx)] or {}
-                _tx, _ty = _target.get("x"), _target.get("y")
-                _broad_now = _worldle_phrase_broad_slot_probe(page) or {}
-                _norm = lambda s: re.sub(
-                    r"[^a-z0-9 ]+", "",
-                    str(s or "").lower()).strip()
-                for _cand in (_broad_now.get("slots") or []):
-                    if _tx is None or _ty is None:
-                        break
-                    if (abs(float(_cand.get("x") or -9999) - float(_tx)) < 10
-                            and abs(float(_cand.get("y") or -9999)
-                                    - float(_ty)) < 10
-                            and _norm(_phrase)
-                            and _norm(_phrase) in _norm(_cand.get("text"))):
-                        return True
-            except Exception:
-                pass
-        return False
+    def _verify(_slot, _phrase):
+        # Position-anchored broad-probe check first (works for narrow
+        # and broad slots alike — the slot at the SAME centre must now
+        # contain the phrase), then the narrow any-slot check.
+        if _worldle_phrase_slot_at_contains(page, _slot, _phrase):
+            return True
+        return bool(_worldle_phrase_slot_contains(page, _phrase))
 
-    for _code, _chip, _slot_idx in _pairs:
+    for _code, _chip, _slot in _pairs:
         _phrase = _chip.get("phrase") or ""
-        _slot = _slots[_slot_idx]
         _placed = False
         # Attempt 1: Playwright mouse drag, 10 steps + verify.
         try:
@@ -8469,9 +8853,10 @@ def _worldle_phrase_drag(page, gid, picked, codes, names, prompts, ds):
         except Exception as e:
             _dbg(gid, f"worldle phrase mouse drag failed for {_code}: "
                       f"{str(e)[:80]}")
-        _placed = _verify(_slot_idx, _phrase)
+        _placed = _verify(_slot, _phrase)
         _dbg(gid, f"worldle phrase drag mouse {_code} -> slot "
-                  f"{_slot_idx} placed={_placed}")
+                  f"label={_slot.get('label')!r} ({_slot.get('x')}, "
+                  f"{_slot.get('y')}) placed={_placed}")
         if not _placed:
             # Attempt 2: smooth mouse drag — one move call with 25
             # intermediate mousemove events + a hover pause over the
@@ -8488,71 +8873,58 @@ def _worldle_phrase_drag(page, gid, picked, codes, names, prompts, ds):
             except Exception as e:
                 _dbg(gid, "worldle phrase smooth drag failed for "
                           f"{_code}: {str(e)[:80]}")
-            _placed = _verify(_slot_idx, _phrase)
+            _placed = _verify(_slot, _phrase)
             _dbg(gid, f"worldle phrase drag smooth {_code} -> slot "
-                      f"{_slot_idx} placed={_placed}")
-        if not _placed and _using_broad_slots:
-            # Attempt 3 (DragEvent) is SKIPPED for broad-probe slots:
-            # it addresses slots by index into the NARROW selector
-            # list, which does not contain the broad slots — it
-            # would dispatch the drop onto the wrong element.
-            # Attempts 1-2 (coordinate mouse drags) already cover
-            # pointer-based widgets for broad slots.
-            _dbg(gid, f"worldle phrase DragEvent skipped for {_code} "
-                      "(broad-probe slots; narrow index would "
-                      "target the wrong element)")
-        if not _placed and not _using_broad_slots:
-            # Attempt 3: in-page DragEvent sequence with a real
-            # DataTransfer (dragstart/dragover/drop/dragend).
+                      f"label={_slot.get('label')!r} ({_slot.get('x')}, "
+                      f"{_slot.get('y')}) placed={_placed}")
+        if not _placed:
+            # Attempt 3 (iter-15): in-page DragEvent sequence with a
+            # real DataTransfer — REACHABLE for broad-probe slots now.
+            # Iter-14 SKIPPED DragEvent for broad slots (it addressed
+            # slots by index into the NARROW selector list, which does
+            # not contain the broad slots) and the click-verify
+            # fallback was never reached (zero log lines). This
+            # version resolves chip + slot via elementFromPoint at
+            # their CENTRES, so it dispatches onto the actual elements
+            # under the paired coordinates for narrow AND broad slots.
             try:
                 page.evaluate("""(args) => {
-                  const vis = e => e && e.offsetParent !== null;
-                  const norm = s => (s||'').toLowerCase()
-                    .replace(/[.,!?;:"'«»“”‘’()\\-]/g, '')
-                    .replace(/\\s+/g,' ').trim();
-                  const leaves = Array.from(
-                    document.querySelectorAll('body *')).filter(vis)
-                    .filter(e => !e.closest('nav, header, footer'))
-                    .filter(e => e.children.length === 0)
-                    .filter(e => norm(e.innerText) === norm(args.phrase));
-                  let chip = leaves[0] || null;
-                  if (chip) {
-                    let n = chip;
-                    while (n && n !== document.body) {
-                      if (n.getAttribute &&
-                          n.getAttribute('draggable') === 'true') {
-                        chip = n; break;
-                      }
-                      n = n.parentElement;
-                    }
-                  }
-                  const slots = Array.from(
-                    document.querySelectorAll(args.sel)).filter(vis)
-                    .filter(e => !e.closest('nav, header, footer'));
-                  const slot = slots[args.idx];
+                  const chip = document.elementFromPoint(
+                    args.cx, args.cy);
+                  const slot = document.elementFromPoint(
+                    args.sx, args.sy);
                   if (!chip || !slot) return false;
                   const dt = new DataTransfer();
-                  const mk = (t, tgt) => new DragEvent(t, {bubbles: true,
+                  const mk = (t) => new DragEvent(t, {bubbles: true,
                     cancelable: true, dataTransfer: dt});
-                  chip.dispatchEvent(mk('dragstart', chip));
-                  slot.dispatchEvent(mk('dragenter', slot));
-                  slot.dispatchEvent(mk('dragover', slot));
-                  slot.dispatchEvent(mk('drop', slot));
-                  chip.dispatchEvent(mk('dragend', chip));
+                  chip.dispatchEvent(mk('dragstart'));
+                  slot.dispatchEvent(mk('dragenter'));
+                  slot.dispatchEvent(mk('dragover'));
+                  slot.dispatchEvent(mk('drop'));
+                  chip.dispatchEvent(mk('dragend'));
                   return true;
-                }""", {"phrase": _phrase, "sel": _slot_sel,
-                       "idx": int(_slot_idx)})
+                }""", {"cx": _chip["x"], "cy": _chip["y"],
+                       "sx": _slot["x"], "sy": _slot["y"]})
                 page.wait_for_timeout(800)
             except Exception as e:
                 _dbg(gid, "worldle phrase DragEvent failed for "
                           f"{_code}: {str(e)[:80]}")
-            _placed = _verify(_slot_idx, _phrase)
+            _placed = _verify(_slot, _phrase)
             _dbg(gid, f"worldle phrase drag DragEvent {_code} -> slot "
-                      f"{_slot_idx} placed={_placed}")
+                      f"label={_slot.get('label')!r} ({_slot.get('x')}, "
+                      f"{_slot.get('y')}) placed={_placed}")
         if not _placed:
-            return ("partial", f"phrase drag failed for {_code} "
-                    f"({_phrase!r} -> slot {_slot_idx}); all drag "
-                    f"primitives failed; probe={_probe}")
+            # Iter-15: drag failure is NOT terminal — return
+            # "click-fallback" so the caller reaches the click-verify
+            # path (click chip -> click slot, verify slot fills).
+            # Iter-14 returned "partial" here and the click path was
+            # never reached (zero log lines).
+            return ("click-fallback",
+                    f"phrase drag failed for {_code} "
+                    f"({_phrase!r} -> slot label={_slot.get('label')!r} "
+                    f"({_slot.get('x')}, {_slot.get('y')})); all drag "
+                    f"primitives failed; probe={_probe}; falling back "
+                    "to click-verify (click chip -> click slot)")
     _s_worldle_submit_guarded(page, gid, "spokenLanguages", ds)
     _settle(page, base=1500)
     _gs = _s_worldle_day_guesses(page, "language-guesses", ds)
@@ -8562,6 +8934,95 @@ def _worldle_phrase_drag(page, gid, picked, codes, names, prompts, ds):
                 f"and submitted (store correct q1={_c1}/{len(names)})")
     return ("partial", "Q1 phrase drags placed but store shows "
             f"q1 correct={_c1}/{len(names)}")
+
+
+def _worldle_phrase_click_verify(page, gid, picked, codes, names, prompts, ds):
+    """Click-verify fallback for the Worldle Q1 PHRASE round (iter-15 P1).
+
+    Iter-14: the click path was never reached (zero log lines) — the
+    drag helper returned "partial" on drag failure and the caller
+    returned partial too. Now the drag helper returns "click-fallback"
+    and the caller runs this: for each pair (same label/geometry
+    pairing as the drag path), click the chip centre, then click the
+    slot centre, then VERIFY the slot filled (position-anchored).
+    A click that places nothing stops the path immediately — no second
+    click, no submit of a no-op. Returns (status, detail); "attempted"
+    only when the store proves q1 correct == #languages.
+    """
+    _broad = _worldle_phrase_broad_slot_probe(page)
+    _slots = _broad.get("slots") or []
+    if not _slots:
+        _dbg(gid, "worldle phrase click-verify: broad slot probe found "
+                  "no slots")
+        return ("partial", "click-verify: broad slot probe found no "
+                           "slots; NOT submitted")
+    _pair_res, _pair_how = _worldle_phrase_pair_slots(_slots, codes, names)
+    if _pair_res is None:
+        _dbg(gid, f"worldle phrase click-verify: cannot pair: {_pair_how}")
+        return ("partial", f"click-verify: cannot pair chips to slots: "
+                           f"{_pair_how}; NOT submitted")
+    _cv_desc = [(c, {"label": s.get("label"), "x": s.get("x"),
+                   "y": s.get("y")}) for c, s in _pair_res]
+    _dbg(gid, f"worldle phrase click-verify pairs ({_pair_how}): {_cv_desc}")
+    for _code, _slot in _pair_res:
+        _phrase = (picked or {}).get(str(_code).lower())
+        if not _phrase:
+            return ("partial", f"click-verify: no picked phrase for "
+                               f"{_code}; NOT submitted")
+        try:
+            _chip = page.evaluate("""(phrase) => {
+              const vis = e => e && e.offsetParent !== null;
+              const norm = s => (s||'').toLowerCase()
+                .replace(/[.,!?;:"'«»“”‘’()\\-]/g, '')
+                .replace(/\\s+/g,' ').trim();
+              const leaves = Array.from(
+                document.querySelectorAll('body *')).filter(vis)
+                .filter(e => !e.closest('nav, header, footer'))
+                .filter(e => e.children.length === 0)
+                .filter(e => norm(e.innerText) === norm(phrase));
+              const el = leaves[0] || null;
+              if (!el) return null;
+              const r = el.getBoundingClientRect();
+              return {x: r.x + r.width / 2, y: r.y + r.height / 2};
+            }""", _phrase)
+        except Exception:
+            _chip = None
+        if not _chip:
+            _dbg(gid, f"worldle phrase click-verify {_code}: chip for "
+                      f"{_phrase!r} not found by text; stopping")
+            return ("partial", f"click-verify: chip for {_phrase!r} "
+                               f"({str(_code)}) not found by text; "
+                               "NOT submitted")
+        try:
+            page.mouse.click(_chip["x"], _chip["y"])
+            page.wait_for_timeout(400)
+            page.mouse.click(_slot["x"], _slot["y"])
+            page.wait_for_timeout(800)
+        except Exception as e:
+            _dbg(gid, f"worldle phrase click-verify {_code}: click "
+                      f"failed: {str(e)[:80]}")
+            return ("partial", f"click-verify: {_code} chip/slot click "
+                               f"failed ({str(e)[:80]}); NOT submitted")
+        _placed = (_worldle_phrase_slot_at_contains(page, _slot, _phrase)
+                   or _worldle_phrase_slot_contains(page, _phrase))
+        _dbg(gid, f"worldle phrase click-verify {_code}: chip "
+                  f"({_chip['x']:.0f}, {_chip['y']:.0f}) -> slot "
+                  f"label={_slot.get('label')!r} ({_slot.get('x')}, "
+                  f"{_slot.get('y')}) placed={_placed}")
+        if not _placed:
+            return ("partial", f"click-verify: {_code} chip clicked + "
+                               f"slot clicked but slot did not fill "
+                               f"({_phrase!r}); NOT submitted")
+    _s_worldle_submit_guarded(page, gid, "spokenLanguages", ds)
+    _settle(page, base=1500)
+    _gs = _s_worldle_day_guesses(page, "language-guesses", ds)
+    _t1, _c1 = _s_worldle_language_counts(_gs, 1)
+    if _c1 == len(names):
+        return ("attempted", "Q0 language-pick + Q1 phrase "
+                "CLICK-VERIFIED and submitted "
+                f"(store correct q1={_c1}/{len(names)})")
+    return ("partial", "click-verify placements filled but store shows "
+                       f"q1 correct={_c1}/{len(names)}")
 
 
 def _s_worldle_play_language(page, gid, day):
@@ -8772,88 +9233,18 @@ def _s_worldle_play_language(page, gid, day):
                 return "attempted", list(names), _drag_res[1]
             if _drag_res[0] == "partial":
                 return "partial", list(names), _drag_res[1]
-            _dbg(gid, "worldle phrase: no draggable chips; "
-                      "falling back to click path")
-            _all_ok = True
-            _drag = False
-            for _code in codes:
-                _want = _picked.get(str(_code).lower())
-                if not _want:
-                    _all_ok = False
-                    break
-                try:
-                    _res = page.evaluate("""(want) => {
-                      const vis = e => e && e.offsetParent !== null;
-                      const norm = s => (s||'').toLowerCase()
-                        .replace(/\\s+/g,' ').trim();
-                      const els = Array.from(document.querySelectorAll(
-                        'body *')).filter(vis).filter(
-                        e => !e.closest('nav, header, footer'));
-                      const hit = els.find(e => norm(e.innerText) === norm(want) &&
-                        e.children.length === 0) ||
-                        els.find(e => norm(e.innerText) === norm(want));
-                      if (!hit) return {clicked: false, draggable: false};
-                      // Iter 9: the phrase UI is drag-and-drop per the
-                      // game's own string ("Simply drag and drop each
-                      // phrase into the correct position"). A draggable
-                      // card must NOT be clicked blind — clicking does
-                      // not place it, and the drop targets are
-                      // unverified. Report drag instead.
-                      if (hit.getAttribute('draggable') === 'true')
-                        return {clicked: false, draggable: true};
-                      hit.click();
-                      return {clicked: true, draggable: false};
-                    }""", _want) or {}
-                    _hit = bool(_res.get("clicked"))
-                    _drag = _drag or bool(_res.get("draggable"))
-                except Exception:
-                    _hit = False
-                _dbg(gid, f"worldle language Q1 phrase option {_want!r} "
-                          f"clicked={_hit} draggable={_drag}")
-                if _drag:
-                    break
-                if not _hit:
-                    _all_ok = False
-                    break
-                _settle(page, base=800)
-                # Verify placement after EACH click (iter 13): in
-                # iter-12 both options were "clicked" but the slots
-                # stayed empty and the store never changed — clicks
-                # do not place phrase chips. A click that places
-                # nothing stops the path immediately (no second
-                # click, no submit of a no-op), with the slot probe
-                # as evidence.
-                _placed = _worldle_phrase_slot_contains(page, _want)
-                _dbg(gid, "worldle language Q1 phrase click-place "
-                          f"{_want!r} placed={_placed}")
-                if not _placed:
-                    return "partial", list(names), (
-                        f"Q0 language-pick played; Q1 phrase option "
-                        f"{_want!r} clicked but the slot stayed empty "
-                        "(click does not place phrase chips); drag "
-                        "path found no chips by text; NOT submitted")
-            if _drag:
-                return "partial", list(names), \
-                    "Q0 language-pick played; Q1 phrase translations " \
-                    f"known from {_picked_src} ({_picked}) and shown, " \
-                    "but the phrase UI is drag-and-drop (the matched " \
-                    "option is a draggable card) and the drag " \
-                    "interaction / drop targets are unverified — NOT " \
-                    "attempted blind; needs live-widget confirmation " \
-                    "of the drop targets"
-            if _all_ok:
-                _s_worldle_submit_guarded(page, gid, "spokenLanguages", ds)
-                _settle(page, base=1500)
-                _gs = _s_worldle_day_guesses(page, "language-guesses", ds)
-                _t1, _c1 = _s_worldle_language_counts(_gs, 1)
-                if _c1 == len(names):
-                    return "attempted", list(names), \
-                        "Q0 language-pick + Q1 phrase played from " \
-                        f"{_picked_src} ({_picked})"
-                return "partial", list(names), \
-                    "Q1 phrase options clicked from " \
-                    f"{_picked_src} ({_picked}) but store shows " \
-                    f"q1 correct={_c1}/{len(names)}"
+            # click-fallback (iter-15): drags failed or no draggable
+            # chips — run the click-verify path (click chip -> click
+            # slot, verify slot fills). This path was unreachable in
+            # iter-14 (zero log lines).
+            _dbg(gid, "worldle phrase: drag returned click-fallback; "
+                      "running click-verify path")
+            _cv_res = _worldle_phrase_click_verify(page, gid, _picked,
+                                                   codes, names, _prompts,
+                                                   ds)
+            if _cv_res[0] == "attempted":
+                return "attempted", list(names), _cv_res[1]
+            return "partial", list(names), _cv_res[1]
         return "partial", list(names), \
             "Q0 language-pick played; Q1 is a phrase question " \
             f"(prompts={_prompts}); full-DOM options={str(_ev_opts)[:800]}; " \
@@ -9484,6 +9875,11 @@ _AREA_STEPPER_SELECT_JS = """
     'button, div[role=button]'))
     .filter(e => e && e.offsetParent !== null)
     .filter(e => !e.closest('nav, header, footer'))
+    // Iter-15: exclude the GetAdmiral ad container (id _1SS2i7sB,
+    // present on every round's page) — in iter-14 the stepper probe
+    // found ONLY that ad div as a stepper candidate.
+    .filter(e => !e.closest('#_1SS2i7sB, [id*=GetAdmiral i], '
+      + '[class*=admiral i], [id*=getadmiral i]'))
     .filter(_areaIsStepper);
   const _areaAnc = el => { const a = []; let n = el;
     while (n) { a.push(n); n = n.parentElement; } return a; };
@@ -9904,8 +10300,71 @@ def _s_worldle_comparison_skipped(page):
     return False, ""
 
 
+def _worldle_area_visible_header(page):
+    """Visible round header: the selected tab's text, else the page
+    h1, else the document title. Used to re-verify the visible round
+    is still Area after a comparison submit (iter-14: the view moved
+    to completed-PopulationCurrency via an unlogged SPA change)."""
+    try:
+        return str(page.evaluate("""() => {
+          const vis = e => e && e.offsetParent !== null;
+          const sel = Array.from(document.querySelectorAll(
+            '[aria-selected=true], [aria-current=true]')).filter(vis);
+          for (const e of sel) {
+            const t = (e.innerText || '').trim();
+            if (t) return t;
+          }
+          const h = document.querySelector('h1');
+          if (h && (h.innerText || '').trim())
+            return h.innerText.trim();
+          return (document.title || '');
+        }""") or "")
+    except Exception:
+        return ""
+
+
+def _worldle_area_log_state(page, gid, step):
+    """Log game_round + visible round header after an area sub-step
+    (iter-15 P1): the iter-14 artifact showed the view had moved
+    off Area with NO logged navigation, so every sub-step now
+    leaves this breadcrumb."""
+    try:
+        _mode = _s_worldle_current_mode(page)
+    except Exception:
+        _mode = "?"
+    _dbg(gid, f"worldle area {step}: game_round={_mode!r} "
+              f"visible_header={_worldle_area_visible_header(page)!r}")
+
+
+def _worldle_area_still_on_area(page):
+    """True unless there is POSITIVE evidence the view moved off
+    Area: game_round naming another mode, or the visible header
+    naming another round. Missing evidence counts as still-on-Area
+    (never force a switch on an unreadable header)."""
+    try:
+        _mode = _s_worldle_current_mode(page)
+    except Exception:
+        _mode = None
+    if _mode is not None and _mode != "area":
+        return False
+    _hdr = _worldle_area_visible_header(page).lower()
+    if _hdr:
+        for _m, _label in (_WORLDLE_MODE_LABELS or {}).items():
+            if _m == "area":
+                continue
+            if str(_label).lower() and str(_label).lower() in _hdr:
+                return False
+            # Tab labels are often abbreviated ("1. POPULATION" for
+            # the "Population & Currency" round): match distinctive
+            # label words (len>=4) too, not just the full label.
+            for _tok in re.split(r"[^a-z]+", str(_label).lower()):
+                if len(_tok) >= 4 and _tok in _hdr:
+                    return False
+    return True
+
+
 def _s_worldle_play_comparison(page, gid, day, mode, ds, prompt_substrs,
-                               lookup, stat, label):
+                               lookup, stat, label, verify_store=False):
     """Deliberate comparison branch (Area / GDP): probe the live
     comparison widget (image cards + text buttons), resolve EVERY
     shown country's stat from `lookup` (+ the game's own CDN for any
@@ -9918,7 +10377,10 @@ def _s_worldle_play_comparison(page, gid, day, mode, ds, prompt_substrs,
     declined the comparison round (not enough neighbours) — the
     comparison is N/A, the caller counts the number alone. The caller
     arbitrates with the game's win check; this helper never claims a
-    win itself."""
+    win itself. verify_store=True (Area, iter-15): after click +
+    submit, the mode's store list must have CHANGED (append or
+    in-place update) or the comparison is NOT "answered" — a
+    click + Enter that records nothing returns 'partial'."""
     probe = _s_worldle_comparison_probe(page, prompt_substrs)
     # Game-skipped comparison first (iter-13): if the game declined
     # the comparison round, the probe finds no prompt and the caller
@@ -9988,6 +10450,19 @@ def _s_worldle_play_comparison(page, gid, day, mode, ds, prompt_substrs,
               + str([(o.get("name"), values.get(_s_worldle_cmp_key(
                   o.get("name") or ""))) for o in options])
               + f" larger={best!r} ({pick_detail})")
+    # Iter-15 (Area P1): the FULL store list BEFORE the pick, so
+    # the "answered" claim can be VERIFIED (iter-14 assumed answered
+    # from click+Enter while the store never changed — twice).
+    # Full-list comparison (not just length): the game may record
+    # the comparison by UPDATING an existing entry in place (number
+    # + comparison merged into one guess) rather than appending.
+    _store_key = (_WORLDLE_STORE_KEYS or {}).get(mode)
+    _before = None
+    if _store_key:
+        try:
+            _before = _s_worldle_day_guesses(page, _store_key, ds)
+        except Exception:
+            _before = None
     ok, detail = _s_worldle_click_comparison_option(page, best)
     if not ok:
         ok, detail = _s_worldle_click_option_loose(page, best)
@@ -9996,6 +10471,28 @@ def _s_worldle_play_comparison(page, gid, day, mode, ds, prompt_substrs,
                 f"comparison option {best!r} not clickable ({detail})")
     _s_worldle_submit_guarded(page, gid, mode, ds)
     _settle(page, base=2000)
+    if verify_store and _store_key is not None and _before is not None:
+        try:
+            _after = _s_worldle_day_guesses(page, _store_key, ds)
+        except Exception:
+            _after = None
+        _dbg(gid, f"worldle {mode} comparison store-verify: "
+                  f"{_store_key} {ds} guesses {len(_before)} -> "
+                  f"{len(_after) if _after is not None else '?'} "
+                  f"changed={_after is not None and _after != _before} "
+                  f"(picked {best!r})")
+        if _after is None or _after == _before:
+            # NOT "answered": the click + Enter recorded nothing.
+            # Never claim the comparison is done on this evidence.
+            # (A "partial" here is never upgraded by the caller's win
+            # check, so this fires ONLY on a true no-change — the
+            # full-list comparison above covers in-place updates.)
+            return ("partial", None,
+                    f"comparison option {best!r} clicked + submitted "
+                    f"but the store did NOT change ({_store_key} "
+                    f"{len(_before)} guesses, identical list); "
+                    "'answered' NOT claimed — the comparison answer "
+                    "was never recorded")
     return ("attempted", best,
             f"{label} comparison: clicked larger {best!r} ({pick_detail})")
 
@@ -10295,12 +10792,32 @@ def _s_worldle_play_area(page, gid, day):
     lookup = day.get("size_lookup") or {}
 
     def _comparison():
+        # Iter-15: verify_store=True — the comparison is only
+        # "answered" when the store records it (iter-14 assumed
+        # answered from click+Enter while store changed=False twice).
         return _s_worldle_play_comparison(
             page, gid, day, "area", ds,
-            ("larger surface area",), lookup, "size", "area")
+            ("larger surface area",), lookup, "size", "area",
+            verify_store=True)
 
     # (1) Comparison FIRST — deliberate, never probe-click rescue.
     st, pick, det = _comparison()
+    _worldle_area_log_state(page, gid, "after-comparison-1")
+    if st == "attempted" and not _worldle_area_still_on_area(page):
+        # Iter-15: the view moved off Area after the comparison
+        # submit in iter-14 (completed-PopulationCurrency, frame
+        # g_325) via an unlogged SPA change, and the number path then
+        # ran on the wrong view. Re-switch to Area before the number
+        # path; if the re-switch fails, fail honestly instead of
+        # playing the number into another round.
+        _dbg(gid, "worldle area: view moved off Area after comparison "
+                  "submit; re-switching to Area before the number path")
+        if not _s_worldle_switch_mode(page, gid, "area", ds):
+            return "partial", [str(size), pick], \
+                "comparison recorded but view moved off Area and " \
+                "re-switch to Area failed; number path NOT run on " \
+                "the wrong view"
+        _worldle_area_log_state(page, gid, "after-reswitch-to-area")
     if st == "partial":
         return "partial", [str(size)], det
     picked = []
@@ -10334,6 +10851,7 @@ def _s_worldle_play_area(page, gid, day):
                       f"submit-and-arbitrate fallback")
             _s_worldle_submit_guarded(page, gid, "area", ds)
             _settle(page, base=2000)
+            _worldle_area_log_state(page, gid, "after-stepper-fallback")
             _win = _s_worldle_win_check(page, "area", day, ds)
             if _win[0]:
                 return "attempted", [str(size)] + picked, \
@@ -10354,6 +10872,7 @@ def _s_worldle_play_area(page, gid, day):
                       f"submit-and-arbitrate fallback")
             _s_worldle_submit_guarded(page, gid, "area", ds)
             _settle(page, base=2000)
+            _worldle_area_log_state(page, gid, "after-set-fallback")
             _win = _s_worldle_win_check(page, "area", day, ds)
             if _win[0]:
                 return "attempted", [str(size)] + picked, \
@@ -10365,10 +10884,12 @@ def _s_worldle_play_area(page, gid, day):
                 f"win_check={_win[2]}; DOM dump logged"
     _s_worldle_submit_guarded(page, gid, "area", ds)
     _settle(page, base=2000)
+    _worldle_area_log_state(page, gid, "after-number-path")
     # (3) Comparison again after the number (the normal order when the
     # round is number-first: the comparison appears once the number is
     # answered).
     st2, pick2, det2 = _comparison()
+    _worldle_area_log_state(page, gid, "after-comparison-2")
     if st2 == "partial":
         return "partial", [str(size)] + picked, det2
     if st2 == "attempted":
@@ -13189,6 +13710,22 @@ def run_nerdle_external(g, tgt, date_key, today, short):
     try:
         r = _sp.run([sys.executable, str(HERE / "nerdle_solver.py")],
                     cwd=str(HERE), env=env, capture_output=True, text=True, timeout=3600)
+        # Iter-15 (P1, ANALYSIS11 maxi ² stall): forward the FULL
+        # solver stdout into the artifact debug log. The old code
+        # printed only the LAST 2000 chars, which hid the stall
+        # reason (the solver's own "no next guess / board did not
+        # react" print, if any, was lost). Console keeps the
+        # truncated tail; the debug log gets everything.
+        try:
+            with open(vdir / f"debug_{date_key}.log", "a",
+                      encoding="utf-8") as _fh:
+                _fh.write(f"\n--- solver subprocess stdout (full, "
+                          f"returncode={r.returncode}) ---\n")
+                _fh.write(r.stdout or "")
+                _fh.write("\n--- solver subprocess stderr (full) ---\n")
+                _fh.write(r.stderr or "")
+        except Exception as _e:
+            print(f"[nerdle] full solver stdout forward failed: {_e}")
         print((r.stdout or "")[-2000:])
         if r.returncode != 0:
             print((r.stderr or "")[-2000:])

@@ -262,8 +262,60 @@ def _nerdle_number_gate(served, api_numbers):
     return False, "all proven-mode served numbers/answers match API", per_mode
 
 
-def _nerdle_header_number_from_probe(probe):
-    """Multi-strategy header-number capture (iter 14, P0).
+def _nerdle_own_header_from_probe(probe, mode_id=None):
+    """The mode's OWN header logo line (iter 15, P0).
+
+    Frame-proven format (ANALYSIS11, gameplay g_20 / g_140): the page
+    header carries `<mode> nerdle. #<n>` — classic `nerdle. #1732`,
+    maxi `maxi nerdle. #1368`. The probe's `own_headers` list carries
+    one {tag, cls, text} dict per element whose text contains such a
+    logo line (see SERVED_JS). Returns (number_or_None, evidence_dict
+    or None). When mode_id is given, ONLY an entry whose mode prefix
+    matches mode_id (or no prefix, which IS classic's own header)
+    counts — a bare `nerdle. #1733` on the mini page is classic's
+    number leaking through shared chrome, NOT mini's header, and is
+    rejected. Pure (unit-tested).
+    """
+    import re as _re
+    probe = probe if isinstance(probe, dict) else {}
+    want = str(mode_id or "").strip().lower()
+    own = []
+    for ent in (probe.get("own_headers") or []):
+        if not isinstance(ent, dict):
+            continue
+        text = str(ent.get("text") or "")
+        for line in text.splitlines():
+            m = _re.match(
+                r"\s*([a-z]+)?\s*nerdle\.?\s*#\s*(\d{1,6})\s*$",
+                line, _re.IGNORECASE)
+            if not m:
+                continue
+            prefix = (m.group(1) or "").lower()
+            own.append({"number": int(m.group(2)),
+                        "prefix": prefix,
+                        "tag": str(ent.get("tag") or ""),
+                        "cls": str(ent.get("cls") or ""),
+                        "text": line.strip()})
+    if not own:
+        return None, None
+    if want:
+        # The mode's own header: prefix == mode, or (classic only)
+        # no prefix at all. A different mode's prefix is shared
+        # chrome, never the mode's own header.
+        for ent in own:
+            if ent["prefix"] == want:
+                return ent["number"], ent
+        if want == "classic":
+            for ent in own:
+                if not ent["prefix"]:
+                    return ent["number"], ent
+        return None, None
+    return own[0]["number"], own[0]
+
+
+def _nerdle_header_number_from_probe(probe, mode_id=None):
+    """Multi-strategy header-number capture (iter 14, P0; iter 15:
+    own-header-only when mode_id is given).
 
     Iter-13's SERVED_JS regex /nerdle\\.\\s*#(\\d+)/i on
     document.body.innerText matched NOTHING on any mode page, so the
@@ -275,9 +327,28 @@ def _nerdle_header_number_from_probe(probe):
     (number_or_None, strategy_name, raw_header_text). Strategies:
     header-element, hash-element, data-attribute, url,
     json-blob-or-body. Plausible = 1..999999. Pure (unit-tested).
+
+    Iter-15: when mode_id is given, ONLY the mode's OWN header logo
+    line counts (strategy "own-header"; see
+    _nerdle_own_header_from_probe). The iter-14 hash-element strategy
+    took the FIRST `#<digits>` in DOM order, which on variant pages
+    is shared chrome carrying CLASSIC's number — mini/midi/speed all
+    returned identical 1733 for three different puzzles (ANALYSIS11
+    trust table). A bare first-match #number from shared chrome is
+    NEVER accepted for a mode: no own header -> (None,
+    "own-header-not-found", ...) so the gate warns instead of
+    blocking on another mode's number. Callers without a mode
+    (legacy) keep the iter-14 strategies.
     """
     probe = probe if isinstance(probe, dict) else {}
     header_text = str(probe.get("header_text") or "")
+    if mode_id:
+        n, ev = _nerdle_own_header_from_probe(probe, mode_id)
+        if n is not None and ev is not None:
+            raw = (f"tag={ev['tag']} class={ev['cls']} "
+                   f"text={ev['text']!r}")
+            return n, "own-header", raw
+        return None, "own-header-not-found", header_text
 
     def _nums(text):
         out = []
@@ -651,6 +722,28 @@ SERVED_JS = """
   const header_text = headerEls
     .map(e => (e.innerText || '').trim()).filter(Boolean).join(' | ')
     .slice(0, 2000);
+  // Iter-15 own-header probe (P0): the mode's OWN header logo line
+  // `<mode> nerdle. #<n>` (frame-proven: classic "nerdle. #1732",
+  // maxi "maxi nerdle. #1368"). Collect every visible element whose
+  // text contains such a line, with its tag + FULL class + the
+  // matched line, so the Python side can accept ONLY the mode's own
+  // header and reject classic's number leaking via shared chrome.
+  // A container whose innerText merely CONTAINS the line also
+  // matches, so the Python side prefers the SMALLEST text (the logo
+  // element itself) — entries are ordered shortest-first.
+  const own_headers = [];
+  for (const e of Array.from(document.querySelectorAll('body *'))) {
+    if (own_headers.length >= 40) break;
+    if (!e || e.offsetParent === null) continue;
+    const t = (e.innerText || '');
+    if (!t || t.length > 300) continue;
+    const lines = t.split('\\n').filter(l =>
+      /^\\s*([a-z]+\\s+)?nerdle\\.?\\s*#\\s*\\d{1,6}\\s*$/i.test(l));
+    if (lines.length) own_headers.push(
+      {tag: e.tagName || '', cls: String(e.className || ''),
+       text: lines.join('\\n')});
+  }
+  own_headers.sort((a, b) => a.text.length - b.text.length);
   const hash_texts = [];
   for (const e of Array.from(document.querySelectorAll('body *'))) {
     if (hash_texts.length >= 20) break;
@@ -671,11 +764,15 @@ SERVED_JS = """
            page_iso: new Date().toISOString(),
            tz_offset_min: new Date().getTimezoneOffset(),
            header_probe: { header_text: header_text,
+                           own_headers: own_headers,
                            hash_texts: hash_texts,
                            data_attrs: data_attrs,
                            url: window.location.href,
                            body_text: (document.body.innerText || '')
                              .slice(0, 8000) },
+           useLocalTime: (() => { try {
+             return localStorage.getItem('useLocalTime'); }
+             catch (e) { return null; } })(),
            gameState_keys: keys, dateish: dateish };
 } catch (e) { return { error: String(e) }; } }
 """
@@ -1014,6 +1111,26 @@ CLICK_POWER_JS = """
 """
 
 
+async def _grid_superscript_count(page, ch):
+    """Count leaf grid cells whose text is exactly `ch` (²/³).
+
+    Leaf-only: a container's innerText would count the same cell once
+    per ancestor. Returns None when the probe fails (unverified, not
+    zero). Used to VERIFY a power-key press landed in a cell.
+    """
+    try:
+        return await page.evaluate("""(ch) => {
+          let n = 0;
+          for (const e of document.querySelectorAll('div.pb-grid *')) {
+            if (e.children.length === 0 &&
+                (e.innerText || '').trim() === ch) n++;
+          }
+          return n;
+        }""", ch)
+    except Exception:
+        return None
+
+
 async def type_equation(page, eq, delay=200):
     try:
         await page.evaluate("() => { window.__QP_HOLD = 1; window.__QP_HOLD_T = Date.now(); }")
@@ -1029,6 +1146,15 @@ async def type_equation(page, eq, delay=200):
     fewer tile and the guess can never score - the exact failure that lost
     the mode). The site exposes them as buttons whose aria-label is the
     superscript, so split the equation and click those in place.
+
+    Iter-15 (P1, ANALYSIS11 maxi ² stall): the ² keypress in iter-14
+    produced NO cell — the 4th row sat half-typed as `1+67+8=76`
+    (official minus ²), cursor in the empty 10th cell, never
+    submitted. Every power-key press is now VERIFIED (leaf-cell ²
+    count before vs after), with a fallback entry method:
+    power-key click -> keyboard.type(²) -> keyboard.press(²). A
+    still-unverified press is logged explicitly (never silent), so
+    the debug log shows the stall point the truncated stdout hid.
     """
     if not any(c in eq for c in "²³"):
         await page.keyboard.type(eq, delay=delay)
@@ -1037,9 +1163,54 @@ async def type_equation(page, eq, delay=200):
         if not part:
             continue
         if part in "²³":
+            before = await _grid_superscript_count(page, part)
             ok = await page.evaluate(CLICK_POWER_JS, part)
             if not ok:
                 print(f"[type] power key {part!r} not found on board")
+            await page.wait_for_timeout(150)
+            after = await _grid_superscript_count(page, part)
+            verified = (before is not None and after is not None
+                        and after > before)
+            if ok and verified:
+                print(f"[type] power key {part!r} verified in cell "
+                      f"({before}->{after})")
+            else:
+                # Fallback 1: keyboard.type the superscript directly.
+                print(f"[type] power key {part!r} unverified after click "
+                      f"(clicked={ok} cells {before}->{after}); "
+                      "fallback: keyboard.type")
+                try:
+                    await page.keyboard.type(part, delay=delay)
+                except Exception as _e:
+                    print(f"[type] power key {part!r} type fallback "
+                          f"failed: {_e}")
+                await page.wait_for_timeout(150)
+                after2 = await _grid_superscript_count(page, part)
+                if (before is not None and after2 is not None
+                        and after2 > before):
+                    print(f"[type] power key {part!r} verified via "
+                          f"keyboard.type ({before}->{after2})")
+                else:
+                    # Fallback 2: keyboard.press the superscript.
+                    print(f"[type] power key {part!r} still unverified "
+                          f"after keyboard.type (cells {before}->{after2}); "
+                          "fallback: keyboard.press")
+                    try:
+                        await page.keyboard.press(part)
+                    except Exception as _e:
+                        print(f"[type] power key {part!r} press fallback "
+                              f"failed: {_e}")
+                    await page.wait_for_timeout(150)
+                    after3 = await _grid_superscript_count(page, part)
+                    if (before is not None and after3 is not None
+                            and after3 > before):
+                        print(f"[type] power key {part!r} verified via "
+                              f"keyboard.press ({before}->{after3})")
+                    else:
+                        print(f"[type] power key {part!r} FAILED after "
+                              "all entry methods (click + type + press); "
+                              f"cells {before}->{after3} — row will stall; "
+                              "retry ladder must retype")
             await page.wait_for_timeout(120)
         else:
             await page.keyboard.type(part, delay=delay)
@@ -1577,8 +1748,11 @@ async def play_mode(page, mode, script_dir, official=None):
         # Iter-14 P0: header number from the multi-strategy probe
         # (raw evidence -> Python strategies); log which strategy
         # matched + the raw header text for the rerun artifact.
+        # Iter-15 P0: pass mode_id — ONLY the mode's OWN header logo
+        # line counts; shared-chrome first-match #numbers are
+        # rejected (mini false-positive in iter-14).
         _hn, _hn_strategy, _hn_raw = _nerdle_header_number_from_probe(
-            _served.get("header_probe"))
+            _served.get("header_probe"), mode_id=mode["id"])
         SERVED[mode["id"]] = {
             "page_local": _served.get("page_local"),
             "page_iso": _served.get("page_iso"),
@@ -1586,6 +1760,7 @@ async def play_mode(page, mode, script_dir, official=None):
             "header_number": _hn,
             "header_strategy": _hn_strategy,
             "header_text": _hn_raw,
+            "useLocalTime": _served.get("useLocalTime"),
             "gameState_dateish": _served.get("dateish"),
             "site_solutions": _site_only,
             "matches_target_official": _matches}
@@ -1595,7 +1770,8 @@ async def play_mode(page, mode, script_dir, official=None):
               f"gameState_dateish={_served.get('dateish')} "
               f"site_solutions={_site_only} matches_target_official={_matches} "
               f"header_number={_hn} header_strategy={_hn_strategy} "
-              f"header_text={_hn_raw[:160]!r} "
+              f"header_text={_hn_raw[:300]!r} "
+              f"useLocalTime={_served.get('useLocalTime')!r} "
               f"{_speed_detail}")
         try:
             # VIDEO_DIR is the resolved videos/nerdle dir (set by main).
@@ -1697,13 +1873,70 @@ async def main():
                 print(f"[fakedate] {fake_iso} (effective date)")
         except Exception as e:
             print(f"[fakedate] skipped: {e}")
+        # Fix-loop iter 15 — NERDLE CLASSIC-DAY-KEY FINDING
+        # (ANALYSIS11 §1; P0 investigation, no boundary change).
+        #
+        # Observed: iter-14 classic served the Oct-17 board (#1732,
+        # frame g_20: the board header itself read "nerdle. #1732",
+        # and the site accepted the Oct-17 answer as a win) while
+        # iter-13, under the SAME fake clock and the SAME
+        # navigation/clock/play code, served Oct-18 (#1733) — and
+        # within iter-14 itself the VARIANT modes served Oct-18
+        # boards (mini answer = API Oct-18) while classic served
+        # Oct-17. The classic flip is therefore NOT a stale header
+        # capture (frame evidence refutes that) and NOT a fake-clock
+        # change. Leading hypothesis, proven in OUR code (the site
+        # side is still unproven — see below):
+        #
+        # The site's daily index follows localStorage `useLocalTime`
+        # (default false = UTC day). With the fake clock at effective
+        # date 00:05 Kiritimati (= 10:05 UTC previous day), UTC-day
+        # mode serves YESTERDAY's board (#1732) and local-midnight
+        # mode serves the target board (#1733). Whether the bot's
+        # `useLocalTime=true` survived to boot depended on init-script
+        # ORDER + the prepurge one-shot cookie: prepurge_js() runs
+        # localStorage.clear() on the first document where the
+        # `_qp_purged` cookie is absent, and until iter-15 it was
+        # registered AFTER the useLocalTime setter — so on the first
+        # https document it WIPED the bot's own setting moments
+        # before the site booted. Classic is modes[0], so classic is
+        # the victim of that first-document wipe, while later modes
+        # survive (cookie set -> purge is a no-op). The `_qp_purged`
+        # cookie has max-age=3600s, so whether the wipe fired on a
+        # given run depended on the committed browser_state.json's
+        # cookie state at run start — consistent with the iter-13
+        # (survived -> #1733) vs iter-14 (wiped -> #1732) flip, and
+        # with classic-vs-variants inside iter-14. The flip itself
+        # is NOT artifact-proven (the iter-13 state file is not in
+        # the artifact); what IS proven is the ordering hazard, fixed
+        # below. If the site itself serves yesterday's classic board
+        # in some window DESPITE useLocalTime=true, the correct
+        # behavior stays the existing honest defer (gate blocks, no
+        # final shipped) — never play yesterday's board as today's.
+        # NERDLE_SITE_BOUNDARY_UTC is UNCHANGED (16, 30): the site
+        # has NOT moved its post to 9pm IST.
+        #
+        # Fix: register prepurge BEFORE the useLocalTime setter, so
+        # the wipe (when it fires) happens first and the setting
+        # survives on every document, independent of cookie state.
+        # The per-mode SERVED evidence now also logs the live
+        # useLocalTime value, so the next artifact PROVES whether the
+        # setting survived at classic boot.
+        try:
+            if QP_AVAILABLE:
+                await context.add_init_script(script=QP.prepurge_js())
+        except Exception as e:
+            print(f"[nerdle] prepurge init skipped: {e}")
         # Fix-loop iter 13 revised: the site's daily index follows
         # localStorage `useLocalTime` (default false = UTC day). The
         # browser clock is faked to the EFFECTIVE date 00:05 local
         # (see above), so with the site's own local-midnight setting
         # on ("Change game to change at local midnight"), the site
         # serves the effective date's puzzle — the same date the API
-        # fetch + number gate check.
+        # fetch + number gate check. MUST be registered AFTER
+        # prepurge (see iter-15 note above): prepurge clears
+        # localStorage on the first document, which would otherwise
+        # wipe this setting before the site boots.
         try:
             await context.add_init_script(
                 script="try{localStorage.setItem('useLocalTime','true')}catch(e){}")
@@ -1712,7 +1945,6 @@ async def main():
             print(f"[nerdle] useLocalTime init skipped: {e}")
         try:
             if QP_AVAILABLE:
-                await context.add_init_script(script=QP.prepurge_js())
                 await context.add_init_script(script=QP.consent_watch_js())
         except Exception as e:
             print(f"[watchers] skipped: {e}")
