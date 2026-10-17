@@ -1194,13 +1194,31 @@ def _dismiss_teuteuf_banner(page):
     probe normalises whitespace (collapse all runs to one space,
     case-insensitive), matches against textContent (which covers
     SVG text), and searches the light DOM + every shadow root +
-    every same-origin iframe document. A body-level textContent
-    pre-check keeps the common absent case cheap. The log now
+    every same-origin iframe document. (The iter-17 body-level
+    textContent pre-check was REMOVED in iter-18 — see below —
+    because it short-circuited the shadow/iframe search.) The log now
     names HOW the banner was found (light-dom / shadow-dom /
     iframe / body-text), so a future 'absent' vs frame mismatch is
-    diagnosable instead of a bare claim."""
-    try:
-        res = page.evaluate("""/* TEUTEUF-BANNER-DISMISS */
+    diagnosable instead of a bare claim.
+
+    Iter-18 (ANALYSIS15 §8): the iter-17 probe STILL lied. Root
+    cause: its body-level pre-check — `if (!bodyText.includes
+    ('teuteuf edu')) return 'absent'` — reads
+    `document.body.textContent`, which does NOT include shadow-DOM
+    or iframe content. The shadow/iframe search below was dead
+    code in exactly the case it claimed to cover: a banner living
+    only in a shadow root or iframe returned 'absent' without any
+    root ever being searched. The pre-check gate is GONE: every
+    root's text is searched, and 'absent' is returned only after
+    all roots fail to match. A second root cause: the probe can
+    run before the banner renders (late-render), so a single
+    instant 'absent' is weak — an 'absent' result is now re-scanned
+    once after 500ms before it is logged. 'absent' therefore means
+    "not found at call time after a re-scan", never "proven not
+    on the page". The banner is non-blocking; this never blocks
+    anything — a lying 'absent' is worse than no claim, so the
+    probe would rather return 'present-*-no-element' than lie."""
+    _JS = """/* TEUTEUF-BANNER-DISMISS */
           () => {
           const norm = s => (s || '').toLowerCase()
             .replace(/\\s+/g, ' ').trim();
@@ -1215,12 +1233,14 @@ def _dismiss_teuteuf_banner(page):
             try { const r = el.getBoundingClientRect();
               return r.width > 0 && r.height > 0; }
             catch (err) { return false; } };
-          // Cheap body-level pre-check: when the signature is not
-          // even in the page text, skip the per-element scan.
-          let bodyText = '';
-          try { bodyText = norm(document.body.textContent); }
-          catch (err) {}
-          if (!bodyText.includes('teuteuf edu')) return 'absent';
+          // Iter-18: NO body-level pre-check gate. The iter-17
+          // probe returned 'absent' here whenever the banner
+          // lived in a shadow root or an iframe, because
+          // document.body.textContent does NOT include shadow-DOM
+          // or iframe content — so the shadow/iframe search
+          // below was dead code in exactly the case it claimed
+          // to cover. Every root's text is searched below, and
+          // 'absent' is returned only after all roots fail.
           // Roots to search: the main document, every shadow root
           // (recursively), and every same-origin iframe document
           // (cross-origin frames throw on access and are skipped).
@@ -1261,11 +1281,25 @@ def _dismiss_teuteuf_banner(page):
           };
           const cands = find();
           if (!cands.length) {
-            // Signature in the page text but no matching element:
-            // the text is rendered where per-element textContent
-            // cannot see it (e.g. canvas). Truthful, not 'absent'.
-            if (bodyText.includes('teuteuf edu is here'))
-              return 'present-body-text-no-element';
+            // Signature in some root's text but no matching
+            // element: the text is rendered where per-element
+            // textContent cannot see it (e.g. canvas). Truthful,
+            // not 'absent'. Every root's text is checked — the
+            // light DOM, each shadow root, each same-origin
+            // iframe document — never just document.body.
+            let sigInText = false;
+            for (const {root} of roots) {
+              try {
+                const t = root === document
+                  ? (document.body ? document.body.textContent : '')
+                  : (root.body ? root.body.textContent
+                               : (root.textContent || ''));
+                if (norm(t).includes('teuteuf edu is here')) {
+                  sigInText = true; break;
+                }
+              } catch (err) {}
+            }
+            if (sigInText) return 'present-body-text-no-element';
             return 'absent';
           }
           cands.sort((a, b) =>
@@ -1324,9 +1358,22 @@ def _dismiss_teuteuf_banner(page):
             box = box.parentElement;
           }
           return 'found-no-close' + suffix;
-        }""")
+        }"""
+    try:
+        res = page.evaluate(_JS)
     except Exception:
         return
+    if res == "absent":
+        # Iter-18 late-render re-scan: the probe can run before
+        # the banner renders, so a single instant 'absent' is
+        # weak. Re-scan once after 500ms before logging 'absent'.
+        # Safe to re-run: an 'absent' first pass performed no
+        # close/hide side effect. Bounded (+500ms, one retry).
+        try:
+            page.wait_for_timeout(500)
+            res = page.evaluate(_JS)
+        except Exception:
+            pass
     # Iter-16 (ANALYSIS12 §11): ALWAYS log the result, including
     # 'absent' — iter-15 logged only on found, and _close_modals'
     # dedup meant the dismiss ran once before the banner rendered
@@ -2652,10 +2699,25 @@ def _framed_reward_ad_state(page):
     present. In rerun #8 the poll showed overlays=[] for 45s, but the
     probe never said whether an ad iframe/video had EVER loaded — the
     distinction between "ad never filled" (defer honestly) and "ad
-    loaded but the gate never dropped" (real failure)."""
+    loaded but the gate never dropped" (real failure).
+
+    Fix-loop iter 18: also record whether the rewarded flow STARTED
+    (reward_click_registered = the page URL gained #goog_rewarded
+    and/or a googletag slot with "reward" in its path exists).
+    The unlock timeout used to conflate two different failures:
+    (a) the WATCH AD click never registered with the ad SDK
+    (bot-path failure), and (b) the click registered but no
+    creative ever loaded (site / ad-server no-fill — the honest
+    defer case). Only (b) may defer; (a) is a failure. The
+    distinction is what proves the iter-17 poster defer is a site
+    gate, not a bot-path regression: the identical tile-click +
+    unlock path unlocked poster in ~0s in every earlier run, and
+    in the iter-17 run the click DID register (URL #goog_rewarded,
+    videoreward slot present) while ad_loaded stayed False for
+    the full 45s."""
     out = {"overlays": [], "close": [], "googletag": None, "frames": 0,
            "ad_iframes": [], "videos": [], "ima": False, "frame_urls": [],
-           "ad_loaded": False}
+           "ad_loaded": False, "reward_click_registered": False}
     try:
         out["frames"] = len(page.frames or [])
     except Exception:
@@ -2720,6 +2782,23 @@ def _framed_reward_ad_state(page):
         }""") or {})
     except Exception:
         pass
+    # Iter-18: did the rewarded flow START? The WATCH AD click
+    # registers with the ad SDK when the URL gains #goog_rewarded
+    # and/or a googletag slot with "reward" in its path exists
+    # (the iter-17 run showed BOTH while no creative ever loaded).
+    # A click that merely found a button proves nothing about the
+    # SDK flow — this is the signal that separates a site/ad
+    # no-fill (honest defer) from a bot-path failure.
+    try:
+        _url = str(getattr(page, "url", "") or "")
+        _slots = (((out.get("googletag") or {}).get("slots")) or [])
+        _reward_slot = any(
+            "reward" in str((s or {}).get("path") or "").lower()
+            for s in _slots)
+        out["reward_click_registered"] = (
+            "goog_rewarded" in _url) or bool(_reward_slot)
+    except Exception:
+        pass
     return out
 
 
@@ -2737,6 +2816,25 @@ def _framed_try_unlock_poster(page):
     is a TRUSTED Playwright element click first — a JS .click() dispatches
     an untrusted event, which a rewarded-ad SDK may ignore, so the old
     JS-only click may never have started a real rewarded-ad session.
+
+    Fix-loop iter 18 (VERDICT — site / ad-server change, NOT a path
+    regression): the tile-click path and this unlock function are
+    byte-identical to the code that unlocked poster in ~0s in every
+    earlier run (same sequence every time: tile element-click times
+    out at 5s -> tile JS-click True -> board NOT ready -> unlock
+    start gate_up=True -> WATCH AD element-click -> board ready
+    ~0s, gate_up=False). In the iter-17 run the same sequence ran,
+    the WATCH AD click registered (URL gained #goog_rewarded, a
+    videoreward googletag slot existed), but NO creative ever loaded
+    (ad_loaded=False for the full 45s: no ad-like iframe, no video,
+    no IMA SDK). What changed is upstream: the site / ad server
+    stopped granting on click / stopped filling the rewarded slot
+    in headless CI. There is NO legitimate non-ad path around it —
+    bypassing the client-side gate or faking the reward callback
+    would be faking an ad view, so the honest outcome stays DEFER
+    with no video for a 3/4 game. The timeout below now records
+    click_registered explicitly so the next run's artifact proves
+    which side failed instead of leaving it to inference.
     """
     _gate_before = _framed_poster_gate_up(page)
     _dbg("framed", f"unlock: start gate_up={_gate_before} url={page.url[:70]}")
@@ -2848,17 +2946,30 @@ def _framed_try_unlock_poster(page):
         _ad_final = _framed_reward_ad_state(page)
     except Exception:
         _ad_final = {}
+    _click_registered = bool(_ad_final.get("reward_click_registered"))
     _dbg("framed", "unlock: TIMEOUT after ~45s; board never ready; "
                     f"gate_up={_framed_poster_gate_up(page)} url={page.url[:70]} "
+                    f"click_registered={_click_registered} "
                     f"ad_state={str(_ad_final)[:400]}")
     if not _ad_final.get("ad_loaded"):
-        # Iter 9: no ad iframe / video / IMA SDK ever appeared in 45s
-        # of polling — the rewarded ad never filled in headless CI, so
-        # the poster board was never reachable. The caller records this
-        # as DEFERRED (environment-blocked), not a solve failure.
-        _dbg("framed", "unlock: ad never loaded in 45s (no ad-like "
-                        "iframe, no video, no IMA SDK) — poster "
-                        "deferred, not failed")
+        if _click_registered:
+            # Iter 9 + 18: no ad iframe / video / IMA SDK ever
+            # appeared in 45s of polling, but the WATCH AD click DID
+            # register with the ad SDK — a site / ad-server no-fill,
+            # not a bot-path failure. The caller records this as
+            # DEFERRED (environment-blocked), not a solve failure.
+            _dbg("framed", "unlock: ad never loaded in 45s (no ad-like "
+                            "iframe, no video, no IMA SDK) but the "
+                            "WATCH AD click registered — site/ad "
+                            "no-fill; poster deferred, not failed")
+        else:
+            # Iter-18: the rewarded flow never started — the click
+            # did not register with the ad SDK. That is a bot-path
+            # failure, NOT a site no-fill, and must not be deferred
+            # as one (the caller only defers on click_registered).
+            _dbg("framed", "unlock: rewarded flow never started "
+                            "(click did not register) — bot-path "
+                            "failure, not a site no-fill")
     return False
 
 
@@ -3146,7 +3257,8 @@ def solve_framed_modes(page, answers):
                     _ad_ev = _framed_reward_ad_state(page)
                 except Exception:
                     _ad_ev = {}
-                if not _ad_ev.get("ad_loaded"):
+                if (not _ad_ev.get("ad_loaded")
+                        and _ad_ev.get("reward_click_registered")):
                     # Iter 9: DEFER the poster mode honestly. The
                     # rewarded ad never loaded in headless CI (no
                     # ad-like iframe, no video, no IMA SDK in 45s of
@@ -3157,8 +3269,19 @@ def solve_framed_modes(page, answers):
                     # summary says DEFERRED instead of FAIL so the next
                     # loop knows this is an environment block, not a
                     # solve failure. Never claim the mode as played.
+                    # Iter 18: the defer is reserved for the PROVEN
+                    # site/ad no-fill — the WATCH AD click registered
+                    # with the ad SDK (reward_click_registered) but
+                    # no creative ever loaded. A click that never
+                    # registered falls through to the failure branch
+                    # below instead of being deferred as a site gate.
                     _ev = ("poster DEFERRED: rewarded ad never loads "
-                           "in headless CI (WATCH AD flow started, "
+                           "in headless CI (WATCH AD click registered "
+                           "with the ad SDK but no creative ever "
+                           "loaded — site/ad no-fill; "
+                           f"reward_click_registered="
+                           f"{_ad_ev.get('reward_click_registered')}, "
+                           f"ad_loaded={_ad_ev.get('ad_loaded')}, "
                            f"{page.url[:60]}; ad_state="
                            f"{str(_ad_ev)[:300]})")
                     per_mode.append({"mode": mid, "answer": ans,
@@ -5005,6 +5128,64 @@ def _browser_today(page):
 _LIVE_DAY = {}
 
 
+# Live-day probe: hosts / URL markers that can NEVER carry a game's
+# served date. Iter-18 (P1, ANALYSIS15 §4 / ROOT CAUSE 4): the probe
+# accepted a date from ANY URL, so a DoubleVerify ad URL
+# (tpsc-video-ue.doubleverify.com/visit.js?…
+# dvtagver=dvot_2026-10-14_…) became Semantle's "served" date
+# (2026-10-14) — a tag VERSION date, not Semantle's puzzle date.
+# Semantle's own responses carry NO date-bearing URL, so the ad URL
+# was the probe's ONLY reading and the single-value fallback in
+# _live_day_provenance returned it. Ad / tracker / third-party URLs
+# are ignored ENTIRELY here: they are never recorded, so a dvtagver
+# date can never reach a re-key decision again.
+_LIVE_DAY_AD_HOST_MARKERS = (
+    "doubleverify",  # iter-17 vector: dvtagver tag-version date
+    "googlesyndication", "doubleclick", "googleadservices",
+    "googletagmanager", "google-analytics", "googletagservices",
+    "amazon-adsystem", "criteo", "taboola", "outbrain", "moatads",
+    "integralads", "scorecardresearch", "quantserve", "adnxs",
+    "rubiconproject", "pubmatic", "openx", "smartadserver", "adsrvr",
+    "advertising", "analytics", "hotjar", "mixpanel", "segment",
+    "fullstory", "newrelic", "cloudflareinsights", "facebook",
+    "twitter", "tiktok", "pinterest",
+)
+_LIVE_DAY_AD_URL_MARKERS = (
+    "dvtagver=",  # DoubleVerify tag version date, NOT a puzzle date
+    "goog_rewarded",  # GPT rewarded-ad flow marker
+    "/ads/", "adservice", "pagead", "gampad", "safeframe",
+    "partnerpixels",
+)
+
+
+def _is_live_day_ad_host(host):
+    """True when `host` is an ad / tracker / third-party host."""
+    try:
+        low = (host or "").lower()
+        return bool(low) and any(m in low for m in _LIVE_DAY_AD_HOST_MARKERS)
+    except Exception:
+        return False
+
+
+def _is_live_day_ad_url(url):
+    """True when `url` is an ad / tracker / third-party URL.
+
+    Pure + unit-testable. A game API is never hosted on an ad host
+    and never carries an ad-serving marker, so dropping these URLs
+    cannot lose a real served-date signal.
+    """
+    try:
+        low = (url or "").lower()
+        if not low:
+            return False
+        host = low.split("/")[2] if "//" in low else low
+        if _is_live_day_ad_host(host):
+            return True
+        return any(m in low for m in _LIVE_DAY_AD_URL_MARKERS)
+    except Exception:
+        return False
+
+
 def _install_live_day_probe(page):
     """Record the date a daily-puzzle site asks its backend for.
 
@@ -5021,6 +5202,11 @@ def _install_live_day_probe(page):
     def _on_response(resp):
         try:
             url = resp.url or ""
+            # Iter-18: ad / tracker URLs are ignored ENTIRELY, before
+            # any date is extracted — a dvtagver date must never be
+            # recorded as a served date (see _LIVE_DAY_AD_* above).
+            if _is_live_day_ad_url(url):
+                return
             m = re.search(r"(\d{4}-\d{2}-\d{2})", url)
             if not m:
                 # countryle's hidden-api keys the board by DD/MM/YYYY (server
@@ -5078,6 +5264,13 @@ def _live_day_provenance(gid):
     if not hosts:
         iso = _LIVE_DAY.get("date")
         return (iso, None, None) if iso else (None, None, None)
+    # Iter-18 (defense in depth): drop any ad / tracker host that
+    # slipped in (e.g. recorded before the capture filter, or seeded
+    # directly) — it must never be returned as a served-date reading.
+    hosts = {h: iso for h, iso in hosts.items()
+             if not _is_live_day_ad_host(h)}
+    if not hosts:
+        return None, None, None
     hints = {
         "searchle": ("searchle",),
         "semantle": ("semantle",),
@@ -5087,6 +5280,14 @@ def _live_day_provenance(gid):
     for host, iso in hosts.items():
         if any(h in host.lower() for h in hints):
             return iso, host, urls.get(host)
+    if hints:
+        # Iter-18: a game with a known first-party host hint gets NO
+        # reading when no hint host was recorded. The old single-value
+        # fallback returned whatever lone host existed — which is how
+        # a lone DoubleVerify URL became Semantle's "served" date
+        # (Semantle's own responses carry no date-bearing URL). No
+        # hint host => "probe captured no date", keep the target.
+        return None, None, None
     vals = set(hosts.values())
     if len(vals) == 1:
         iso = vals.pop()
@@ -6707,7 +6908,25 @@ def _s_worldle_live_round_modes(page, gid):
     Capital' == 'Capital') and the chrome set is expanded. The reader
     itself logs the RAW entry texts (iter-11 carry-forward: the
     TOTAL=13 reconciliation must be auditable from the log), so the
-    caller does not have to re-log them."""
+    caller does not have to re-log them.
+
+    Fix-loop iter 18 (ANALYSIS15 §11): the reader STILL returns
+    None ("no open dropdown container found (leaves < 3)"), so
+    the 12-offered count is reconstructed, not read live. Root
+    cause: the leaf filter `e.children.length === 0` excludes
+    EVERY real entry — the switcher renders each entry as a
+    wrapper (button/li) holding an emoji span + a label span, so
+    no entry is a bare leaf and `leaves.length >= 3` can never
+    hold. The filter now takes the INNERMOST text-bearing
+    elements (no element child carrying non-empty text): the
+    wrapper is excluded, its label span qualifies. Container
+    selectors also cover popover/popper portal wrappers. And
+    the toggle click is retried once when the first scan finds
+    no container: if the dropdown was ALREADY open, the first
+    click CLOSED it, so the scan must run after a re-open, not
+    after a close. If the live list genuinely cannot be read,
+    the reader still returns None (unreadable) — never a faked
+    live read; the caller keeps the reconstruction fallback."""
     try:
         labels = list(_WORLDLE_MODE_LABELS.values())
         opened = page.evaluate("""(labels) => {
@@ -6743,7 +6962,7 @@ def _s_worldle_live_round_modes(page, gid):
         # happens in Python so an unknown/renamed label survives as
         # `unmapped`. A list return is accepted for back-compat with
         # the iter-11 unit-test FakePage (which scripts a plain list).
-        raw_ev = page.evaluate("""() => {
+        _SCAN_JS = """/* G4-LIVE-ROUNDS-SCAN */ () => {
           const vis = e => e && e.offsetParent !== null;
           const norm = s => (s||'').replace(/\\s+/g,' ').trim();
           const out = [];
@@ -6752,13 +6971,17 @@ def _s_worldle_live_round_modes(page, gid):
             if (n && n.length < 80 && !seen.has(n.toLowerCase())) {
               seen.add(n.toLowerCase()); out.push(n); } };
           // OPEN-dropdown containers only: role menu/listbox, a
-          // dropdown/menu class wrapper, or the listbox/menu inside an
-          // aria-expanded=true toggle. Never the whole page; never
-          // nav/header/footer; never BODY/HTML (a wrapper that big is
-          // the page, not the dropdown).
+          // dropdown/menu/popover/popper class wrapper, or the
+          // listbox/menu inside an aria-expanded=true toggle.
+          // Never the whole page; never nav/header/footer; never
+          // BODY/HTML (a wrapper that big is the page, not the
+          // dropdown). No arbitrary siblings: a sibling without a
+          // menu marker is not a container, and misidentifying one
+          // would mark offered rounds "verified absent".
           const cands = Array.from(document.querySelectorAll(
             '[role=menu], [role=listbox], [class*=dropdown i], ' +
-            '[class*=menu i]')).filter(vis)
+            '[class*=menu i], [class*=popover i], ' +
+            '[class*=popper i]')).filter(vis)
             .filter(e => !e.closest('nav, header, footer'))
             .filter(e => !/^(BODY|HTML)$/.test(e.tagName));
           for (const e of Array.from(document.querySelectorAll(
@@ -6768,16 +6991,59 @@ def _s_worldle_live_round_modes(page, gid):
           }
           let scope = null;
           for (const m of cands) {
+            // Iter-18 leaf fix (ANALYSIS15 §11): entries are NOT
+            // bare leaves — each entry is a wrapper (button/li)
+            // holding an emoji span + a label span, so
+            // `children.length === 0` excluded EVERY entry and the
+            // reader always returned "leaves < 3". A leaf is now
+            // the INNERMOST text-bearing element: an element with
+            // no element child carrying non-empty text. The
+            // wrapper is excluded (its span child has text); the
+            // label span qualifies (its children are text-free
+            // icons). Decorative children (svg, empty spans) do
+            // not disqualify.
+            const hasTextChild = e => Array.from(e.children || [])
+              .some(c => norm(c.innerText || c.textContent));
             const leaves = Array.from(m.querySelectorAll(
               'button, [role=option], [role=menuitem], ' +
               '[role=menuitemradio], a, li, span, div'))
-              .filter(vis).filter(e => e.children.length === 0);
+              .filter(vis).filter(e => !hasTextChild(e));
             if (leaves.length >= 3) { scope = leaves; break; }
           }
           if (!scope) return {entries: [], container: false};
           for (const e of scope) push(e.innerText);
           return {entries: out, container: true};
-        }""") or {}
+        }"""
+        raw_ev = page.evaluate(_SCAN_JS) or {}
+        if isinstance(raw_ev, dict) and not raw_ev.get("container"):
+            # Second chance (iter-18): if the dropdown was ALREADY
+            # open, the toggle click above CLOSED it, so this scan
+            # ran against a closed menu. Click once more to re-open
+            # and re-scan; if that still finds no container, the
+            # list is genuinely unreadable -> None below.
+            try:
+                page.evaluate("""(labels) => {
+                  const vis = e => e && e.offsetParent !== null;
+                  const norm = s => (s||'').toLowerCase()
+                    .replace(/\\s+/g,' ').trim();
+                  const cands = Array.from(document.querySelectorAll(
+                    'button, [role=button], [aria-expanded], ' +
+                    '[aria-haspopup]')).filter(vis);
+                  for (const el of cands) {
+                    const t = norm(el.innerText);
+                    if (labels.some(l => t.includes(norm(l))) &&
+                        (el.querySelector('svg') ||
+                         el.getAttribute('aria-expanded') !== null ||
+                         el.getAttribute('aria-haspopup'))) {
+                      el.click(); return true;
+                    }
+                  }
+                  return false;
+                }""", labels)
+                page.wait_for_timeout(700)
+                raw_ev = page.evaluate(_SCAN_JS) or {}
+            except Exception:
+                pass
         try:
             page.keyboard.press("Escape")
         except Exception:
@@ -7242,29 +7508,80 @@ def _worldle_capital_activate_pinpoint(page, gid):
 
 def _s_worldle_capital_pin_ladder(page, gid, px, py, before,
                                  marker_appeared):
-    """Pin-placement ladder (iter-16, ANALYSIS12 §7).
+    """Pin-placement ladder (iter-16, ANALYSIS12 §7; reordered
+    iter-18, ANALYSIS15 §6).
 
     The iter-15 run proved a real mouse click lands ON the map
     (inMap=True, top=svg) yet registers NO pin (markers 4->4):
     the `teuteuf-geo-map` component does not treat a click on the
-    SVG root as a pin. Three further attempts, each followed by a
-    re-probe, stopping as soon as a marker appears:
-      (A) dispatch the full pointer+mouse sequence on the country
-          outline PATH element whose bbox contains the point (the
-          listener may live on the path, not the SVG root);
-      (B) a real press — move, down, hold 250ms, up — which
+    SVG root as a pin. Attempts, each followed by a re-probe,
+    stopping as soon as a marker appears:
+      (A) a real press — move, down, hold 250ms, up — which
           generates TRUE pointer events (a synthetic dispatch
           never generates pointer events, and a pointerdown-only
-          listener ignores a mouse-only click);
-      (C) a confirm step — click a confirm/place-pin control if
+          listener ignores a mouse-only click). Zero mouse
+          movement between down and up, so d3-zoom's didZoomMove
+          stays false and its `end` handler fires
+          onRegionClick(pendingClickRegion).
+      (B) a confirm step — click a confirm/place-pin control if
           one appeared after the click (some map widgets place a
           tentative pin that needs confirming).
+      (C) LAST RESORT, synthetic: dispatch the full pointer+mouse
+          sequence on the country outline PATH element whose bbox
+          contains the point (the listener may live on the path,
+          not the SVG root). Iter-18 demoted this from first to
+          last: synthetic dispatches were the primary path in
+          iters 13–17 and NEVER produced a marker, so they no
+          longer run before the real press.
     Returns (after_probe_or_None, detail). Placement is still only
     believed when the caller sees a marker/store change.
     """
     attempts = []
     after = None
-    # (A) country outline PATH dispatch.
+    # (A) real press first: move, down, hold, up, zero movement
+    # between down and up.
+    try:
+        page.mouse.move(px, py)
+        page.mouse.down()
+        page.wait_for_timeout(250)
+        page.mouse.up()
+        attempts.append("real-press=ok")
+    except Exception as e:
+        attempts.append(f"real-press failed: {str(e)[:60]}")
+    _settle(page, base=1200)
+    after = _worldle_pin_probe(page, px, py)
+    if marker_appeared(before, after):
+        return after, "; ".join(attempts) + " -> MARKER"
+    # (B) confirm step: a confirm/place-pin control that appeared
+    # after the click (tentative-pin widgets need confirming).
+    try:
+        clicked = page.evaluate("""() => {
+          const vis = e => e && e.offsetParent !== null;
+          const norm = s => (s || '').toLowerCase()
+            .replace(/\\s+/g, ' ').trim();
+          const cands = Array.from(document.querySelectorAll(
+            'button, [role=button], a')).filter(vis);
+          const hit = cands.find(e => {
+            const t = norm(e.innerText || e.textContent || '');
+            return t === 'confirm' || t === 'confirm location' ||
+              t === 'confirm pin' || t === 'place pin' ||
+              t === 'use this location' || t === 'submit location' ||
+              t.includes('confirm pin') || t.includes('place pin') ||
+              t.includes('use this location');
+          });
+          if (!hit) return false;
+          hit.click();
+          return true;
+        }""")
+    except Exception:
+        clicked = False
+    attempts.append(f"confirm-click={bool(clicked)}")
+    if clicked:
+        _settle(page, base=1200)
+        after = _worldle_pin_probe(page, px, py)
+        if marker_appeared(before, after):
+            return after, "; ".join(attempts) + " -> MARKER"
+    # (C) LAST-RESORT synthetic path dispatch (see docstring).
     try:
         res = page.evaluate("""(pt) => {
           const paths = [];
@@ -7299,53 +7616,11 @@ def _s_worldle_capital_pin_ladder(page, gid, px, py, before,
         }""", {"x": float(px), "y": float(py)}) or {}
     except Exception as e:
         res = {"dispatched": False, "error": str(e)[:60]}
-    attempts.append(f"path-dispatch={res}")
+    attempts.append(f"path-dispatch-synthetic-last-resort={res}")
     _settle(page, base=1200)
     after = _worldle_pin_probe(page, px, py)
     if marker_appeared(before, after):
         return after, "; ".join(attempts) + " -> MARKER"
-    # (B) real press: move, down, hold, up.
-    try:
-        page.mouse.move(px, py)
-        page.mouse.down()
-        page.wait_for_timeout(250)
-        page.mouse.up()
-        attempts.append("real-press=ok")
-    except Exception as e:
-        attempts.append(f"real-press failed: {str(e)[:60]}")
-    _settle(page, base=1200)
-    after = _worldle_pin_probe(page, px, py)
-    if marker_appeared(before, after):
-        return after, "; ".join(attempts) + " -> MARKER"
-    # (C) confirm step: a confirm/place-pin control that appeared
-    # after the click (tentative-pin widgets need confirming).
-    try:
-        clicked = page.evaluate("""() => {
-          const vis = e => e && e.offsetParent !== null;
-          const norm = s => (s || '').toLowerCase()
-            .replace(/\\s+/g, ' ').trim();
-          const cands = Array.from(document.querySelectorAll(
-            'button, [role=button], a')).filter(vis);
-          const hit = cands.find(e => {
-            const t = norm(e.innerText || e.textContent || '');
-            return t === 'confirm' || t === 'confirm location' ||
-              t === 'confirm pin' || t === 'place pin' ||
-              t === 'use this location' || t === 'submit location' ||
-              t.includes('confirm pin') || t.includes('place pin') ||
-              t.includes('use this location');
-          });
-          if (!hit) return false;
-          hit.click();
-          return true;
-        }""")
-    except Exception:
-        clicked = False
-    attempts.append(f"confirm-click={bool(clicked)}")
-    if clicked:
-        _settle(page, base=1200)
-        after = _worldle_pin_probe(page, px, py)
-        if marker_appeared(before, after):
-            return after, "; ".join(attempts) + " -> MARKER"
     return after, "; ".join(attempts) + " -> no marker"
 
 
@@ -7490,6 +7765,23 @@ def _worldle_capital_pinpoint_probe(page, px, py):
           if (!svg) return {found: false};
           const rect = svg.getBoundingClientRect();
           const dots = [];
+          // Iter-18: collect the SVG <text> labels ONCE — a dot's
+          // NAME usually lives NOT on the circle (the iter-17
+          // probe found no data-*/title/aria on any dot, so
+          // dot-name could never match) but in a nearby <text>
+          // label or the parent <g>. Each dot below records its
+          // nearest label text + its parent group's text/attrs.
+          const labelTexts = [];
+          for (const t of svg.querySelectorAll('text')) {
+            let tr;
+            try { tr = t.getBoundingClientRect(); }
+            catch (e) { continue; }
+            if (!tr || tr.width <= 0 || tr.height <= 0) continue;
+            const txt = (t.textContent || '').trim();
+            if (txt) labelTexts.push(
+              {x: tr.x + tr.width / 2, y: tr.y + tr.height / 2,
+               t: txt});
+          }
           for (const c of svg.querySelectorAll('circle, ellipse')) {
             let r;
             try { r = c.getBoundingClientRect(); }
@@ -7511,6 +7803,36 @@ def _worldle_capital_pinpoint_probe(page, px, py):
               try { fill = getComputedStyle(c).fill || ''; }
               catch (e) {}
             }
+            // Nearest <text> label within 60px of the dot centre
+            // (labels sit next to their dot; beyond 60px the text
+            // belongs to another dot / the map chrome, so it is
+            // NOT this dot's name).
+            let label = '', labelDist = null;
+            for (const lt of labelTexts) {
+              const d = Math.hypot(lt.x - cx, lt.y - cy);
+              if (labelDist === null || d < labelDist) {
+                label = lt.t; labelDist = d;
+              }
+            }
+            if (labelDist !== null && labelDist > 60) {
+              label = ''; labelDist = null;
+            }
+            // Parent <g> text/attrs: the group often wraps the
+            // dot + its label together (title / data-* / text).
+            // When one <g> wraps ALL dots, every dot gets the same
+            // parent_text and the picker's ambiguity rule (-> None)
+            // keeps the click honest.
+            let parentText = '', parentData = {};
+            try {
+              const par = c.parentElement;
+              if (par && par.tagName &&
+                  par.tagName.toLowerCase() === 'g') {
+                parentText = (par.textContent || '')
+                  .replace(/\s+/g, ' ').trim().slice(0, 120);
+                for (const k of Object.keys(par.dataset || {}))
+                  parentData[k] = par.dataset[k];
+              }
+            } catch (e) {}
             dots.push({x: cx, y: cy, r: r.width / 2,
                        fill: fill, cls: String(
                          c.getAttribute('class') || '').slice(0, 80),
@@ -7519,7 +7841,10 @@ def _worldle_capital_pinpoint_probe(page, px, py):
                        top_tag: top ? top.tagName : null,
                        top_cls: top ? String(
                          top.getAttribute('class') || '')
-                         .slice(0, 60) : ''});
+                         .slice(0, 60) : '',
+                       label: label, label_dist: labelDist,
+                       parent_text: parentText,
+                       parent_data: parentData});
           }
           const paths = Array.from(svg.querySelectorAll('path'));
           let inFill = false;
@@ -7588,7 +7913,9 @@ def _worldle_capital_pick_pin_target(probe, fit_px, cap_name):
 
     Decision order — each step is logged by the caller:
     1. dot-name: EXACTLY ONE dot carries identifying text
-       (data-* / title / aria-label / id) naming the capital
+       (data-* / title / aria-label / id — iter-18 also the
+       nearest <text> label within 60px, the parent <g>'s text /
+       data-*, and the dot's class) naming the capital
        (e.g. data-city="Kuwait City"). A named dot is the
        strongest evidence the dots are candidate cities, and
        clicking it is the game's own candidate, not a
@@ -7618,27 +7945,52 @@ def _worldle_capital_pick_pin_target(probe, fit_px, cap_name):
     if want:
         exact, contained = [], []
         for d in dots:
-            texts = []
-            for v in (d.get("data") or {}).values():
-                texts.append(str(v or ""))
-            texts += [str(d.get("title") or ""),
-                      str(d.get("aria") or ""),
-                      str(d.get("id") or "")]
-            norms = [_s_worldle_norm(t) for t in texts
+            # (source, text) pairs so the log names WHERE the name
+            # came from (data-attr vs label vs parent group).
+            pairs = []
+            for k, v in (d.get("data") or {}).items():
+                pairs.append((f"data-{k}", str(v or "")))
+            for k, v in (d.get("parent_data") or {}).items():
+                pairs.append((f"parent-data-{k}", str(v or "")))
+            pairs += [("title", str(d.get("title") or "")),
+                      ("aria", str(d.get("aria") or "")),
+                      ("id", str(d.get("id") or "")),
+                      ("label", str(d.get("label") or "")),
+                      ("parent_text", str(d.get("parent_text") or "")),
+                      ("cls", str(d.get("cls") or ""))]
+            norms = [(_s_worldle_norm(t), src) for src, t in pairs
                      if str(t or "").strip()]
-            if any(n == want for n in norms):
+            if any(n == want for n, _src in norms):
                 exact.append(d)
-            elif any(want in n for n in norms if n):
+            elif any(want in n for n, _src in norms if n):
                 contained.append(d)
         named = exact if exact else contained
         if len(named) == 1:
             d = named[0]
+            # Recompute the winning source for the log line.
+            _via = "?"
+            _pairs = []
+            for k, v in (d.get("data") or {}).items():
+                _pairs.append((f"data-{k}", str(v or "")))
+            for k, v in (d.get("parent_data") or {}).items():
+                _pairs.append((f"parent-data-{k}", str(v or "")))
+            _pairs += [("title", str(d.get("title") or "")),
+                       ("aria", str(d.get("aria") or "")),
+                       ("id", str(d.get("id") or "")),
+                       ("label", str(d.get("label") or "")),
+                       ("parent_text", str(d.get("parent_text") or "")),
+                       ("cls", str(d.get("cls") or ""))]
+            for _src, _t in _pairs:
+                _n = _s_worldle_norm(_t)
+                if _n == want or (want and want in _n):
+                    _via = _src
+                    break
             return {"x": float(d.get("x")), "y": float(d.get("y")),
                     "method": "dot-name",
                     "detail": ("dot at "
                                f"({float(d.get('x')):.1f}, "
                                f"{float(d.get('y')):.1f}) names the "
-                               f"capital {cap_name!r} "
+                               f"capital {cap_name!r} via {_via} "
                                f"(fill={d.get('fill')!r})")}
         if len(named) > 1:
             return None

@@ -660,6 +660,7 @@ VIDEO_DIR = None    # set by main() to videos/nerdle (play_mode's scope)
 _DEBUG_LOG = None   # Path to videos/nerdle/debug_<date>.log
 _REC_T0 = None      # time.time() when the recording/mode loop started
 _FIRST_TYPE_T = None  # seconds from _REC_T0 to the first successful typing
+_TYPE_PRIMED = False  # type_guess first-attempt priming, reset per mode by play_mode (iter-18)
 SERVED = {}         # mode_id -> served-date evidence (see SERVED_JS)
 PLAYED = {}         # mode_id -> equations ACTUALLY typed/submitted on site
 
@@ -813,15 +814,24 @@ SERVED_JS = """
       }
     }
     if (!t || t.length > 300) continue;
+    // Iter-18 (ANALYSIS15 §1): the logo spans split `nerdle .` and
+    // `#1733` onto SEPARATE innerText lines, so the per-line test
+    // below can NEVER match the logo (diagnostics carry the lone
+    // `#1733` line + the joined `nerdle . #1733` sample,
+    // diagnostics-only). Test the JOINED text (lines joined with a
+    // space) as well; the Python side applies the own-header prefix
+    // discipline on the matched substring.
+    const joined = t.split('\\n').join(' ').replace(/  +/g, ' ').trim();
     const lines = t.split('\\n').filter(l =>
       // Iter-17 (ANALYSIS13 §1): `nerdle\\s*\\.?\\s*#` — the real DOM
       // text is `nerdle . #1733` (SPACE before the dot); the old
       // `nerdle\\.?\\s*#` required the dot immediately after
       // `nerdle` and matched NOTHING on the nav logo line.
       /([a-z]+\\s+)?nerdle\\s*\\.?\\s*#\\s*\\d{1,6}/i.test(l));
-    if (lines.length && own_headers.length < 40) own_headers.push(
+    const joinedHit = /([a-z]+\\s+)?nerdle\\s*\\.?\\s*#\\s*\\d{1,6}/i.test(joined);
+    if ((lines.length || joinedHit) && own_headers.length < 40) own_headers.push(
       {tag: e.tagName || '', cls: String(e.className || ''),
-       text: lines.join('\\n')});
+       text: joinedHit ? joined : lines.join('\\n')});
   }
   own_headers.sort((a, b) => a.text.length - b.text.length);
   probe_diag.logo_selector_matched = own_headers.length > 0;
@@ -1047,9 +1057,14 @@ async def read_game_state(page, cols):
     return out
 
 
-async def wait_change(page, cols, prev, timeout=8.0):
+async def wait_change(page, cols, prev, timeout=3.0):
     """Poll until evaluated-row counts change (empty reads never count).
-    Then settle: one extra re-read after 600ms."""
+    Then settle: one extra re-read after 600ms.
+
+    Iter-18 (ANALYSIS15 §5): default timeout 3.0 (was 8.0) — a
+    registered Enter evaluates in ~0.6s, so 8s per failed attempt
+    was pure burn (8.1s x 2 failed first attempts). Callers that
+    need more (the final retype attempt) pass timeout explicitly."""
     state = []
     t0 = time.time()
     while time.time() - t0 < timeout:
@@ -1115,6 +1130,19 @@ async def accept_cookies(page, quiet=False):
                 await page.wait_for_timeout(700)
                 return True
             except Exception as e:
+                # Iter-18 (ANALYSIS15 §5): element.click() fails when
+                # an overlay intercepts pointer events (`div#root
+                # intercepts pointer events`) — the consent clicks
+                # kept failing while the banner stayed visible. A JS
+                # click dispatches without hit-testing, so it still
+                # dismisses the banner.
+                try:
+                    await el.evaluate("(e) => e.click()")
+                    print(f"[consent] clicked {sel!r} via JS in {fr.url[:60]}")
+                    await page.wait_for_timeout(700)
+                    return True
+                except Exception:
+                    pass
                 if not quiet:
                     print(f"[consent] {sel!r} on {fr.url[:40]} failed: {e}")
                 continue
@@ -1132,7 +1160,13 @@ async def dismiss_modals(page, has_grid):
         try:
             el = await page.query_selector(sel)
             if el and await el.is_visible():
-                await el.click(timeout=2000)
+                try:
+                    await el.click(timeout=2000)
+                except Exception:
+                    # Iter-18: JS-click fallback (same interception
+                    # failure as accept_cookies — overlay intercepts
+                    # pointer events, JS click bypasses hit-testing).
+                    await el.evaluate("(e) => e.click()")
                 await page.wait_for_timeout(600)
                 return
         except Exception:
@@ -1274,6 +1308,40 @@ def _entry_missing_superscript(state, eq):
     return False
 
 
+def _in_progress_row_text(state):
+    """Text of the first non-empty, not-yet-evaluated row (or None).
+
+    Pure. The row currently being typed — the pre-Enter verification
+    target (iter-18). Evaluated rows are settled guesses, not the
+    row in progress.
+    """
+    for g in (state or []):
+        rows = g.get("rows") or []
+        texts = g.get("texts") or []
+        for r, fb in enumerate(rows):
+            if not _done(fb) and r < len(texts) and (texts[r] or "").strip():
+                return texts[r].strip()
+    return None
+
+
+def _row_matches_equation(row_text, eq):
+    """True when the board row holds exactly the intended equation.
+
+    Pure. Compares against BOTH the raw equation and the
+    DOM-normalized form (²->2, ³->3): the DOM stores the exponent as
+    a plain 2 in a superscript-styled cell, so a correct row reads
+    back as "12+66+8=75" for intended "1²+66+8=75". Whitespace is
+    ignored. A double-² row ("1²²+66+8=75") matches NEITHER form.
+    """
+    if row_text is None or eq is None:
+        return False
+    row = "".join(str(row_text).split())
+    cand = "".join(str(eq).split())
+    if row == cand:
+        return True
+    return row == cand.replace("²", "2").replace("³", "3")
+
+
 async def _grid_superscript_count(page, ch, cols=None):
     """Count occurrences of `ch` (²/³) in the grid's row texts.
 
@@ -1290,6 +1358,14 @@ async def _grid_superscript_count(page, ch, cols=None):
     (unverified, not zero). Callers compare before/after, so the
     count's unit (occurrences across all row texts) only needs to
     be monotone in "² entered".
+
+    Iter-18 (ANALYSIS15 §2): DIAGNOSTIC-ONLY for entry
+    verification — the DOM stores the exponent as a plain 2 in a
+    superscript-styled cell, so this count NEVER rises on a
+    successful entry (it stayed 0->0 on the frame-proven double-²
+    row). type_equation gates entry on _grid_superscript_state
+    (tile / superscript-styled-cell delta) and logs this count
+    only to keep proving the DOM finding on every run.
     """
     if cols:
         try:
@@ -1311,6 +1387,131 @@ async def _grid_superscript_count(page, ch, cols=None):
         }""", ch)
     except Exception:
         return None
+
+
+SUPERSCRIPT_STATE_JS = """
+(cols) => {
+  // Iter-18 (ANALYSIS15 §2): the DOM stores a superscript exponent as
+  // a PLAIN 2 in a superscript-styled cell — row text contains "2",
+  // never U+00B2 — so entry MUST be verified by tile-count delta
+  // and/or superscript-styled-cell detection, never by counting ²
+  // in row text. Returns totals + per-grid rows in the SAME DOM
+  // order/traversal as READ_JS (div.pb-grid -> children rows ->
+  // keyboard-cell children with count == cols), so per-row indices
+  // align with read_state output.
+  const supHit = (el) => {
+    const stack = [el];
+    while (stack.length) {
+      const n = stack.pop();
+      if (!n || n.nodeType !== 1) continue;
+      const tag = (n.tagName || '').toUpperCase();
+      const cls = String(n.className || '').toLowerCase();
+      if (tag === 'SUP' || cls.indexOf('sup') !== -1) return true;
+      try { const cs = getComputedStyle(n);
+        if (cs && cs.verticalAlign === 'super') return true; } catch (e) {}
+      if (n.style && n.style.verticalAlign === 'super') return true;
+      for (const ch of (n.children || [])) stack.push(ch);
+    }
+    return false;
+  };
+  let tiles = 0, sup_cells = 0;
+  const grids = [];
+  for (const g of document.querySelectorAll('div.pb-grid')) {
+    const grows = [];
+    for (const r of g.children) {
+      const cells = [];
+      for (const c of r.children) {
+        if ((c.className || '').toString().includes('keyboard-cell')) cells.push(c);
+      }
+      if (cells.length !== cols) continue;
+      let rt = 0, rs = 0;
+      const texts = [];
+      for (const c of cells) {
+        const t = ((c.innerText || '') || (c.textContent || '')).trim();
+        texts.push(t);
+        if (t) { rt++; tiles++; }
+        if (t && supHit(c)) { rs++; sup_cells++; }
+      }
+      grows.push({text: texts.join(''), tiles: rt, sup_cells: rs});
+    }
+    grids.push(grows);
+  }
+  return {tiles: tiles, sup_cells: sup_cells, grids: grids};
+}
+"""
+
+
+async def _grid_superscript_state(page, cols):
+    """Tile/sup-cell snapshot of the grid (iter-18, ANALYSIS15 §2).
+
+    Returns {tiles, sup_cells, grids} from SUPERSCRIPT_STATE_JS, or
+    None when the probe fails. `tiles` = non-empty cells across all
+    grids; `sup_cells` = non-empty cells that are superscript-styled
+    (<sup>, sup* class, or vertical-align: super on the cell or any
+    descendant). `grids` mirrors read_state row order for per-row
+    lookups (_current_row_sup_cells). This — NOT a U+00B2 count in
+    row text — is the entry verifier: the DOM stores the exponent
+    as a plain 2, so a U+00B2 count never rises on a successful entry.
+    """
+    try:
+        st = await page.evaluate(SUPERSCRIPT_STATE_JS, cols)
+        if isinstance(st, dict) and "tiles" in st and "grids" in st:
+            return st
+    except Exception:
+        pass
+    return None
+
+
+def _superscript_entry_verified(before, after):
+    """True when a superscript entry landed between two snapshots.
+
+    Pure. Verified iff the tile count rose (a new tile appeared) OR
+    the superscript-styled-cell count rose (a tile became
+    superscript-styled). Either signal alone suffices — a plain-2
+    exponent in a sup-styled cell raises both; a tile appearing in
+    any form raises tiles. False when either snapshot is missing
+    (unverified, not verified).
+    """
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return False
+    try:
+        return (int(after.get("tiles", 0)) > int(before.get("tiles", 0))
+                or int(after.get("sup_cells", 0))
+                > int(before.get("sup_cells", 0)))
+    except (TypeError, ValueError):
+        return False
+
+
+def _current_row_sup_cells(state, probe_state):
+    """Superscript-styled cells in the first in-progress row.
+
+    Pure. `state` is read_state output; `probe_state` is
+    _grid_superscript_state output (per-grid rows in the same DOM
+    order as READ_JS, so indices align). Returns the sup_cells of
+    the first non-empty, not-yet-evaluated row, or None when the
+    probe is unavailable/misaligned. Used by type_guess to tell a
+    real ENTRY failure (current row lacks ²) from the plain-2 DOM
+    illusion (row text holds "2", no U+00B2, but the cell IS
+    superscript-styled).
+    """
+    grids = probe_state.get("grids") if isinstance(probe_state, dict) else None
+    if not isinstance(grids, list):
+        return None
+    for gi, g in enumerate(state or []):
+        rows = g.get("rows") or []
+        texts = g.get("texts") or []
+        if gi >= len(grids) or not isinstance(grids[gi], list):
+            continue
+        pgrid = grids[gi]
+        for r, fb in enumerate(rows):
+            if not _done(fb) and r < len(texts) and (texts[r] or "").strip():
+                if r < len(pgrid) and isinstance(pgrid[r], dict):
+                    try:
+                        return int(pgrid[r].get("sup_cells", 0))
+                    except (TypeError, ValueError):
+                        return None
+                return None
+    return None
 
 
 async def type_equation(page, eq, delay=200):
@@ -1350,9 +1551,10 @@ async def type_equation(page, eq, delay=200):
     The old `keyboard.type` / `keyboard.press` fallbacks are
     therefore REMOVED for superscripts (proven dead ends, not
     fallbacks) and replaced with paths that can actually deliver
-    the character, each VERIFIED via the read_state-based
-    superscript count (the old leaf-cell counter false-alarmed
-    `cells 0->0` on a row that frame-proven contained ²):
+    the character, each VERIFIED via the tile-count /
+    superscript-styled-cell delta (iter-18; the read_state U+00B2
+    count never rises because the DOM stores a plain 2 — see the
+    branch comment for the ANALYSIS15 §2 double-² mechanism):
       1. JS click on the re-found aria-label button (re-find fresh
          on every attempt, after any popup/settle — never a stale
          handle);
@@ -1378,94 +1580,116 @@ async def type_equation(page, eq, delay=200):
             continue
         if part in "²³":
             _t_part = time.time()
+            # Iter-18 (ANALYSIS15 §2): the entry verifier is the
+            # TILE / SUPERSCRIPT-STYLED-CELL delta between snapshots
+            # taken before and after each method — NOT the U+00B2
+            # count in row text. The DOM stores the exponent as a
+            # plain 2 in a superscript-styled cell, so the U+00B2
+            # count NEVER rises: the old ladder treated a successful
+            # js-click as unverified and ran the coordinate click,
+            # which inserted a SECOND ² (frame-proven row
+            # 1²²+66+8=5). The legacy count is still taken and
+            # logged, DIAGNOSTIC-ONLY — it must never gate entry.
+            # AT MOST ONE entry method runs once a tile appears: the
+            # ladder stops at the first verified entry, and if BOTH
+            # probes are blind (state probe None AND legacy count
+            # None) after a method that reported delivery, it stops
+            # anyway (single-entry rule) and lets the pre-Enter
+            # full-row verification arbitrate. When EITHER probe can
+            # still see the row, its verdict governs — a performed
+            # click that placed no tile (legacy count unchanged)
+            # must fall through to the next method.
             before = await _grid_superscript_count(page, part, cols=cols)
+            _before_state = await _grid_superscript_state(page, cols)
             verified = False
             after = before
-            # Method 1: JS click on the re-found button.
-            ok = await page.evaluate(CLICK_POWER_JS, part)
-            print(f"[type] stage superscript {part!r} js-click "
-                  f"clicked={ok} +{time.time() - _t_part:.1f}s")
-            await page.wait_for_timeout(150)
-            after = await _grid_superscript_count(page, part, cols=cols)
-            verified = (before is not None and after is not None
-                        and after > before)
-            if ok and verified:
-                print(f"[type] power key {part!r} verified in row text "
-                      f"via js-click ({before}->{after})")
-            else:
-                # Method 2: coordinate click on the button's centre.
-                print(f"[type] power key {part!r} unverified after "
-                      f"js-click (clicked={ok} count {before}->{after}); "
-                      "fallback: coordinate click")
-                _clicked_xy = False
-                try:
-                    _box = await page.evaluate(POWER_BTN_BOX_JS, part)
-                    if _box and _box.get("x") is not None:
-                        await page.mouse.click(_box["x"], _box["y"])
-                        try:
-                            QP.ev_push(_box["x"], _box["y"], "click")
-                        except Exception:
-                            pass
-                        _clicked_xy = True
-                except Exception as _e:
-                    print(f"[type] power key {part!r} coordinate click "
-                          f"failed: {_e}")
-                await page.wait_for_timeout(150)
-                after = await _grid_superscript_count(page, part, cols=cols)
-                verified = (before is not None and after is not None
-                            and after > before)
-                if _clicked_xy and verified:
-                    print(f"[type] power key {part!r} verified in row "
-                          f"text via coordinate click ({before}->{after})")
-                else:
+            _after_state = _before_state
+            _exhausted = True
+            for _method in ("js-click", "coordinate click",
+                            "clipboard paste", "insert_text"):
+                _delivered = False
+                if _method == "js-click":
+                    # Method 1: JS click on the re-found button.
+                    _delivered = bool(
+                        await page.evaluate(CLICK_POWER_JS, part))
+                    print(f"[type] stage superscript {part!r} js-click "
+                          f"clicked={_delivered} "
+                          f"+{time.time() - _t_part:.1f}s")
+                elif _method == "coordinate click":
+                    # Method 2: coordinate click on the button's centre.
+                    try:
+                        _box = await page.evaluate(POWER_BTN_BOX_JS, part)
+                        if _box and _box.get("x") is not None:
+                            await page.mouse.click(_box["x"], _box["y"])
+                            try:
+                                QP.ev_push(_box["x"], _box["y"], "click")
+                            except Exception:
+                                pass
+                            _delivered = True
+                    except Exception as _e:
+                        print(f"[type] power key {part!r} coordinate "
+                              f"click failed: {_e}")
+                elif _method == "clipboard paste":
                     # Method 3: clipboard paste.
-                    print(f"[type] power key {part!r} still unverified "
-                          f"after coordinate click (clicked={_clicked_xy} "
-                          f"count {before}->{after}); "
-                          "fallback: clipboard paste")
                     try:
                         await page.evaluate(
                             "(t) => navigator.clipboard.writeText(t)", part)
                         await page.keyboard.press("Control+V")
+                        _delivered = True
                     except Exception as _e:
                         print(f"[type] power key {part!r} clipboard "
                               f"paste failed: {_e}")
-                    await page.wait_for_timeout(150)
-                    after = await _grid_superscript_count(
-                        page, part, cols=cols)
-                    verified = (before is not None and after is not None
-                                and after > before)
-                    if verified:
-                        print(f"[type] power key {part!r} verified in "
-                              f"row text via clipboard paste "
-                              f"({before}->{after})")
-                    else:
-                        # Method 4: insert_text (input event, no key).
-                        print(f"[type] power key {part!r} still "
-                              f"unverified after clipboard paste "
-                              f"(count {before}->{after}); fallback: "
-                              "keyboard.insert_text")
-                        try:
-                            await page.keyboard.insert_text(part)
-                        except Exception as _e:
-                            print(f"[type] power key {part!r} "
-                                  f"insert_text failed: {_e}")
-                        await page.wait_for_timeout(150)
-                        after = await _grid_superscript_count(
-                            page, part, cols=cols)
-                        verified = (before is not None and after is not None
-                                    and after > before)
-                        if verified:
-                            print(f"[type] power key {part!r} verified "
-                                  f"in row text via insert_text "
-                                  f"({before}->{after})")
-                        else:
-                            print(f"[type] power key {part!r} FAILED "
-                                  "after all entry methods (js-click + "
-                                  "coordinate click + clipboard paste + "
-                                  "insert_text); "
-                                  f"count {before}->{after} — row will "
-                                  "stall; retry ladder must re-enter")
+                else:
+                    # Method 4: insert_text (input event, no key).
+                    try:
+                        await page.keyboard.insert_text(part)
+                        _delivered = True
+                    except Exception as _e:
+                        print(f"[type] power key {part!r} "
+                              f"insert_text failed: {_e}")
+                await page.wait_for_timeout(150)
+                _after_state = await _grid_superscript_state(page, cols)
+                after = await _grid_superscript_count(page, part, cols=cols)
+                _new_ok = _superscript_entry_verified(
+                    _before_state, _after_state)
+                _legacy_ok = (before is not None and after is not None
+                              and after > before)
+                if _new_ok or _legacy_ok:
+                    print(f"[type] power key {part!r} verified in row "
+                          f"text via {_method} (tile/sup "
+                          f"{_before_state and _before_state.get('tiles')}->"
+                          f"{_after_state and _after_state.get('tiles')} "
+                          f"sup "
+                          f"{_before_state and _before_state.get('sup_cells')}->"
+                          f"{_after_state and _after_state.get('sup_cells')}; "
+                          f"U+00B2 count {before}->{after} diagnostic-only)")
+                    verified = True
+                    _exhausted = False
+                    break
+                if _after_state is None and after is None \
+                        and _delivered:
+                    print(f"[type] power key {part!r} BOTH probes "
+                          f"blind after {_method} (reported "
+                          "delivery) — stopping ladder (single-entry "
+                          "rule); pre-Enter row verification will "
+                          "arbitrate")
+                    _exhausted = False
+                    break
+                print(f"[type] power key {part!r} unverified after "
+                      f"{_method} (delivered={_delivered} tile/sup "
+                      f"{_before_state and _before_state.get('tiles')}->"
+                      f"{_after_state and _after_state.get('tiles')} "
+                      f"sup "
+                      f"{_before_state and _before_state.get('sup_cells')}->"
+                      f"{_after_state and _after_state.get('sup_cells')}; "
+                      f"U+00B2 count {before}->{after}); trying next "
+                      "method")
+            if not verified and _exhausted:
+                print(f"[type] power key {part!r} FAILED after all "
+                      "entry methods (js-click + coordinate click + "
+                      "clipboard paste + insert_text); "
+                      f"U+00B2 count {before}->{after} — row will "
+                      "stall; retry ladder must re-enter")
             print(f"[type] stage superscript {part!r} done "
                   f"verified={verified} +{time.time() - _t_part:.1f}s")
             await page.wait_for_timeout(120)
@@ -1473,6 +1697,68 @@ async def type_equation(page, eq, delay=200):
             await page.keyboard.type(part, delay=delay)
     print(f"[type] stage type_equation done eq={eq!r} "
           f"+{time.time() - _t_eq:.1f}s")
+
+
+async def _verify_row_or_retype(page, eq, cols):
+    """Verify the in-progress row holds exactly `eq` before Enter.
+
+    Iter-18 (ANALYSIS15 §2): the old code pressed Enter on whatever
+    the ladder left in the row — a double-² row (1²²+66+8=5) or a
+    row with a lost keystroke (missing 7) was submitted as-is and
+    could never evaluate. Now: read the in-progress row; if it
+    matches `eq` (raw or DOM-normalized ²->2 / ³->3), proceed. On
+    mismatch, clear + retype the WHOLE row once and re-check. If it
+    still mismatches, log loudly and return False — the caller still
+    presses Enter (the board's row is the game's truth; the
+    read-back will record it), but the artifact now shows the
+    pre-Enter row, which attributes a later read-back mismatch to
+    ENTRY (row already wrong before Enter, e.g. the midi
+    1-1+5=5 -> 5+1-1=5 divergence, ANALYSIS15 §5) vs SUBMIT.
+    Returns True iff the row matches after at most one retype.
+    """
+    try:
+        _st = await read_state(page, cols, tries=2)
+    except Exception:
+        _st = []
+    _row = _in_progress_row_text(_st)
+    if _row is None:
+        # One settle retry: the row may render a beat after typing.
+        await page.wait_for_timeout(400)
+        try:
+            _st = await read_state(page, cols, tries=2)
+        except Exception:
+            _st = []
+        _row = _in_progress_row_text(_st)
+    if _row is None:
+        print(f"[type] pre-Enter row check: no in-progress row for "
+              f"{eq!r} (unverified — proceeding)")
+        return False
+    if _row_matches_equation(_row, eq):
+        print(f"[type] pre-Enter row check: row={_row!r} matches {eq!r}")
+        return True
+    print(f"[type] pre-Enter row MISMATCH typed={eq!r} row={_row!r} — "
+          "clear + retype whole row")
+    try:
+        await focus_grid(page)
+        for _ in range(cols + 2):
+            await page.keyboard.press("Backspace")
+        await type_equation(page, eq)
+    except Exception as _e:
+        print(f"[type] pre-Enter retype failed: {_e}")
+        return False
+    try:
+        _st2 = await read_state(page, cols, tries=2)
+    except Exception:
+        _st2 = []
+    _row2 = _in_progress_row_text(_st2)
+    if _row2 is not None and _row_matches_equation(_row2, eq):
+        print(f"[type] pre-Enter row check after retype: row={_row2!r} "
+              f"matches {eq!r}")
+        return True
+    print(f"[type] pre-Enter row STILL mismatched after retype "
+          f"typed={eq!r} row={_row2!r} — submitting board row as-is "
+          "(read-back will record it)")
+    return False
 
 
 async def type_guess(page, eq, cols, prev):
@@ -1499,11 +1785,32 @@ async def type_guess(page, eq, cols, prev):
         return state, counts, ok
 
     print(f"[type] stage type_guess start eq={eq!r}")
+    # Iter-18 (P1, ANALYSIS15 §5): the first-guess failures
+    # (attempts 1–2 ok=False counts=[0]) correlate with NO focus +
+    # a still-visible cookie banner / hints popup: attempt1 typed
+    # into an unfocused board (keystrokes dropped, row empty,
+    # Enter no-op), attempt2 Enter-only could never submit an
+    # empty row, and only retry2 — the first path that calls
+    # focus_grid — succeeded. So BEFORE the first typing attempt
+    # on a page: dismiss popups/consent, then focus the grid.
+    # Once per mode (reset by play_mode): later guesses on the same
+    # page are already focused with the banner dismissed. Typing
+    # speed / pacing UNCHANGED (no delay value touched).
+    global _TYPE_PRIMED
+    if not _TYPE_PRIMED:
+        _TYPE_PRIMED = True
+        await sweep_popups(page, tag=":type_guess")
+        await accept_cookies(page, quiet=True)
+        await dismiss_modals(page, has_grid=True)
+        await focus_grid(page)
     try:
         _t = time.time()
         await type_equation(page, eq)
         print(f"[type] stage type_equation call done eq={eq!r} "
               f"+{time.time() - _t:.1f}s (total +{time.time() - _t_tg:.1f}s)")
+        # Iter-18: verify the FULL row == intended equation BEFORE
+        # Enter; on mismatch, clear + retype the whole row (once).
+        await _verify_row_or_retype(page, eq, cols)
         _t = time.time()
         await page.keyboard.press("Enter")
         print(f"[type] stage Enter press done eq={eq!r} "
@@ -1512,7 +1819,11 @@ async def type_guess(page, eq, cols, prev):
         print(f"[type] {eq!r} failed: {e}")
         return [], [], False
     _t = time.time()
-    state, counts, ok = await done(await wait_change(page, cols, prev))
+    # Iter-18: fail-fast cap — a registered Enter evaluates in
+    # ~0.6s (guesses 2–3); the old 8.0s default burned 8.1s per
+    # failed first attempt. 3s is 5x headroom, never a pacing
+    # change to successful typing.
+    state, counts, ok = await done(await wait_change(page, cols, prev, timeout=3))
     print(f"[type] stage wait_change attempt1 done eq={eq!r} "
           f"+{time.time() - _t:.1f}s (total +{time.time() - _t_tg:.1f}s)")
     print(f"[type] {eq} attempt1 ok={ok} counts={counts}")
@@ -1528,9 +1839,23 @@ async def type_guess(page, eq, cols, prev):
         try:
             _cur = await read_state(page, cols, tries=2)
             if _entry_missing_superscript(_cur, eq):
-                _skip_enter_only = True
-                print(f"[type] {eq} in-progress row lacks superscript — "
-                      "ENTRY failure, skipping Enter-only retry")
+                # Iter-18: the pure check reads U+00B2 in row text,
+                # but the DOM stores a plain 2 in a
+                # superscript-styled cell — a present ² looks
+                # "missing". If the probe sees a
+                # superscript-styled cell in the CURRENT row, the ²
+                # IS entered: this is a submit failure, not an entry
+                # failure — keep the Enter-only retry.
+                _sup_probe = await _grid_superscript_state(page, cols)
+                _cur_sup = _current_row_sup_cells(_cur, _sup_probe)
+                if _cur_sup is not None and _cur_sup > 0:
+                    print(f"[type] {eq} current row holds a "
+                          "superscript-styled cell — ² entered "
+                          "(plain-2 DOM), keeping Enter-only retry")
+                else:
+                    _skip_enter_only = True
+                    print(f"[type] {eq} in-progress row lacks superscript — "
+                          "ENTRY failure, skipping Enter-only retry")
         except Exception:
             pass
     if not _skip_enter_only:
@@ -1539,7 +1864,7 @@ async def type_guess(page, eq, cols, prev):
             await page.keyboard.press("Enter")
         except Exception:
             pass
-        state, counts, ok = await done(await wait_change(page, cols, prev, timeout=5))
+        state, counts, ok = await done(await wait_change(page, cols, prev, timeout=3))
         print(f"[type] {eq} attempt2 ok={ok} counts={counts}")
         if ok:
             return state, counts, True
@@ -1560,13 +1885,19 @@ async def type_guess(page, eq, cols, prev):
             str(t) for g in (_st or []) for t in (g.get("texts") or []))
         _norm = "".join(ch for ch in _flat if ch.isalnum() or ch in "+-*/=")
         _want = "".join(ch for ch in str(eq) if ch.isalnum() or ch in "+-*/=")
+        # Iter-18: normalize ²/³ -> 2/3 — the DOM stores the
+        # exponent as a plain 2 in a superscript-styled cell, so a
+        # row holding ² reads back as "2" and the raw comparison
+        # never matched (² rows were needlessly retyped).
+        _norm = _norm.replace("²", "2").replace("³", "3")
+        _want = _want.replace("²", "2").replace("³", "3")
         if _want and _want in _norm:
             print(f"[type] {eq} already in grid, Enter only (no retype)")
             try:
                 await page.keyboard.press("Enter")
             except Exception:
                 pass
-            state, counts, ok = await done(await wait_change(page, cols, prev, timeout=8))
+            state, counts, ok = await done(await wait_change(page, cols, prev, timeout=5))
             print(f"[type] {eq} enter-only ok={ok} counts={counts}")
             return state, counts, ok
     except Exception:
@@ -1580,11 +1911,13 @@ async def type_guess(page, eq, cols, prev):
         for _ in range(cols + 2):
             await page.keyboard.press("Backspace")
         await type_equation(page, eq)
+        # Iter-18: verify the FULL row before Enter (same as attempt1).
+        await _verify_row_or_retype(page, eq, cols)
         await page.keyboard.press("Enter")
     except Exception as e:
         print(f"[type] retry failed: {e}")
         return state, counts, False
-    state, counts, ok = await done(await wait_change(page, cols, prev, timeout=8))
+    state, counts, ok = await done(await wait_change(page, cols, prev, timeout=5))
     print(f"[type] {eq} attempt3 ok={ok} counts={counts}")
     print(f"[type] stage type_guess done eq={eq!r} ok={ok} "
           f"+{time.time() - _t_tg:.1f}s")
@@ -1722,6 +2055,10 @@ async def play_mode(page, mode, script_dir, official=None):
     official guesses; expected counts official equations only — they are
     NOT comparable (see the counts_note in result.json)."""
     _nlog(f"=== {mode['name']} ({mode['url']}) ===")
+    # Iter-18: reset the type_guess first-attempt priming (popup
+    # dismiss + focus) for this mode's page.
+    global _TYPE_PRIMED
+    _TYPE_PRIMED = False
     eqs = list((official or {}).get(mode["id"]) or [])
     official_eqs = list(eqs)  # target-date official list, BEFORE site merge
     cols = mode["len"]
