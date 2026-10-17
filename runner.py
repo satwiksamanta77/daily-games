@@ -2897,26 +2897,69 @@ POST_WIN_MARKERS = (
 )
 
 
-def _strict_win(page, answer=None):
-    """True only on an explicit on-page win signal.
+# JS for _visible_page_text: the page's RENDERED text only. Top-down
+# walk that never descends into script/style/template/noscript (hidden
+# templates and inline scripts are not visible text) and skips any
+# subtree whose own computed style is display:none, visibility:hidden /
+# collapse, or whose element carries the hidden attribute. Input values
+# are not text nodes, so a typed answer sitting in the input can never
+# supply a win phrase.
+_VISIBLE_TEXT_JS = """/* _visible_page_text */
+() => {
+  const skip = new Set(["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT",
+                        "HEAD", "TITLE", "META", "LINK", "OPTION"]);
+  const out = [];
+  const body = document.body;
+  if (!body) return "";
+  const stack = [body];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) continue;
+    if (node.nodeType === 3) {
+      const t = (node.nodeValue || "").trim();
+      if (t) out.push(t);
+      continue;
+    }
+    if (node.nodeType !== 1) continue;
+    if (skip.has(String(node.tagName || "").toUpperCase())) continue;
+    if (node.hasAttribute && node.hasAttribute("hidden")) continue;
+    const cs = getComputedStyle(node);
+    if (cs.display === "none" || cs.visibility === "hidden" ||
+        cs.visibility === "collapse") continue;
+    const kids = node.childNodes;
+    for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
+  }
+  return out.join(" ");
+}"""
 
-    Flutter games (Canuckle, Betweenle) paint text to a canvas, so the DOM is
-    empty and `page.content()` can never contain the win banner. Those sites
-    are checked through the semantics tree and the answer echo instead.
-    """
+
+def _visible_page_text(page):
+    """Rendered page text only (see _VISIBLE_TEXT_JS). Returns "" on
+    any probe failure — a win claim must be provable from visible text,
+    never from a fallback to raw HTML. Never raises."""
     try:
-        body = (page.content() or "").lower()
+        txt = page.evaluate(_VISIBLE_TEXT_JS)
     except Exception:
-        body = ""
+        return ""
+    return txt if isinstance(txt, str) else ""
+
+
+def _strict_win(page, answer=None):
+    """True only on an explicit VISIBLE on-page win signal.
+
+    The win phrase must appear in the page's RENDERED text
+    (_visible_page_text). Raw page HTML is never consulted: hidden
+    templates / inline scripts can contain "you won" on a board that
+    was never won (batterup rerun #9: hidden "you won" + empty guess
+    rows reported solved=True). Flutter games (Canuckle, Betweenle)
+    paint text to a canvas, so the DOM is empty and the win banner is
+    checked through the semantics tree instead.
+    """
+    visible = _visible_page_text(page).lower()
     for s in WIN_PHRASES:
-        if s in body:
+        if s in visible:
             return True, f"win signal {s!r}"
     # post-win statistics sheets (Searchle and friends)
-    try:
-        visible = (page.evaluate(
-            "() => (document.body.innerText || '')").lower())
-    except Exception:
-        visible = body
     for m in POST_WIN_MARKERS:
         if m in visible:
             return True, f"post-win screen {m!r}"
@@ -2950,8 +2993,8 @@ def _strict_win(page, answer=None):
     # A win must come from the game's own explicit win/post-win state.
     if labels:
         print(f"[win-probe] semantics text: {labels[:400]!r}")
-    if body:
-        print(f"[win-probe] body text: {body[:400]!r}")
+    if visible:
+        print(f"[win-probe] visible text: {visible[:400]!r}")
     return False, "NO win signal on page"
 
 
@@ -9740,6 +9783,69 @@ def _attr_wait_post_submit(page, gid, timeout_s=8.0):
     return rows
 
 
+def _attr_verify_submitted(page, gid, baseline_rows, timeout_s=8.0):
+    """Verify a submit actually landed on an attribute-game board.
+
+    A pick + sent keystroke is NOT a submission: batterup rerun #9
+    counted "1 submitted guess" while Enter never submitted, the
+    suggestion dropdown stayed open, and the guess rows stayed empty.
+    The ONLY proof of submission is populated-row GROWTH past the
+    pre-submit baseline (the probe excludes suggestion-dropdown rows,
+    so a stale row from an earlier guess can never vouch for this one).
+
+    After growth is seen, the lingering suggestion dropdown is dismissed
+    and the board is re-probed: a genuine submit must leave populated
+    rows AND a closed dropdown. If the dropdown detector still reports
+    open after the dismiss, the submission is still accepted on row
+    growth alone (with a WARN): the dropdown detector is known to stay
+    open after genuine submits (iter9), while row growth cannot happen
+    without a submission. Returns (verified, probe). Never raises.
+    """
+    import time as _time
+    _t0 = _time.time()
+    _pr = {"rows": [], "dropdown_open": False, "populated": False,
+           "populated_rows": 0, "feedback_tiles": 0}
+    while _time.time() - _t0 < timeout_s:
+        _pr = _attr_post_submit_probe(page)
+        if int(_pr.get("populated_rows") or 0) > int(baseline_rows or 0):
+            break
+        try:
+            page.wait_for_timeout(500)
+        except Exception:
+            break
+    _grew = int(_pr.get("populated_rows") or 0) > int(baseline_rows or 0)
+    if _grew:
+        # Dismiss the lingering suggestion dropdown, then re-probe: the
+        # board must still show the new row, and the dropdown should
+        # now read closed.
+        try:
+            _attr_dismiss_suggestion(page)
+        except Exception:
+            pass
+        try:
+            _pr = _attr_post_submit_probe(page)
+        except Exception:
+            pass
+        _grew = int(_pr.get("populated_rows") or 0) > int(baseline_rows or 0)
+        if _grew and _pr.get("dropdown_open"):
+            _dbg(gid, "WARN: dropdown still open after dismiss; accepting "
+                      "submission on populated-row growth (probe excludes "
+                      "dropdown rows) — dropdown detector is known to stay "
+                      "open after genuine submits (iter9)")
+    else:
+        # Clean the board state for the retry's fresh pick.
+        try:
+            _attr_dismiss_suggestion(page)
+        except Exception:
+            pass
+    _dbg(gid, f"submit verify: baseline={baseline_rows} "
+              f"populated_rows={_pr.get('populated_rows')} "
+              f"feedback_tiles={_pr.get('feedback_tiles')} "
+              f"dropdown_open={_pr.get('dropdown_open')} verified={_grew} "
+              f"after {_time.time() - _t0:.1f}s")
+    return bool(_grew), _pr
+
+
 def solve_attr_game(page, answer_name, gid, api_probes=()):
     """Attribute search-box games (batterup, marveldle): 2 real probes with
     on-screen column feedback, then the answer. Suggestion rows are picked by
@@ -9749,7 +9855,13 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
     failed (pick ok=False) was never submitted, so it is recorded in
     _REJECTED (attempted-pick-failed), never in _PLAYED, and never in the
     "after N guesses" evidence count (rerun #3 batterup said "after 3
-    guesses" when only 1 guess was submitted)."""
+    guesses" when only 1 guess was submitted). A pick + sent keystroke
+    is likewise NOT a submission: the guess joins _submitted only after
+    _attr_verify_submitted sees populated guess rows grow past the
+    pre-submit baseline (batterup rerun #9: Enter never submitted, yet
+    the guess was counted). A guess with no populated row never reaches
+    the win check, and the answer-echo fallback is gone: the answer
+    merely sitting in the input / open dropdown is not win evidence."""
     _close_modals(page)
     answer_name = str(answer_name or "").strip()
     if not answer_name:
@@ -9762,12 +9874,21 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
         if cand and cand not in probes:
             probes.append(cand)
     seq = probes[:2] + [answer_name]
-    _submitted = []    # names actually submitted (pick ok=True + submit sent)
+    _submitted = []    # names VERIFIED submitted (pick ok + board growth)
     _pick_failed = []  # names whose suggestion pick failed (never submitted)
+    _submit_failed = []  # names picked but never verified submitted
     _dbg(gid, f"plan: probes={probes} answer={answer_name!r}")
     for n, name in enumerate(seq):
         last = (n == len(seq) - 1)
         _idle_drift(page)
+        # Pre-submit baseline: the verification gate is ROW GROWTH past
+        # this count, so a stale row from an earlier guess can never
+        # vouch for this one.
+        try:
+            _baseline_rows = int(
+                _attr_post_submit_probe(page).get("populated_rows") or 0)
+        except Exception:
+            _baseline_rows = 0
         ok, detail = _type_country_guess(page, page, name)
         _dbg(gid, f"guess {n + 1}/{len(seq)} {name!r}: pick ok={ok} ({detail})")
         if not ok:
@@ -9780,27 +9901,62 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
             return False, (f"answer pick failed ({detail}); "
                            f"submitted={len(_submitted)} "
                            f"attempted-pick-failed={len(_pick_failed)}")
+        # Submit with bounded retries, VERIFIED against the board: a pick
+        # + sent keystroke is not a submission (batterup rerun #9: Enter
+        # did not submit, dropdown stayed open, rows stayed empty, yet
+        # the guess was counted as submitted). The guess joins _submitted
+        # only after _attr_verify_submitted sees populated rows grow.
+        _verified = False
+        for _attempt in range(3):
+            try:
+                btn = page.query_selector(
+                    "button:has-text('Guess'), button:has-text('Submit'), "
+                    "button:has-text('Go')")
+                if btn and btn.is_visible():
+                    btn.click(timeout=3000)
+                else:
+                    page.keyboard.press("Enter")
+            except Exception:
+                try:
+                    page.keyboard.press("Enter")
+                except Exception:
+                    pass
+            _settle(page, base=3000)
+            _verified, _pr = _attr_verify_submitted(
+                page, gid, _baseline_rows)
+            if _verified:
+                break
+            if _attempt < 2:
+                _dbg(gid, f"guess {n + 1}/{len(seq)} {name!r}: submit "
+                          f"attempt {_attempt + 1}/3 NOT verified on the "
+                          f"board; re-picking and retrying")
+                # Re-pick: the input was cleared by the dismiss inside
+                # verification, so type + pick the suggestion again.
+                ok, detail = _type_country_guess(page, page, name)
+                _dbg(gid, f"guess {n + 1}/{len(seq)} {name!r}: re-pick "
+                          f"ok={ok} ({detail})")
+                if not ok:
+                    break
+            else:
+                _dbg(gid, f"guess {n + 1}/{len(seq)} {name!r}: submit "
+                          f"FAILED after 3 attempts (never submitted)")
+        if not _verified:
+            # NEVER counted as submitted: no _submitted / _PLAYED entry,
+            # no win check on it (a guess with no populated row is not a
+            # submitted guess, whatever the pick reported).
+            _submit_failed.append(name)
+            if last:
+                return False, (f"answer {name!r} NOT submitted after "
+                               f"3 attempts (board never showed a new "
+                               f"populated row); submitted={_submitted} "
+                               f"attempted-pick-failed={_pick_failed} "
+                               f"attempted-submit-failed={_submit_failed}")
+            _dbg(gid, f"guess {n + 1}/{len(seq)} {name!r}: submit failed; "
+                      f"dropping this probe (never submitted)")
+            continue
         _submitted.append(name)
         _PLAYED[gid] = list(_submitted)
         _REJECTED[gid] = list(_pick_failed)
-        try:
-            btn = page.query_selector(
-                "button:has-text('Guess'), button:has-text('Submit'), "
-                "button:has-text('Go')")
-            if btn and btn.is_visible():
-                btn.click(timeout=3000)
-            else:
-                page.keyboard.press("Enter")
-        except Exception:
-            try:
-                page.keyboard.press("Enter")
-            except Exception:
-                pass
-        _settle(page, base=3000)
-        if last:
-            # Win state must be read from the POST-submit board: wait for
-            # the submitted row to render before the win check / screenshot.
-            _attr_wait_post_submit(page, gid)
         try:
             txt = (page.evaluate("() => document.body.innerText") or "")
             cols = page.evaluate(
@@ -9825,29 +9981,68 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
                 exact_n = int((cols or {}).get("n") or 0)
             except Exception:
                 exact_n = 0
+            # A win requires ALL THREE: visible win text (via _strict_win,
+            # which reads rendered text only) AND populated guess rows
+            # AND feedback tiles on the board. The submission gate above
+            # already proved a new populated row for this guess; the
+            # board cross-check below re-proves it at win time.
+            _board = _attr_post_submit_probe(page)
+            _board_rows = int(_board.get("populated_rows") or 0)
+            _board_fb = int(_board.get("feedback_tiles") or 0)
+            if okw and _board_rows < 1:
+                # Win text with no populated guess row is not a win
+                # (e.g. a stale banner over an unsubmitted board).
+                _dbg(gid, "win signal ignored: no populated guess rows "
+                          f"(rows={_board_rows} feedback={_board_fb})")
+                okw, ev = False, "win signal without populated guess rows"
             if not okw and exact_n >= 5:
                 # All attribute columns lit: the board agrees even when the
-                # banner text differs. Log the tile sample as the evidence.
-                okw, ev = True, (f"all-attribute win ({exact_n} exact/green "
-                                 f"tiles; {(cols or {}).get('sample', '')})")
+                # banner text differs. This path has no visible win text,
+                # so it needs the board to vouch twice: a populated row
+                # AND in-row feedback tiles (page-wide tile counts alone
+                # can come from hidden templates / static page chrome).
+                if _board_rows >= 1 and _board_fb >= 1:
+                    okw, ev = True, (f"all-attribute win ({exact_n} "
+                                     f"exact/green tiles; "
+                                     f"{(cols or {}).get('sample', '')}; "
+                                     f"board rows={_board_rows} "
+                                     f"feedback={_board_fb})")
+                else:
+                    _dbg(gid, "all-attribute tiles ignored: board too "
+                              f"thin (rows={_board_rows} "
+                              f"feedback={_board_fb})")
             if not okw:
                 # Banner/confetti can lag the final submit by seconds.
                 page.wait_for_timeout(5000)
                 okw, ev = _strict_win(page, answer_name)
                 _dbg(gid, f"recheck after 5s: ok={okw} ({ev})")
+                if okw:
+                    _board = _attr_post_submit_probe(page)
+                    if int(_board.get("populated_rows") or 0) < 1:
+                        _dbg(gid, "recheck win signal ignored: no "
+                                  "populated guess rows")
+                        okw, ev = False, ("win signal without populated "
+                                          "guess rows")
+            _board_rows = int(_board.get("populated_rows") or 0)
+            _board_fb = int(_board.get("feedback_tiles") or 0)
             if okw:
                 return True, (f"{ev} after {len(_submitted)} submitted "
                               f"guesses (submitted={_submitted}, "
-                              f"attempted-pick-failed={_pick_failed})")
-            low = txt.lower()
-            if answer_name.lower() in low:
-                return True, (f"answer echo on page after "
-                              f"{len(_submitted)} submitted guesses "
-                              f"(submitted={_submitted}, "
-                              f"attempted-pick-failed={_pick_failed}) ({ev})")
+                              f"attempted-pick-failed={_pick_failed}, "
+                              f"attempted-submit-failed={_submit_failed}; "
+                              f"board rows={_board_rows} "
+                              f"feedback={_board_fb})")
+            _echo_present = answer_name.lower() in (txt or "").lower()
+            # NO answer-echo fallback (removed): the answer merely
+            # appearing in the input field or an open suggestion dropdown
+            # is not win evidence — it is present whether or not the
+            # game was won (batterup rerun #9: "answer echo" fired on an
+            # unsubmitted board). A win needs the game's own signal.
+            _dbg(gid, f"answer echo present={_echo_present} (not win evidence)")
             return False, (f"no win signal; {ev} "
                            f"(submitted={len(_submitted)}, "
-                           f"attempted-pick-failed={len(_pick_failed)})")
+                           f"attempted-pick-failed={len(_pick_failed)}, "
+                           f"attempted-submit-failed={_submit_failed})")
     return False, "no guesses played"
 
 
