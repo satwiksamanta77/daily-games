@@ -9584,6 +9584,28 @@ def _db_already_done(date_key, gid):
     return None
 
 
+def _write_skip_result(gid, date_key, done):
+    """Fix-loop iter8: a no-duplicate skip must leave an auditable artifact.
+
+    Run 39029436203 (iter7 rerun, dispatched without force=true) hit the
+    no-duplicate guard for all 18 games and exited 0 writing NOTHING to
+    videos/{gid}/ — every artifact was a ~270-byte zip holding only the
+    START debug line, yet the run concluded success. A skip that claims
+    success must say so in videos/{gid}/result.json (skipped=true, no fresh
+    video in this run) so the artifact, the bundle pack, and the watch can
+    tell "skipped: already done" apart from "solved fresh in this run".
+    """
+    try:
+        vdir = HERE / "videos" / gid
+        vdir.mkdir(parents=True, exist_ok=True)
+        (vdir / "result.json").write_text(json.dumps(
+            {"game": gid, "date": date_key, "solved": True, "skipped": True,
+             "evidence": "skipped: database already solved",
+             "video": done.get("video")}, indent=1), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def _db_save(date_key, gid, record):
     """Save structured record: database/{date}/{game}/result.json + youtube.txt.
 
@@ -9740,6 +9762,8 @@ def run_nerdle_external(g, tgt, date_key, today, short):
     done = _db_already_done(date_key, "nerdle")
     if done:
         print(f"[nerdle] already done for {date_key}, skipping (no duplicate)")
+        _dbg("nerdle", f"SKIP already done for {date_key} (no duplicate); no fresh video in this run")
+        _write_skip_result("nerdle", date_key, done)
         return {"game": "nerdle", "solved": True, "video": done.get("video"),
                 "evidence": "skipped: database already solved"}
     vdir = HERE / "videos" / "nerdle"
@@ -10243,6 +10267,8 @@ def run_one(gid):
     done = _db_already_done(date_key, gid)
     if done:
         print(f"[{gid}] already done for {date_key}, skipping (no duplicate)")
+        _dbg(gid, f"SKIP already done for {date_key} (no duplicate); no fresh video in this run")
+        _write_skip_result(gid, date_key, done)
         return {"game": gid, "solved": True, "video": done.get("video"),
                 "evidence": "skipped: database already solved"}
     key, solver = SOLVERS[gid]
