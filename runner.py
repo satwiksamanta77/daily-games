@@ -1179,29 +1179,102 @@ def _dismiss_teuteuf_banner(page):
     banner is absent.
 
     Iter-16: visibility is rect-based (a fixed-position banner has
-    offsetParent === null, so the old check saw it as absent), and
+    a null offset parent, so the old check saw it as absent), and
     a close click is verified by re-querying — a click that does
-    not remove the banner falls back to hiding its container."""
+    not remove the banner falls back to hiding its container.
+
+    Iter-17 (ANALYSIS13 §8): the probe STILL reported 'absent'
+    while the banner sat in every Worldle frame. Root cause: the
+    old probe matched the EXACT substring 'Teuteuf Edu' against
+    per-element innerText in the light DOM only. That misses the
+    banner when (a) its text is split across block boundaries so
+    innerText inserts a line break inside "Teuteuf Edu", (b) the
+    text lives in SVG <text> (no innerText), (c) it lives inside
+    a shadow root, or (d) it lives inside an iframe. The new
+    probe normalises whitespace (collapse all runs to one space,
+    case-insensitive), matches against textContent (which covers
+    SVG text), and searches the light DOM + every shadow root +
+    every same-origin iframe document. A body-level textContent
+    pre-check keeps the common absent case cheap. The log now
+    names HOW the banner was found (light-dom / shadow-dom /
+    iframe / body-text), so a future 'absent' vs frame mismatch is
+    diagnosable instead of a bare claim."""
     try:
         res = page.evaluate("""/* TEUTEUF-BANNER-DISMISS */
           () => {
+          const norm = s => (s || '').toLowerCase()
+            .replace(/\\s+/g, ' ').trim();
+          const hasSig = el => { try {
+            return norm(el.textContent).includes('teuteuf edu');
+            } catch (err) { return false; } };
           // Rect-based visibility (iter-16): a FIXED-position
-          // banner has offsetParent === null, so the old
-          // offsetParent check reported it 'absent' while it was
+          // banner has a null offset parent, so the old
+          // visibility check reported it 'absent' while it was
           // visible in every frame.
-          const vis = e => { if (!e) return false;
-            try { const r = e.getBoundingClientRect();
+          const vis = el => { if (!el) return false;
+            try { const r = el.getBoundingClientRect();
               return r.width > 0 && r.height > 0; }
             catch (err) { return false; } };
-          const find = () => Array.from(
-            document.querySelectorAll('body *'))
-            .filter(vis)
-            .filter(e => (e.innerText || '').includes('Teuteuf Edu'));
+          // Cheap body-level pre-check: when the signature is not
+          // even in the page text, skip the per-element scan.
+          let bodyText = '';
+          try { bodyText = norm(document.body.textContent); }
+          catch (err) {}
+          if (!bodyText.includes('teuteuf edu')) return 'absent';
+          // Roots to search: the main document, every shadow root
+          // (recursively), and every same-origin iframe document
+          // (cross-origin frames throw on access and are skipped).
+          const roots = [{root: document, method: 'light-dom'}];
+          const seenShadow = new Set();
+          const collectShadow = rt => {
+            for (const el of rt.querySelectorAll('*')) {
+              if (el.shadowRoot && !seenShadow.has(el.shadowRoot)) {
+                seenShadow.add(el.shadowRoot);
+                roots.push({root: el.shadowRoot,
+                            method: 'shadow-dom'});
+                collectShadow(el.shadowRoot);
+              }
+            }
+          };
+          try { collectShadow(document); } catch (err) {}
+          for (const fr of Array.from(
+              document.querySelectorAll('iframe'))) {
+            try { const d = fr.contentDocument;
+              if (d) roots.push({root: d, method: 'iframe'});
+            } catch (err) {}
+          }
+          const find = () => {
+            const out = [];
+            for (const {root, method} of roots) {
+              let els = [];
+              try { els = Array.from(root.querySelectorAll(
+                'body *')).filter(vis).filter(hasSig); }
+              catch (err) {}
+              if (!els.length) {
+                try { els = Array.from(root.querySelectorAll('*'))
+                  .filter(vis).filter(hasSig); }
+                catch (err) {}
+              }
+              for (const el of els) out.push({el, method});
+            }
+            return out;
+          };
           const cands = find();
-          if (!cands.length) return 'absent';
-          cands.sort((a, b) => (a.innerText || '').length -
-            (b.innerText || '').length);
-          const leaf = cands[0];
+          if (!cands.length) {
+            // Signature in the page text but no matching element:
+            // the text is rendered where per-element textContent
+            // cannot see it (e.g. canvas). Truthful, not 'absent'.
+            if (bodyText.includes('teuteuf edu is here'))
+              return 'present-body-text-no-element';
+            return 'absent';
+          }
+          cands.sort((a, b) =>
+            norm(a.el.textContent).length -
+            norm(b.el.textContent).length);
+          const leaf = cands[0].el;
+          const foundMethod = cands[0].method;
+          const suffix = foundMethod === 'light-dom' ? ''
+            : ' (' + foundMethod + ')';
           let node = leaf;
           for (let d = 0; d < 6 && node; d++) {
             const btns = node.querySelectorAll
@@ -1223,19 +1296,21 @@ def _dismiss_teuteuf_banner(page):
               // otherwise hide the container instead of reporting
               // a success that is still on screen.
               const still = find();
-              if (!still.length) return 'closed-via-button';
-              still.sort((a, b) => (a.innerText || '').length -
-                (b.innerText || '').length);
-              let box = still[0];
-              for (let d = 0; d < 4 && box && box.parentElement; d++) {
+              if (!still.length)
+                return 'closed-via-button' + suffix;
+              still.sort((a, b) =>
+                norm(a.el.textContent).length -
+                norm(b.el.textContent).length);
+              let box = still[0].el;
+              for (let d2 = 0; d2 < 4 && box && box.parentElement; d2++) {
                 const r = box.getBoundingClientRect();
                 if (r.height > 0 && r.height <= 300) {
                   box.style.setProperty('display', 'none', 'important');
-                  return 'closed-via-button+hidden-container';
+                  return 'closed-via-button+hidden-container' + suffix;
                 }
                 box = box.parentElement;
               }
-              return 'close-clicked-still-present';
+              return 'close-clicked-still-present' + suffix;
             }
             node = node.parentElement;
           }
@@ -1244,11 +1319,11 @@ def _dismiss_teuteuf_banner(page):
             const r = box.getBoundingClientRect();
             if (r.height > 0 && r.height <= 300) {
               box.style.setProperty('display', 'none', 'important');
-              return 'hidden-container';
+              return 'hidden-container' + suffix;
             }
             box = box.parentElement;
           }
-          return 'found-no-close';
+          return 'found-no-close' + suffix;
         }""")
     except Exception:
         return
@@ -5071,6 +5146,20 @@ def _align_answer_to_live_day(gid, ans, page=None):
     The ±1 bound preserves the legitimate tgt-1 defer (site has not
     rolled yet): a served==target-1 reading still re-keys, and the
     caller defers on it.
+
+    Iter-17 (P1, ANALYSIS13 §5): ROOT CAUSE of the missing line —
+    the iter-16 "log the decision even when the probe captures
+    nothing" fix used bare print(), which goes to the CI console
+    stdout ONLY. The artifact debug log
+    (videos/{gid}/debug_<date>.log, the file ANALYSIS13 grepped
+    for "live-day") is written ONLY by _dbg(); print() never lands
+    there. Worse, the iter-16 test asserted on captured stdout, so
+    it PASSED while the artifact stayed silent — the test verified
+    the wrong channel. Every decision line below now goes through
+    _dbg() (which ALSO prints to stdout, so the old stdout test
+    still passes), and every previously-silent early return logs
+    its reason. The caller must no longer swallow this function's
+    exceptions with a bare `except: pass` either (see run_game).
     """
     try:
         iso, _host, _url = _live_day_provenance(gid)
@@ -5081,16 +5170,21 @@ def _align_answer_to_live_day(gid, ans, page=None):
         # probe captures nothing — iter-15 returned silently here, so
         # the artifact had zero live-day lines and the ±1 bound was
         # never exercised on paper. The bound behaviour is unchanged.
-        print(f"[{gid}] live-day decision: probe captured no date "
+        # Iter-17: via _dbg, not print — print() never reaches the
+        # artifact debug log (see docstring).
+        _dbg(gid, f"live-day decision: probe captured no date "
               f"(no live-day signal), keeping target answer; "
               f"host={_host} url={_url}")
         return ans, None
     try:
         want = date(*(int(x) for x in iso.split("-")))
         have = A.target_date()
-    except Exception:
+    except Exception as _e:
+        _dbg(gid, f"live-day decision: probe date {iso!r} unparseable "
+              f"({str(_e)[:80]}), keeping target answer; "
+              f"host={_host} url={_url}")
         return ans, None
-    print(f"[{gid}] live-day decision: probe served={want} target={have} "
+    _dbg(gid, f"live-day decision: probe served={want} target={have} "
           f"host={_host} url={_url}")
     if want == have:
         return ans, None
@@ -5099,21 +5193,27 @@ def _align_answer_to_live_day(gid, ans, page=None):
         # at most one day (clock/timezone rollover). A 4-day jump is
         # the probe reading a history/archive/stats fetch. Keep the
         # target answer, flag, do NOT swap.
-        print(f"[{gid}] live-day RE-KEY REFUSED: probe served={want} is "
+        _dbg(gid, f"live-day RE-KEY REFUSED: probe served={want} is "
               f"{(want - have).days} days from target {have} (>1 day) — "
               f"probe failure, keeping target answer; host={_host} "
               f"url={_url}")
         return ans, None
     fn = getattr(A, gid, None)
     if fn is None:
+        _dbg(gid, f"live-day decision: no engine for {gid!r}, "
+              f"keeping target answer (probe served={want}); "
+              f"host={_host} url={_url}")
         return ans, None
     try:
         fixed = fn(want)
     except Exception as e:
-        print(f"[{gid}] live-day re-resolve failed: {str(e)[:100]}")
+        _dbg(gid, f"live-day re-resolve failed: {str(e)[:100]}")
         return ans, None
     new = (fixed or {}).get("answer") or (fixed or {}).get("name")
     if not new:
+        _dbg(gid, f"live-day decision: re-resolve for served={want} "
+              f"returned no answer, keeping target answer; "
+              f"host={_host} url={_url}")
         return ans, None
     # Displayed-puzzle cross-check: the site's own header number is
     # its day claim. If it agrees with the TARGET day's puzzle (or
@@ -5134,17 +5234,17 @@ def _align_answer_to_live_day(gid, ans, page=None):
             if (_served_puzzle is not None and _shown != _served_puzzle) \
                     or (_target_puzzle is not None
                         and _shown == _target_puzzle):
-                print(f"[{gid}] live-day RE-KEY REFUSED: site displays "
+                _dbg(gid, f"live-day RE-KEY REFUSED: site displays "
                       f"Game #{_shown} but probe served={want} "
                       f"(puzzle={_served_puzzle}) and target {have} "
                       f"puzzle={_target_puzzle} — displayed number "
                       f"contradicts the probe reading; keeping target "
                       f"answer; host={_host} url={_url}")
                 return ans, None
-            print(f"[{gid}] live-day cross-check: site displays "
+            _dbg(gid, f"live-day cross-check: site displays "
                   f"Game #{_shown}, consistent with probe served={want} "
                   f"(puzzle={_served_puzzle})")
-    print(f"[{gid}] site served {want} but engine answered {have}; "
+    _dbg(gid, f"site served {want} but engine answered {have}; "
           f"re-resolved {ans!r} -> {new!r} (host={_host} url={_url})")
     _PLANS.pop(gid, None)
     _HEX.pop(gid, None)
@@ -6632,7 +6732,7 @@ def _s_worldle_live_round_modes(page, gid):
             # EXPLICITLY. Iter-12 had ZERO 'live rounds' log lines
             # because the reader returned None on silent paths and the
             # cross-check was skipped without a trace.
-            _dbg(gid, "worldle live rounds reader: dropdown toggle NOT "
+            _dbg(gid, "worldle G4 live rounds reader: dropdown toggle NOT "
                       "opened (no mode-label toggle matched) -> None "
                       "(unreadable)")
             return None
@@ -6684,7 +6784,7 @@ def _s_worldle_live_round_modes(page, gid):
             pass
         if isinstance(raw_ev, dict):
             if not raw_ev.get("container"):
-                _dbg(gid, "worldle live rounds reader: no open dropdown "
+                _dbg(gid, "worldle G4 live rounds reader: no open dropdown "
                           "container found (leaves < 3) -> None "
                           "(unreadable)")
                 return None
@@ -6692,7 +6792,7 @@ def _s_worldle_live_round_modes(page, gid):
         elif isinstance(raw_ev, list):
             raw = list(raw_ev)
         else:
-            _dbg(gid, "worldle live rounds reader: unexpected return "
+            _dbg(gid, "worldle G4 live rounds reader: unexpected return "
                       f"type {type(raw_ev).__name__} -> None (unreadable)")
             return None
         inv = {_s_worldle_label_key(v): k
@@ -6703,13 +6803,13 @@ def _s_worldle_live_round_modes(page, gid):
                     if _s_worldle_label_key(f) not in inv
                     and _s_worldle_label_key(f) not in _WORLDLE_DROPDOWN_CHROME
                     and _s_worldle_label_key(f)]
-        _dbg(gid, f"worldle live rounds raw (open dropdown only): {raw}")
-        _dbg(gid, f"worldle live rounds mapped: {sorted(mapped)}")
-        _dbg(gid, f"worldle live rounds unmapped (in-scope): {unmapped}")
+        _dbg(gid, f"worldle G4 live rounds raw (open dropdown only): {raw}")
+        _dbg(gid, f"worldle G4 live rounds mapped: {sorted(mapped)}")
+        _dbg(gid, f"worldle G4 live rounds unmapped (in-scope): {unmapped}")
         return {"mapped": mapped, "raw": list(raw or []),
                 "unmapped": unmapped, "scope": "dropdown"}
     except Exception as e:
-        _dbg(gid, f"worldle live round list unreadable: {str(e)[:90]}")
+        _dbg(gid, f"worldle G4 live round list unreadable: {str(e)[:90]}")
         return None
 
 
@@ -7308,7 +7408,13 @@ def _worldle_capital_piece_path(page, px, py, max_dist=250.0):
 
     Still needs live confirmation: the exact piece-path id /
     region value for the played country (the pick is geometric +
-    hit-test, not id-matched)."""
+    hit-test, not id-matched).
+
+    Iter-17: the selector also covers `#pin-capital-svg path` —
+    the PINPOINT map's own SVG, whose paths carry NO
+    `country-solid` class, so the iter-16 selector matched nothing
+    there and retargeting never happened for the map the pin is
+    actually clicked on."""
     try:
         res = page.evaluate("""(pt) => {
           const roots = [document];
@@ -7332,7 +7438,8 @@ def _worldle_capital_piece_path(page, px, py, max_dist=250.0):
           const out = [];
           for (const root of roots) {
             for (const p of root.querySelectorAll(
-                'path.country-solid, g.geo-map-label')) {
+                'path.country-solid, g.geo-map-label, ' +
+                '#pin-capital-svg path, #pin-capital-svg g')) {
               let r;
               try { r = p.getBoundingClientRect(); }
               catch (e) { continue; }
@@ -7353,6 +7460,200 @@ def _worldle_capital_piece_path(page, px, py, max_dist=250.0):
         return None
     return _worldle_capital_pick_piece(res.get("pieces") or [],
                                        px, py, max_dist=max_dist)
+
+
+def _worldle_capital_pinpoint_probe(page, px, py):
+    """Probe the PINPOINT map itself (iter-17, ANALYSIS13 §5).
+
+    The iter-16 run clicked the bbox-fit point (1072.5, 422.7) and
+    got top=svg (bare SVG, no path on top) — the point is NOT on
+    the country outline (it sits in Kuwait Bay, a hole in the
+    outline), so pointerdown there sets no pendingClickRegion and
+    no pin registers. The same frame shows 4 blue dots on the
+    map. This probe returns, in one evaluate: the pinpoint SVG's
+    viewBox + screen rect; every dot (SVG circle/ellipse: centre,
+    radius, fill, class, id, all data-* attrs, title/aria-label,
+    and what elementFromPoint sees at its centre); the path
+    count; whether the given point is inside any outline path's
+    FILL (isPointInFill on the screen point mapped into SVG user
+    space — the definitive on-land test, unlike bbox containment,
+    which counts the bay hole as "inside"); and, when the point
+    is NOT in-fill, the nearest in-fill point found by a
+    distance-sorted grid search over the SVG rect (dot centres
+    included as candidates). Pure probe (no clicks). Returns {}
+    on any failure."""
+    try:
+        return page.evaluate("""(pt) => {
+          const host = document.querySelector('#pin-capital-svg');
+          let svg = host ? host.querySelector('svg') : null;
+          if (!svg && host && host.tagName === 'svg') svg = host;
+          if (!svg) return {found: false};
+          const rect = svg.getBoundingClientRect();
+          const dots = [];
+          for (const c of svg.querySelectorAll('circle, ellipse')) {
+            let r;
+            try { r = c.getBoundingClientRect(); }
+            catch (e) { continue; }
+            if (!r || r.width <= 0 || r.height <= 0) continue;
+            const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+            const data = {};
+            try { for (const k of Object.keys(c.dataset || {}))
+              data[k] = c.dataset[k]; } catch (e) {}
+            let title = '';
+            try { const t = c.querySelector('title');
+              title = t ? (t.textContent || '') : ''; } catch (e) {}
+            let top = null;
+            try { top = document.elementFromPoint(cx, cy); }
+            catch (e) {}
+            let fill = '';
+            try { fill = c.getAttribute('fill') || ''; } catch (e) {}
+            if (!fill) {
+              try { fill = getComputedStyle(c).fill || ''; }
+              catch (e) {}
+            }
+            dots.push({x: cx, y: cy, r: r.width / 2,
+                       fill: fill, cls: String(
+                         c.getAttribute('class') || '').slice(0, 80),
+                       id: c.id || '', data: data, title: title,
+                       aria: c.getAttribute('aria-label') || '',
+                       top_tag: top ? top.tagName : null,
+                       top_cls: top ? String(
+                         top.getAttribute('class') || '')
+                         .slice(0, 60) : ''});
+          }
+          const paths = Array.from(svg.querySelectorAll('path'));
+          let inFill = false;
+          const toUser = (x, y) => {
+            try {
+              const ctm = svg.getScreenCTM();
+              if (!ctm) return null;
+              return new DOMPoint(x, y)
+                .matrixTransform(ctm.inverse());
+            } catch (e) { return null; }
+          };
+          const hitsFill = (x, y) => {
+            const p = toUser(x, y);
+            if (!p) return false;
+            for (const path of paths) {
+              try { if (path.isPointInFill(p)) return true; }
+              catch (e) {}
+            }
+            return false;
+          };
+          inFill = hitsFill(pt.x, pt.y);
+          let corrected = null;
+          if (!inFill) {
+            // Distance-sorted grid search for the nearest point
+            // that IS inside a path's fill. Step 16px over the
+            // SVG rect; dot centres are candidates too (they sit
+            // on the map). Capped so the search stays cheap.
+            const cands = [];
+            const seen = new Set();
+            const push = (x, y) => {
+              const k = Math.round(x) + ',' + Math.round(y);
+              if (seen.has(k)) return;
+              seen.add(k);
+              cands.push({x, y, d: Math.hypot(x - pt.x, y - pt.y)});
+            };
+            for (const d of dots) push(d.x, d.y);
+            for (let gx = rect.x + 8; gx <= rect.x + rect.width;
+                 gx += 16) {
+              for (let gy = rect.y + 8; gy <= rect.y + rect.height;
+                   gy += 16) push(gx, gy);
+            }
+            cands.sort((a, b) => a.d - b.d);
+            let tested = 0;
+            for (const c of cands) {
+              if (tested++ > 800) break;
+              if (hitsFill(c.x, c.y)) { corrected = {x: c.x, y: c.y,
+                dist: c.d}; break; }
+            }
+          }
+          return {found: true,
+                  svg: {viewBox: svg.getAttribute('viewBox') || '',
+                        rect: {x: rect.x, y: rect.y,
+                               w: rect.width, h: rect.height}},
+                  dots: dots, n_paths: paths.length,
+                  n_dots: dots.length,
+                  in_fill: inFill, corrected: corrected};
+        }""", {"x": float(px), "y": float(py)}) or {}
+    except Exception:
+        return {}
+
+
+def _worldle_capital_pick_pin_target(probe, fit_px, cap_name):
+    """Pure: choose the pin-click target from a pinpoint probe
+    (iter-17, ANALYSIS13 §5). Returns {x, y, method, detail} or
+    None (caller keeps the bbox-fit point and logs it unverified).
+
+    Decision order — each step is logged by the caller:
+    1. dot-name: EXACTLY ONE dot carries identifying text
+       (data-* / title / aria-label / id) naming the capital
+       (e.g. data-city="Kuwait City"). A named dot is the
+       strongest evidence the dots are candidate cities, and
+       clicking it is the game's own candidate, not a
+       projection. Two or more name matches = ambiguous -> None.
+    2. bbox-fit-in-fill: the bbox-fit point is inside a country
+       path's fill, so pointerdown there lands on land and can
+       set pendingClickRegion. Click the fit point.
+    3. in-fill-search: the fit point is in a hole (Kuwait Bay);
+       click the nearest in-fill point the grid search found.
+
+    Deliberately NOT "nearest dot to the fit point": the iter-16
+    fit point is ~140px off the NE-coast dot, so nearest-dot
+    would pick a centre dot (a different city) instead of the
+    capital. A dot is clicked ONLY on a name match or as the
+    nearest in-fill point (which is still a land point, and the
+    method is logged as in-fill-search, not dot-name)."""
+    probe = probe if isinstance(probe, dict) else {}
+    if not probe.get("found"):
+        return None
+    try:
+        fx, fy = float(fit_px[0]), float(fit_px[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+    want = _s_worldle_norm(cap_name or "")
+    dots = [d for d in (probe.get("dots") or [])
+            if isinstance(d, dict)]
+    if want:
+        exact, contained = [], []
+        for d in dots:
+            texts = []
+            for v in (d.get("data") or {}).values():
+                texts.append(str(v or ""))
+            texts += [str(d.get("title") or ""),
+                      str(d.get("aria") or ""),
+                      str(d.get("id") or "")]
+            norms = [_s_worldle_norm(t) for t in texts
+                     if str(t or "").strip()]
+            if any(n == want for n in norms):
+                exact.append(d)
+            elif any(want in n for n in norms if n):
+                contained.append(d)
+        named = exact if exact else contained
+        if len(named) == 1:
+            d = named[0]
+            return {"x": float(d.get("x")), "y": float(d.get("y")),
+                    "method": "dot-name",
+                    "detail": ("dot at "
+                               f"({float(d.get('x')):.1f}, "
+                               f"{float(d.get('y')):.1f}) names the "
+                               f"capital {cap_name!r} "
+                               f"(fill={d.get('fill')!r})")}
+        if len(named) > 1:
+            return None
+    if probe.get("in_fill"):
+        return {"x": fx, "y": fy, "method": "bbox-fit-in-fill",
+                "detail": "bbox-fit point is inside a country "
+                          "path's fill (on land)"}
+    corr = probe.get("corrected") or {}
+    if corr.get("x") is not None and corr.get("y") is not None:
+        return {"x": float(corr["x"]), "y": float(corr["y"]),
+                "method": "in-fill-search",
+                "detail": ("bbox-fit point is NOT in-fill (hole); "
+                           f"nearest in-fill point "
+                           f"{float(corr.get('dist') or 0):.1f}px away")}
+    return None
 
 
 def _s_worldle_play_capital(page, gid, day):
@@ -7586,6 +7887,38 @@ def _s_worldle_play_capital(page, gid, day):
                       f"keeping bbox-fit point ({px:.1f},{py:.1f}) — "
                       "live confirmation still needed: the exact "
                       "piece-path id / region for this country")
+        # Iter-17: pinpoint-map probe + target pick (see
+        # _worldle_capital_pinpoint_probe /
+        # _worldle_capital_pick_pin_target). The iter-16 fit point
+        # for Kuwait City (1072.5, 422.7) probed top=svg — bare
+        # SVG, NOT on the outline (it sits in Kuwait Bay, a hole
+        # in the outline), so pointerdown there can set no
+        # pendingClickRegion. The pick OVERRIDES the click target
+        # only on: a dot that NAMES the capital, a verified
+        # in-fill fit point, or the nearest in-fill point. The
+        # pre-click dot list is also the baseline for the
+        # post-click dot-delta check below.
+        _pin_probe = _worldle_capital_pinpoint_probe(page, px, py)
+        _dots_before = len((_pin_probe or {}).get("dots") or [])
+        _target = _worldle_capital_pick_pin_target(
+            _pin_probe, (px, py), c.get("name") or "")
+        if _target is not None:
+            _dbg(gid, "worldle capital pin target: "
+                      f"method={_target.get('method')} "
+                      f"target=({_target.get('x'):.1f}, "
+                      f"{_target.get('y'):.1f}) "
+                      f"fit-point was ({px:.1f},{py:.1f}); "
+                      f"{_target.get('detail')} | pinpoint dots="
+                      f"{_dots_before} "
+                      f"(svg={(_pin_probe or {}).get('svg')})")
+            px, py = float(_target["x"]), float(_target["y"])
+        else:
+            _dbg(gid, "worldle capital pin target: NO verified "
+                      "target (no name-matched dot, fit point not "
+                      "in-fill, no in-fill point found); keeping "
+                      f"fit/piece point ({px:.1f},{py:.1f}) — "
+                      f"pinpoint dots={_dots_before} "
+                      f"probe={_pin_probe}")
         before = _worldle_pin_probe(page, px, py)
         before_markers = int(before.get("markers") or 0)
         gs_before = _s_worldle_day_guesses(page, "city-guesses", ds)
@@ -7599,17 +7932,31 @@ def _s_worldle_play_capital(page, gid, day):
                   f"shadow={before.get('markers_shadow')} "
                   f"shadow_hosts={before.get('shadow_hosts')}) "
                   f"chain={before.get('chain')}")
-        # Click the VERIFIED target with a real mouse click
-        # (page.mouse.click, not move/down/up, not a JS dispatch).
+        # Click the VERIFIED target with a real press: move to the
+        # point, then down + up with NO mouse movement in between,
+        # so d3-zoom's didZoomMove stays false and its `end`
+        # handler fires onRegionClick(pendingClickRegion). A
+        # synthetic dispatch never generates pointer events, and a
+        # press that drags (however slightly) is treated as a zoom
+        # gesture, not a click.
         _landed = bool(before.get("inMap"))
         try:
-            page.mouse.click(px, py)
+            page.mouse.move(px, py)
+            page.mouse.down()
+            page.mouse.up()
         except Exception as e:
             return "partial", [name], \
                 f"pin click failed ({str(e)[:80]}); name played"
         _settle(page, base=1200)
         after = _worldle_pin_probe(page, px, py)
         after_markers = int(after.get("markers") or 0)
+        # Post-click dot-delta check: a newly placed pin renders
+        # as an extra dot/circle. Unchanged dots + no marker = no pin.
+        _dots_after = len((_worldle_capital_pinpoint_probe(
+            page, px, py) or {}).get("dots") or [])
+        _dbg(gid, "worldle capital pin dots: "
+                  f"before={_dots_before} after={_dots_after} "
+                  f"markers={before_markers}->{after_markers}")
 
         def _marker_appeared(b, a):
             if int(a.get("markers") or 0) > int(b.get("markers") or 0):
@@ -8982,20 +9329,44 @@ def _worldle_phrase_pair_slots(slots, codes, names):
     return [(code, s) for code, s in zip(codes, by_x)], "geometry-x"
 
 
+def _worldle_phrase_norm_text(s):
+    """Unicode-preserving phrase normalisation (iter-17).
+
+    Strip ONLY the punctuation set the narrow slot check strips,
+    collapse whitespace, lowercase. Unlike ``[^a-z0-9 ]`` this
+    KEEPS non-Latin scripts: norm('اسمي') == 'اسمي', so a filled
+    Arabic slot verifies instead of normalising to '' (the
+    iter-16 false negative: every ara placement read placed=False
+    while the frame showed the Arabic slot filled)."""
+    t = str(s or "").lower()
+    t = re.sub(r"[.,!?;:'\"«»“”‘’()\-]+", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
 def _worldle_phrase_slot_at_contains(page, slot, phrase):
     """Position-anchored slot-fill check (iter-15): the broad-probe
     slot at the SAME centre as `slot` must now contain `phrase`
     (punctuation-insensitive). Unlike _worldle_phrase_slot_contains
     (any slot) and the old narrow-index verify (wrong list for broad
     slots), this cannot false-positive on the chip's own card and
-    cannot address the wrong element."""
+    cannot address the wrong element.
+
+    Iter-17: the normaliser is _worldle_phrase_norm_text
+    (Unicode-preserving). The old inline norm used
+    ``[^a-z0-9 ]`` which DELETED the Arabic phrase entirely
+    (norm('اسمي') == ''), so the Arabic slot could never verify
+    even when frame-proven filled.
+
+    The broad probe is called WITHOUT `names` on purpose: a FILLED
+    slot's text is the phrase ('اسمي'), not a language name, so the
+    names filter would exclude exactly the filled slots this check
+    must see."""
     try:
         tx, ty = slot.get("x"), slot.get("y")
         if tx is None or ty is None:
             return False
         broad_now = _worldle_phrase_broad_slot_probe(page) or {}
-        norm = lambda s: re.sub(r"[^a-z0-9 ]+", "",
-                                str(s or "").lower()).strip()
+        norm = _worldle_phrase_norm_text
         for cand in (broad_now.get("slots") or []):
             if (abs(float(cand.get("x") or -9999) - float(tx)) < 10
                     and abs(float(cand.get("y") or -9999) - float(ty)) < 10
@@ -9191,6 +9562,15 @@ def _worldle_phrase_drag(page, gid, picked, codes, names, prompts, ds,
             return True
         return bool(_worldle_phrase_slot_contains(page, _phrase))
 
+    # Iter-17 (ANALYSIS13 §6): attempt ALL pairs. The old loop
+    # returned "click-fallback" on the FIRST unplaced pair, so when
+    # the (then broken) verifier lied about ara, eng was NEVER
+    # attempted. Now every pair is attempted, per-pair placement is
+    # recorded, and only pairs that actually failed go to the
+    # click-verify fallback (via _out["placed"], which the caller
+    # passes through as _placed_in).
+    _placed_by_code = {}
+    _drag_failed = []
     for _code, _chip, _slot in _pairs:
         _phrase = _chip.get("phrase") or ""
         _placed = False
@@ -9310,18 +9690,34 @@ def _worldle_phrase_drag(page, gid, picked, codes, names, prompts, ds,
             _dbg(gid, f"worldle phrase drag hover-drop {_code} -> slot "
                       f"label={_slot.get('label')!r} ({_slot.get('x')}, "
                       f"{_slot.get('y')}) placed={_placed}")
+        _placed_by_code[str(_code).lower()] = bool(_placed)
         if not _placed:
-            # Iter-15: drag failure is NOT terminal — return
-            # "click-fallback" so the caller reaches the click-verify
-            # path (click chip -> click slot, verify slot fills).
-            # Iter-14 returned "partial" here and the click path was
-            # never reached (zero log lines).
-            return ("click-fallback",
-                    f"phrase drag failed for {_code} "
-                    f"({_phrase!r} -> slot label={_slot.get('label')!r} "
-                    f"({_slot.get('x')}, {_slot.get('y')})); all drag "
-                    f"primitives failed; probe={_probe}; falling back "
-                    "to click-verify (click chip -> click slot)")
+            # Iter-15: drag failure is NOT terminal — record it and
+            # CONTINUE to the next pair (iter-17: the old code
+            # returned "click-fallback" here, so a single pair's
+            # failure — e.g. the verifier lying about ara — meant
+            # the remaining pairs were never attempted). The
+            # caller reaches the click-verify path for the failed
+            # pairs after this loop.
+            _drag_failed.append((_code, _phrase, _slot))
+            _dbg(gid, f"worldle phrase drag failed for {_code} "
+                      f"({_phrase!r} -> slot label={_slot.get('label')!r} "
+                      f"({_slot.get('x')}, {_slot.get('y')})); all drag "
+                      "primitives failed for this pair; continuing "
+                      "to the next pair")
+    if isinstance(_out, dict):
+        _out["placed"] = dict(_placed_by_code)
+    if _drag_failed:
+        return ("click-fallback",
+                "; ".join(
+                    f"phrase drag failed for {_c} "
+                    f"({_p!r} -> slot label={_s.get('label')!r} "
+                    f"({_s.get('x')}, {_s.get('y')})); all drag "
+                    "primitives failed"
+                    for _c, _p, _s in _drag_failed)
+                + f"; probe={_probe}; falling back to click-verify "
+                "(click chip -> click slot) for the failed pairs; "
+                f"placed={_placed_by_code}")
     _s_worldle_submit_guarded(page, gid, "spokenLanguages", ds)
     _settle(page, base=1500)
     _gs = _s_worldle_day_guesses(page, "language-guesses", ds)
@@ -9334,7 +9730,7 @@ def _worldle_phrase_drag(page, gid, picked, codes, names, prompts, ds,
 
 
 def _worldle_phrase_click_verify(page, gid, picked, codes, names, prompts,
-                               ds, _pairs_in=None):
+                               ds, _pairs_in=None, _placed_in=None):
     """Click-verify fallback for the Worldle Q1 PHRASE round (iter-15 P1).
 
     Iter-14: the click path was never reached (zero log lines) — the
@@ -9342,10 +9738,8 @@ def _worldle_phrase_click_verify(page, gid, picked, codes, names, prompts,
     returned partial too. Now the drag helper returns "click-fallback"
     and the caller runs this: for each pair, click the chip centre,
     then click the slot centre, then VERIFY the slot filled
-    (position-anchored). A click that places nothing stops the path
-    immediately — no second click, no submit of a no-op. Returns
-    (status, detail); "attempted" only when the store proves q1
-    correct == #languages.
+    (position-anchored). Returns (status, detail); "attempted" only
+    when the store proves q1 correct == #languages.
 
     Iter-16 (ANALYSIS12 §9): `_pairs_in` (the drag helper's
     [(code, chip, slot)] list, paired by LABEL with PRE-DRAG chip
@@ -9359,6 +9753,15 @@ def _worldle_phrase_click_verify(page, gid, picked, codes, names, prompts,
     ONLY on a LABEL pairing — a geometry-x re-pairing is refused
     outright, and a text-lookup chip result within 12px of the slot
     centre is rejected as the same swap symptom.
+
+    Iter-17 (ANALYSIS13 §6): (a) `_placed_in` (the drag helper's
+    per-code placement map) lets click-verify SKIP pairs the drag
+    already placed — re-clicking a placed chip would click the
+    FILLED slot (the chip now lives there), not the chip bank.
+    (b) A single pair's failure NO LONGER stops the path: every
+    pair is attempted, failures are recorded, and the submit runs
+    only when ALL pairs are placed. The old early-return meant a
+    (falsely) failed ara left eng never attempted.
     """
     _cv_pairs = []  # (code, chip_dict, slot_dict)
     if _pairs_in:
@@ -9401,11 +9804,29 @@ def _worldle_phrase_click_verify(page, gid, picked, codes, names, prompts,
     _cv_desc = [(c, {"label": s.get("label"), "x": s.get("x"),
                    "y": s.get("y")}) for c, _, s in _cv_pairs]
     _dbg(gid, f"worldle phrase click-verify pairs: {_cv_desc}")
+    # Iter-17: attempt ALL pairs; record per-pair placement; never
+    # stop at the first failure.
+    _cv_placed = {}
+    _cv_unplaced = []
+    _cv_reasons = {}
     for _code, _chip_in, _slot in _cv_pairs:
-        _phrase = (picked or {}).get(str(_code).lower())
+        _key = str(_code).lower()
+        _phrase = (picked or {}).get(_key)
         if not _phrase:
-            return ("partial", f"click-verify: no picked phrase for "
-                               f"{_code}; NOT submitted")
+            _dbg(gid, f"worldle phrase click-verify {_code}: no picked "
+                      "phrase; recording unplaced, continuing")
+            _cv_placed[_key] = False
+            _cv_unplaced.append(_code)
+            _cv_reasons[_key] = "no picked phrase"
+            continue
+        if isinstance(_placed_in, dict) and _placed_in.get(_key):
+            # Drag already placed this pair: skip it. Its chip now
+            # lives INSIDE the slot, so clicking the stashed chip
+            # coords would click the filled slot, not the chip bank.
+            _dbg(gid, f"worldle phrase click-verify {_code}: already "
+                      "placed by drag; skipping (NOT re-clicked)")
+            _cv_placed[_key] = True
+            continue
         _chip = None
         if _chip_in is not None and _chip_in.get("x") is not None:
             # Pre-drag probe coords: the chip was in its home
@@ -9433,10 +9854,12 @@ def _worldle_phrase_click_verify(page, gid, picked, codes, names, prompts,
                 _chip = None
         if not _chip:
             _dbg(gid, f"worldle phrase click-verify {_code}: chip for "
-                      f"{_phrase!r} not found by text; stopping")
-            return ("partial", f"click-verify: chip for {_phrase!r} "
-                               f"({str(_code)}) not found by text; "
-                               "NOT submitted")
+                      f"{_phrase!r} not found by text; recording "
+                      "unplaced, continuing")
+            _cv_placed[_key] = False
+            _cv_unplaced.append(_code)
+            _cv_reasons[_key] = "chip not found by text"
+            continue
         # Swap guard: chip and slot centres must be distinct
         # elements. Iter-15 clicked (850, 304) — the SLOT centre —
         # as the "chip", then the chip box as the "slot".
@@ -9448,10 +9871,13 @@ def _worldle_phrase_click_verify(page, gid, picked, codes, names, prompts,
         if _dist < 12:
             _dbg(gid, f"worldle phrase click-verify {_code}: chip/slot "
                       f"centres coincide (dist={_dist:.1f}px) — the "
-                      "iter-15 coordinate-swap symptom; refusing")
-            return ("partial", "click-verify: chip centre coincides "
-                               f"with slot centre (dist={_dist:.1f}px); "
-                               "coordinate-swap symptom, NOT submitted")
+                      "iter-15 coordinate-swap symptom; refusing "
+                      "this pair, continuing")
+            _cv_placed[_key] = False
+            _cv_unplaced.append(_code)
+            _cv_reasons[_key] = ("chip/slot centres coincide "
+                                 "(swap-guard refusal)")
+            continue
         try:
             page.mouse.click(_chip["x"], _chip["y"])
             page.wait_for_timeout(400)
@@ -9459,19 +9885,27 @@ def _worldle_phrase_click_verify(page, gid, picked, codes, names, prompts,
             page.wait_for_timeout(800)
         except Exception as e:
             _dbg(gid, f"worldle phrase click-verify {_code}: click "
-                      f"failed: {str(e)[:80]}")
-            return ("partial", f"click-verify: {_code} chip/slot click "
-                               f"failed ({str(e)[:80]}); NOT submitted")
+                      f"failed: {str(e)[:80]}; recording unplaced, "
+                      "continuing")
+            _cv_placed[_key] = False
+            _cv_unplaced.append(_code)
+            _cv_reasons[_key] = f"click failed ({str(e)[:60]})"
+            continue
         _placed = (_worldle_phrase_slot_at_contains(page, _slot, _phrase)
                    or _worldle_phrase_slot_contains(page, _phrase))
         _dbg(gid, f"worldle phrase click-verify {_code}: chip "
                   f"({_chip['x']:.0f}, {_chip['y']:.0f}) -> slot "
                   f"label={_slot.get('label')!r} ({_slot.get('x')}, "
                   f"{_slot.get('y')}) placed={_placed}")
+        _cv_placed[_key] = bool(_placed)
         if not _placed:
-            return ("partial", f"click-verify: {_code} chip clicked + "
-                               f"slot clicked but slot did not fill "
-                               f"({_phrase!r}); NOT submitted")
+            _cv_unplaced.append(_code)
+            _cv_reasons[_key] = "slot did not fill"
+    if _cv_unplaced:
+        return ("partial", "click-verify: attempted all pairs; "
+                           f"unplaced={_cv_unplaced} "
+                           f"(placed={_cv_placed}; "
+                           f"reasons={_cv_reasons}); NOT submitted")
     _s_worldle_submit_guarded(page, gid, "spokenLanguages", ds)
     _settle(page, base=1500)
     _gs = _s_worldle_day_guesses(page, "language-guesses", ds)
@@ -9707,7 +10141,10 @@ def _s_worldle_play_language(page, gid, day):
                       "running click-verify path")
             _cv_res = _worldle_phrase_click_verify(
                 page, gid, _picked, codes, names, _prompts, ds,
-                _pairs_in=_drag_out.get("pairs"))
+                _pairs_in=_drag_out.get("pairs"),
+                # Iter-17: skip pairs the drag already placed —
+                # their chips now live inside the slots.
+                _placed_in=_drag_out.get("placed"))
             if _cv_res[0] == "attempted":
                 return "attempted", list(names), _cv_res[1]
             return "partial", list(names), _cv_res[1]
@@ -11536,7 +11973,11 @@ def _s_worldle(page, ans, gid):
     # G4 proof (iter 13): the cross-check outcome is logged on ONE
     # line here even when the reader returns None, so the log always
     # shows the cross-check ran (iter-12: zero lines, unverified).
-    _dbg(gid, f"worldle live rounds cross-check: reader returned "
+    # Iter-17: "G4" is the fix-loop name for this live-rounds
+    # cross-check gate (NOT Google Analytics — no GA check exists);
+    # the line carries the G4 tag so a grep for G4 finds the
+    # check result, including the None case.
+    _dbg(gid, f"worldle G4 live rounds cross-check: reader returned "
               f"{'mapped ' + str(sorted(live)) if live is not None else 'None (unreadable)'}")
     avail = day.get("available") or {}
     for mode in _WORLDLE_PLAY_ORDER[1:]:
@@ -15128,8 +15569,11 @@ def run_one(gid):
                         short = _sv.strftime("%b %d")
                         print(f"[{gid}] RE-KEYED video to served day "
                               f"{date_key}")
-            except Exception:
-                pass
+            except Exception as _e:
+                # Iter-17: NEVER swallow the live-day align silently
+                # — a bare `except: pass` here hid _align failures
+                # (including a missing decision line) for three runs.
+                _dbg(gid, f"live-day align failed: {_e}")
             aval_s = str(aval)
             if _defer_stale:
                 solved = False

@@ -238,28 +238,54 @@ class TestNerdleOwnHeader(unittest.TestCase):
 
 
 class _FakeNerdlePage:
-    """Async fake for type_equation: grid ²-count + power-key click."""
+    """Async fake for type_equation: grid ²-count + power-key entry ladder.
 
-    def __init__(self, click_works=True, type_works=True,
-                 press_works=True):
+    Models the iter-17 ladder: JS click on the re-found button ->
+    coordinate click on the button's bounding-box centre -> clipboard
+    paste (writeText + Control+V) -> keyboard.insert_text. The
+    artifact-proven dead ends are modelled as dead: keyboard.type
+    DROPS ² and keyboard.press("²") is an unknown key, so neither
+    places a cell.
+    """
+
+    def __init__(self, click_works=True, coord_works=True,
+                 box_works=True, paste_works=True, insert_works=True):
         self.count = 0
         self.click_works = click_works
-        self.type_works = type_works
-        self.press_works = press_works
+        self.coord_works = coord_works
+        self.box_works = box_works
+        self.paste_works = paste_works
+        self.insert_works = insert_works
+        self.clipboard = None
         self.typed = []
         self.keyboard = self._Keyboard(self)
+        self.mouse = self._Mouse(self)
 
     class _Keyboard:
         def __init__(self, page):
             self._page = page
 
         async def type(self, text, delay=0):
+            # keyboard.type DROPS superscripts (artifact-proven).
             self._page.typed.append(text)
-            if self._page.type_works and text in ("²", "³"):
-                self._page.count += 1
 
         async def press(self, key):
-            if self._page.press_works and key in ("²", "³"):
+            # Only Control+V (clipboard paste) can deliver ² here;
+            # press("²") is an unknown key in Playwright.
+            if (key == "Control+V" and self._page.paste_works
+                    and self._page.clipboard in ("²", "³")):
+                self._page.count += 1
+
+        async def insert_text(self, text):
+            if self._page.insert_works and text in ("²", "³"):
+                self._page.count += 1
+
+    class _Mouse:
+        def __init__(self, page):
+            self._page = page
+
+        async def click(self, x, y):
+            if self._page.coord_works:
                 self._page.count += 1
 
     async def evaluate(self, js, arg=None):
@@ -267,10 +293,20 @@ class _FakeNerdlePage:
             return self.count
         if "window.__QP_HOLD" in js:
             return None
-        # CLICK_POWER_JS: button found; the cell appears only when
-        # click_works (iter-14: click "succeeded" but no cell).
-        if self.click_works:
-            self.count += 1
+        if "writeText" in js:
+            self.clipboard = arg
+            return True
+        if "return {x:" in js:
+            # POWER_BTN_BOX_JS: bounding-box centre of the button.
+            if self.box_works:
+                return {"x": 100, "y": 200, "w": 40, "h": 40}
+            return None
+        if "aria-label" in js:
+            # CLICK_POWER_JS: JS click on the re-found button.
+            if self.click_works:
+                self.count += 1
+                return True
+            return False
         return True
 
     async def wait_for_timeout(self, ms):
@@ -283,22 +319,31 @@ class TestNerdleSuperscriptEntry(unittest.TestCase):
         asyncio.run(NS.type_equation(page, "1²+67+8=76"))
         self.assertEqual(page.count, 1)
 
-    def test_type_fallback_when_click_produces_no_cell(self):
-        # Iter-14 maxi stall: the click produced no cell. The
-        # keyboard.type fallback must place the ².
-        page = _FakeNerdlePage(click_works=False, type_works=True)
+    def test_coordinate_click_fallback_when_js_click_produces_no_cell(self):
+        # Iter-17 ladder step 2: the JS click produced no cell;
+        # the coordinate click on the button's centre must place ².
+        page = _FakeNerdlePage(click_works=False, coord_works=True)
         asyncio.run(NS.type_equation(page, "1²+67+8=76"))
         self.assertEqual(page.count, 1)
 
-    def test_press_fallback_when_type_also_fails(self):
-        page = _FakeNerdlePage(click_works=False, type_works=False,
-                                press_works=True)
+    def test_clipboard_fallback_when_clicks_fail(self):
+        # Iter-17 ladder step 3: JS click + coordinate click both
+        # fail; clipboard paste (writeText + Control+V) places ².
+        page = _FakeNerdlePage(click_works=False, coord_works=False,
+                                paste_works=True)
+        asyncio.run(NS.type_equation(page, "1²+67+8=76"))
+        self.assertEqual(page.count, 1)
+
+    def test_insert_text_fallback_when_paste_fails(self):
+        # Iter-17 ladder step 4: only keyboard.insert_text left.
+        page = _FakeNerdlePage(click_works=False, coord_works=False,
+                                paste_works=False, insert_works=True)
         asyncio.run(NS.type_equation(page, "1²+67+8=76"))
         self.assertEqual(page.count, 1)
 
     def test_all_methods_failing_does_not_raise(self):
-        page = _FakeNerdlePage(click_works=False, type_works=False,
-                                press_works=False)
+        page = _FakeNerdlePage(click_works=False, coord_works=False,
+                                paste_works=False, insert_works=False)
         asyncio.run(NS.type_equation(page, "1²+67+8=76"))
         self.assertEqual(page.count, 0)
 

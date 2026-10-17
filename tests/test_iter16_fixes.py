@@ -258,9 +258,12 @@ class TestClickVerifyReuse(unittest.TestCase):
             ["Arabic", "English"], ["my name is"], "2026-10-18",
             _pairs_in=pairs)
         self.assertEqual(st, "partial")
-        # First pair clicked chip-then-slot, then stopped: the slot
-        # did not fill (fake evaluate), so no submit, no 2nd pair.
-        self.assertEqual(page.mouse.clicks, [(850, 668), (850, 303)])
+        # Iter-17: ALL pairs are attempted (no early return on the
+        # first unfilled pair). Each pair clicks chip-then-slot; the
+        # slots did not fill (fake evaluate), so no submit.
+        self.assertEqual(page.mouse.clicks,
+                         [(850, 668), (850, 303),
+                          (1070, 668), (1070, 303)])
         self.assertIn("did not fill", det)
 
     def test_swap_guard_refuses_coincident_centres(self):
