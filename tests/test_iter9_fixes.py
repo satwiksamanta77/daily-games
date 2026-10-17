@@ -281,18 +281,21 @@ class TestAreaParseInputs(unittest.TestCase):
     def test_inputs_pure(self):
         self.assertEqual(
             runner._worldle_area_parse_display({"inputs": "56785"}),
-            (56785, "inputs:pure"))
+            (56785, "inputs:single"))
 
     def test_inputs_small_number_allowed(self):
         self.assertEqual(
             runner._worldle_area_parse_display({"inputs": "12"}),
-            (12, "inputs:pure"))
+            (12, "inputs:single"))
 
-    def test_common_still_wins_over_inputs(self):
+    def test_inputs_win_over_common(self):
+        # Iter 11 priority: a live <input> value inside the widget
+        # beats container text, which may hold the TARGET/prompt
+        # number rather than the current display value.
         self.assertEqual(
             runner._worldle_area_parse_display(
                 {"common": "1,000 km2", "inputs": "5"}),
-            (1000, "common:unit"))
+            (5, "inputs:single"))
 
 
 class TestFramedDeferred(unittest.TestCase):

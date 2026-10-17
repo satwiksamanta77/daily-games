@@ -213,9 +213,13 @@ class TestRemovedRetypeAndCountryle(unittest.TestCase):
         window = src[i:i + 900]
         self.assertNotIn("_type_betweenle_via_keys(page, g)", window)
         self.assertNotIn("_submit_betweenle(page)", window)
-        self.assertIn("do NOT retype", window)
-        # The NOT-submitted stall path still retries (exactly one retype).
-        self.assertEqual(src.count("_type_betweenle_via_keys(page, g)"), 1)
+        # Iter 11: the confirmed-submitted path never retypes (wording
+        # "never retyping"); the stall breaker is ONE Enter resend,
+        # not a letter retype.
+        self.assertIn("never retyping", window)
+        # Iter 11: NO letter-retype call remains anywhere — the stall
+        # path resends Enter once, never retypes the word.
+        self.assertEqual(src.count("_type_betweenle_via_keys(page, g)"), 0)
 
     def test_countryle_no_next_fallback(self):
         src = (HERE / "runner.py").read_text(encoding="utf-8")

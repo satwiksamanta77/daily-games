@@ -135,9 +135,12 @@ class _ProbePage(_FakePage):
         return super().evaluate(js, *args)
 
 
-def _probe(rows, drop, pop, fb):
+def _probe(rows, drop, pop, fb, exact=None):
     return {"rows": rows, "dropdown_open": drop, "populated": pop,
-            "populated_rows": pop, "feedback_tiles": fb}
+            "populated_rows": pop, "feedback_tiles": fb,
+            # Iter 11: exact_n comes from visible exact cells inside
+            # populated rows, never a page-wide class count.
+            "visible_exact_cells": fb if exact is None else exact}
 
 
 class TestAttrVerifySubmitted(unittest.TestCase):
@@ -258,6 +261,10 @@ class TestSolveAttrGameWinGate(unittest.TestCase):
 
     def test_answer_echo_is_not_a_win(self):
         self.page.inner = f"{ANSWER}\nGuess the player"
+        # Echo only: the board shows a populated row but ZERO scored
+        # cells (nothing actually matched) - the all-attribute path
+        # must not fire on an unscored board.
+        self._probe_result = _probe([ANSWER], False, 1, 0)
         ok, ev = runner.solve_attr_game(self.page, ANSWER, "batterup")
         self.assertFalse(ok)
         self.assertIn("no win signal", ev)

@@ -1386,8 +1386,53 @@ async def main():
         t0 = time.time()
         _REC_T0 = t0
         starts = []
+        card_starts = []
         results = []
         for i, m in enumerate(NERDLE_MODES):
+            # Mode card BEFORE play (fix-loop iter 11): generate the
+            # NOW PLAYING card, SHOW it in the browser (file:// URL)
+            # for 2.5s so it is in the recording before play, and
+            # record the card start (recording-relative). Play does
+            # not start until the card has been shown; segment start
+            # is recorded AFTER the card. Card-generation failure is
+            # a mode failure: retry 3x, then fail the mode — never emit
+            # a chapter with card_dur=0.0.
+            _card_ok = False
+            _cp = video_dir / f"mode_{i}.png"
+            for _attempt in range(3):
+                try:
+                    QP.generate_mode_card(
+                        str(_cp), "Nerdle",
+                        m.get("name", f"Mode {i + 1}"),
+                        f"Round {i + 1} of {len(NERDLE_MODES)}")
+                    _card_ok = True
+                    break
+                except Exception as _e:
+                    _nlog(f"[nerdle] mode card gen failed for "
+                          f"{m['id']} attempt {_attempt + 1}/3: "
+                          f"{str(_e)[:90]}")
+                    await asyncio.sleep(0.5)
+            if not _card_ok:
+                _nlog(f"[nerdle] mode {m['id']}: card generation failed "
+                      f"after 3 attempts — failing the mode (never a "
+                      f"chapter with card_dur=0.0)")
+                card_starts.append(None)
+                starts.append(time.time() - t0)
+                results.append((m["id"], 0, 0, "card-failed"))
+                continue
+            card_starts.append(time.time() - t0)
+            try:
+                await page.goto(_cp.as_uri(),
+                                wait_until="domcontentloaded",
+                                timeout=15000)
+                await page.wait_for_timeout(2500)
+            except Exception as _e:
+                _nlog(f"[nerdle] mode {m['id']}: card display failed: "
+                      f"{str(_e)[:90]}")
+                card_starts[-1] = None
+                starts.append(time.time() - t0)
+                results.append((m["id"], 0, 0, "card-failed"))
+                continue
             starts.append(time.time() - t0)
             r = await play_mode(page, m, script_dir, official if isinstance(official, dict) else None)
             results.append((m["id"],) + r)
@@ -1474,10 +1519,30 @@ async def main():
     if final and MOVIEPY_AVAILABLE and QP_AVAILABLE:
         try:
             try:
-                if QP_AVAILABLE:
+                if QP_AVAILABLE and not all_solved:
+                    # Unsolved: fast-copy the raw recording for
+                    # diagnosis (no re-encode, no autocrop) — same
+                    # unsolved-tail rule as the runner (fix-loop
+                    # iter 11). The full polish re-encode is where
+                    # the SIGTERM tail stall lives.
+                    _nlog("[nerdle] unsolved: fast-copy gameplay "
+                          "(no re-encode)")
+                    _fc = subprocess.run(
+                        ["ffmpeg", "-y", "-v", "error", "-i", str(final),
+                         "-c", "copy",
+                         str(video_dir / "gameplay_1080.mp4")],
+                        capture_output=True, text=True, timeout=300)
+                    if _fc.returncode == 0 and (
+                            video_dir / "gameplay_1080.mp4").exists():
+                        final = str(video_dir / "gameplay_1080.mp4")
+                elif QP_AVAILABLE:
+                    # Autocrop OFF for Nerdle (fix-loop iter 11): the
+                    # assembly cuts are absolute from recorded card
+                    # starts, and autocrop's non-uniform cuts would
+                    # invalidate them.
                     _pol = QP.polish_gameplay(
                         str(final), str(video_dir / "gameplay_1080.mp4"),
-                        first_typing_s=_FIRST_TYPE_T)
+                        first_typing_s=_FIRST_TYPE_T, autocrop=False)
                     if _pol and str(_pol) != str(final):
                         final = _pol
                         _nlog(f"[nerdle] gameplay polished -> {_pol}")
@@ -1517,20 +1582,41 @@ async def main():
                 # No answer-bearing slides: the old hints card printed the classic
                 # equations and the definition/facts cards said QUORDLE. Start
                 # each mode with its own NOW PLAYING card instead.
-                # Gameplay split into 9 mode chapters, each prefixed with a NOW PLAYING
-                # card so a viewer landing mid-video can tell which mode is up.
-                # The recording is continuous, so the boundaries come from the
-                # per-mode `starts` timestamps captured while playing.
-                weights = []
+                # Gameplay split into 9 mode chapters, each OPENING with
+                # its NOW PLAYING card (the card was shown in-browser
+                # for 2.5s before play, so it is IN the recording).
+                # ABSOLUTE cuts from the recorded card starts (fix-loop
+                # iter 11): the old proportional rescaling of wall-clock
+                # weights assumed uniform scaling and broke under
+                # non-uniform autocrop. Autocrop is OFF for Nerdle, so
+                # the polished timeline == the recording timeline and
+                # card starts map 1:1 after rebasing on the first card.
+                # Assembly-time rule: a mode with no recorded card start
+                # (card never shown) or a missing card PNG gets NO
+                # segment and NO chapter — never card_dur=0.0.
+                _base = None
+                for _cs in card_starts:
+                    if _cs is not None:
+                        _base = float(_cs)
+                        break
+                if _base is None:
+                    _base = 0.0
+                cuts = []
                 for i in range(len(NERDLE_MODES)):
-                    s = starts[i] if i < len(starts) else 0
-                    e = starts[i+1] if i+1 < len(starts) else total
-                    weights.append(max(1.0, e - s))
-                tw = sum(weights) or 1.0
-                cuts, acc = [], 0.0
-                for w in weights:
-                    cuts.append((acc * gd / tw, (acc + w) * gd / tw))
-                    acc += w
+                    _cs = card_starts[i] if i < len(card_starts) else None
+                    if _cs is None:
+                        cuts.append(None)
+                        continue
+                    _nxt = None
+                    for _j in range(i + 1, len(NERDLE_MODES)):
+                        if (card_starts[_j] if _j < len(card_starts)
+                                else None) is not None:
+                            _nxt = float(card_starts[_j])
+                            break
+                    _a = max(0.0, float(_cs) - _base)
+                    _b = (max(0.0, _nxt - _base) if _nxt is not None
+                          else gd)
+                    cuts.append((_a, min(_b, gd)))
 
                 # Chapter times (iteration-3 accumulator fix): chapter[i] =
                 # sum over kept modes j<i of (card_dur_j + segment_dur_j).
@@ -1543,21 +1629,25 @@ async def main():
                     if m["id"] in CUT_MODES:
                         _nlog(f"[nerdle] cutting unwon mode chapter: {m['id']}")
                         continue
-                    a, b = cuts[i]
+                    _cut = cuts[i] if i < len(cuts) else None
+                    if _cut is None:
+                        _nlog(f"[nerdle] cutting mode {m['id']}: no card "
+                              f"start recorded (card never shown)")
+                        continue
+                    a, b = _cut
                     if b - a < 0.5:
                         continue
-                    card_dur = 0.0
+                    # The card is in-recording (shown before play); the
+                    # segment opens with it. card_dur is the 2.5s hold,
+                    # seg_dur the play after it. No still is prepended
+                    # (that would duplicate the in-recording card).
                     cp = video_dir / f"mode_{i}.png"
-                    try:
-                        QP.generate_mode_card(str(cp), "Nerdle",
-                                              m.get("name", f"Mode {i + 1}"),
-                                              f"Round {i + 1} of {len(NERDLE_MODES)}")
-                        mode_parts.append(_img(str(cp), 2.5))
-                        card_dur = 2.5
-                    except Exception as _e:
-                        _nlog(f"[nerdle] mode card failed: {str(_e)[:90]}")
+                    if not cp.exists():
+                        _nlog(f"[nerdle] cutting mode {m['id']}: card PNG "
+                              f"missing (never a chapter with card_dur=0)")
+                        continue
                     mode_parts.append(gameplay.subclip(a, b))
-                    emitted.append((m, card_dur, b - a))
+                    emitted.append((m, 2.5, max(0.0, (b - a) - 2.5)))
                 for _s, (_m, _cd, _sd) in zip(
                         compute_nerdle_chapter_starts(
                             [(cd, sd) for (_m, cd, sd) in emitted]), emitted):
@@ -1572,18 +1662,10 @@ async def main():
                 # Skipped: they print answers up front and say QUORDLE. The video
                 # is mode cards + real solves only.
                 final_clip = concatenate_videoclips(parts, method="compose")
-                _intro = script_dir / "intro" / "wordsolverx-intro-20s.mp4"
-                if _intro.exists():
-                    try:
-                        from moviepy.editor import VideoFileClip as _VFC
-                        _ic = _VFC(str(_intro)).resize(width=1920, height=1080)
-                        final_clip = concatenate_videoclips([_ic, final_clip],
-                                                            method="compose")
-                        chapters = [(0, "Intro")] + [
-                            (s + float(_ic.duration or 0), t) for s, t in chapters]
-                        print(f"[nerdle] intro prepended ({_ic.duration:.1f}s)")
-                    except Exception as e:
-                        print(f"[nerdle] intro skipped: {str(e)[:120]}")
+                # NO shared brand intro: wordsolverx-intro-20s.mp4
+                # opens EVERY video with a wrong-game, 12-day-stale
+                # Wordle answer (MOCHA, Oct 5). The mode cards open
+                # the video instead (fix-loop iter 11).
                 _nlog(f"[nerdle] chapters: {[(round(float(s), 1), t) for s, t in chapters]}")
                 for _mp3 in ("song1.mp3", "song2.mp3"):
                     _sp = script_dir / _mp3

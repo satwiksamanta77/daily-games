@@ -976,21 +976,30 @@ _AUTOCROP_XFADE_S = 0.5   # crossfade between kept segments (video only)
 
 
 def _autocrop_keep_segments(src, first_typing_s=None, idle_cut_s=None,
-                             solve_span_s=None, first_action_label=None):
+                             solve_span_s=None, first_action_label=None,
+                             typing_windows=None):
     """Keep-segments (seconds, in source timeline) after autocrop.
 
     Leading idle: cut everything before the first player action minus a ~1 s
-    safety margin. The cut point comes from `idle_cut_s` when given, else
-    `first_typing_s - 1.0` when given, else frame-diff detection (first
-    SUSTAINED + PERSISTENT board change — a change that holds for several
-    frames and leaves the frame different from before, not page-load
-    animation flicker). `first_typing_s` is a FIRST-ACTION anchor on the
-    RECORDING timeline (the runner passes the recording-relative time of the
-    first keystroke / swap / colour pick, labelled by `first_action_label`):
-    for non-typing games (waffle drag-swaps, colorfle clicks) it is the first
-    board-state change, NOT a keystroke — the old typing-only trigger had no
-    drag/swap path, so waffle's frame-diff fallback keyed on the final scroll
-    and cut a 59 s solve to 3.75 s. Mid-recording static waits >30 s are cut
+    safety margin. The cut point comes from the earliest TYPING WINDOW
+    (fix-loop iter 11: every guess's typing interval, recorded by the
+    runner — `first_typing_s` alone is only the FIRST action, and
+    frame-diff reads small typing areas as frozen, so Betweenle's
+    leading cut chopped CRANE's typing and dropped PARTY's typing
+    entirely) when given, else `idle_cut_s`, else `first_typing_s - 1.0`
+    when given, else frame-diff detection (first SUSTAINED + PERSISTENT
+    board change — a change that holds for several frames and leaves the
+    frame different from before, not page-load animation flicker).
+    A static run overlapping any typing window (expanded by 1s) is NEVER
+    cut: typing in a small field reads as frozen on 320px gray frames
+    and must not be dropped. `first_typing_s` is a FIRST-ACTION anchor
+    on the RECORDING timeline (the runner passes the recording-relative
+    time of the first keystroke / swap / colour pick, labelled by
+    `first_action_label`): for non-typing games (waffle drag-swaps,
+    colorfle clicks) it is the first board-state change, NOT a
+    keystroke — the old typing-only trigger had no drag/swap path, so
+    waffle's frame-diff fallback keyed on the final scroll and cut a
+    59 s solve to 3.75 s. Mid-recording static waits >30 s are cut
     to a 2 s head.
 
     Coverage guard: when `solve_span_s` (START->shot_win) is known, the kept
@@ -1011,7 +1020,11 @@ def _autocrop_keep_segments(src, first_typing_s=None, idle_cut_s=None,
     if dur <= 0:
         detail["reason_no_cut"] = "unprobed duration"
         return [], detail
-    if idle_cut_s is not None:
+    if typing_windows:
+        _ws = [float(w[0]) for w in typing_windows if w]
+        leading_cut = max(0.0, min(_ws) - 1.0)
+        source = "earliest typing window -1s"
+    elif idle_cut_s is not None:
         leading_cut = max(0.0, float(idle_cut_s))
         source = "idle_cut_s"
     elif first_typing_s is not None:
@@ -1063,6 +1076,18 @@ def _autocrop_keep_segments(src, first_typing_s=None, idle_cut_s=None,
                 j += 1
             run_start = i / fps
             run_end = (j + 2) / fps
+            # Typing-window protection (fix-loop iter 11): a static run
+            # overlapping any typing window (expanded by 1s) is NOT cut
+            # — typing in a small field reads as frozen on 320px gray
+            # frames, and a guess's typing must never be dropped.
+            _in_typing = bool(typing_windows) and any(
+                (float(ws) - 1.0) < run_end and
+                (float(we) + 1.0) > run_start
+                for ws, we in typing_windows if ws is not None
+                and we is not None)
+            if _in_typing:
+                i = j + 1
+                continue
             if run_end - run_start > _AUTOCROP_MIN_STATIC_S and run_start >= leading_cut - 0.01:
                 keep_end = min(run_start + _AUTOCROP_KEEP_STATIC_HEAD_S, run_end)
                 if keep_end > cur_start + 0.5:
@@ -1218,7 +1243,8 @@ def _autocrop_render(src, segments, out_path):
 
 
 def _apply_autocrop(src, out_path, first_typing_s=None, idle_cut_s=None,
-                    solve_span_s=None, first_action_label=None):
+                    solve_span_s=None, first_action_label=None,
+                    typing_windows=None):
     """Autocrop `src` -> `out_path`, returning the path to use downstream
     (`out_path` when a cut was rendered, else `src`). Never raises.
 
@@ -1232,7 +1258,8 @@ def _apply_autocrop(src, out_path, first_typing_s=None, idle_cut_s=None,
             LAST_POLISH.update(autocrop={"cut_s": 0.0, "skipped": "AUTOCROP=off"})
             return src
         segments, detail = _autocrop_keep_segments(
-            src, first_typing_s, idle_cut_s, solve_span_s, first_action_label)
+            src, first_typing_s, idle_cut_s, solve_span_s, first_action_label,
+            typing_windows=typing_windows)
         if not segments:
             print(f"[autocrop] no cut: {detail.get('reason_no_cut')} "
                   f"(dur={detail.get('duration_s')}s)")
@@ -1269,7 +1296,7 @@ def _apply_autocrop(src, out_path, first_typing_s=None, idle_cut_s=None,
 
 def polish_gameplay(src, out_path, crf=17, first_typing_s=None, idle_cut_s=None,
                     autocrop=True, solve_span_s=None,
-                    first_action_label=None):
+                    first_action_label=None, typing_windows=None):
     """Full-frame 1920x1080 polish. Cursor overlay is OFF by default.
 
     Set CURSOR_OVERLAY=on explicitly to re-enable the drawn cursor.
@@ -1305,7 +1332,8 @@ def polish_gameplay(src, out_path, crf=17, first_typing_s=None, idle_cut_s=None,
             crop_tmp = str(_QPPath(tempfile.mkdtemp(prefix="autocrop_")) /
                            "cropped.mp4")
             cropped = _apply_autocrop(src, crop_tmp, first_typing_s, idle_cut_s,
-                                      solve_span_s, first_action_label)
+                                      solve_span_s, first_action_label,
+                                      typing_windows=typing_windows)
             if cropped != src:
                 src = cropped
             else:

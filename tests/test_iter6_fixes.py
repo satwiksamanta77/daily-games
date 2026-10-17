@@ -229,14 +229,14 @@ class TestWorldleAreaDisplay(unittest.TestCase):
         texts = {"common": "Area\n56,785 km2\n",
                  "between": "", "roleBtn": "", "store": "", "body": ""}
         self.assertEqual(runner._worldle_area_parse_display(texts),
-                         (56785, "common:unit"))
+                         (56785, "common:single"))
 
     def test_between_steppers_bare_number(self):
         texts = {"common": "Area\n1. NUMBER\n2. COMPARISON\n",
                  "between": "56,785", "roleBtn": "", "store": "",
                  "body": "Area\nGive up\n"}
         self.assertEqual(runner._worldle_area_parse_display(texts),
-                         (56785, "between:bare"))
+                         (56785, "between:display"))
 
     def test_tab_labels_are_not_the_display(self):
         # Bare numbers < 100 (tab labels) must not be read as the value.

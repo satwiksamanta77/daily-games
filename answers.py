@@ -180,21 +180,25 @@ def colorfle(d=None, mode=0):
 
 # ---------- framed (all modes) ----------
 # The site has four modes, each with its OWN puzzle numbering and its own
-# launch date: daily, one-frame, titleshot and poster. Only "daily" was
-# implemented before, which is why the other modes had no video.
+# launch date: classic, one-frame, titleshot and poster. Only "classic"
+# was implemented before, which is why the other modes had no video.
 FRAMED_MODES = {
-    # mode: (live path on the site, date of the newest bundled puzzle, its number)
-    "daily": ("daily", date(2026, 5, 29), 1540),
+    # mode: (titles-API gameType, date of the newest bundled puzzle, its number)
+    # The internal id is "classic" (the site's menu label); the titles API
+    # still wants gameType "daily" for this mode, so value[0] stays "daily".
+    "classic": ("daily", date(2026, 5, 29), 1540),
     "one-frame": ("one-frame", date(2026, 5, 29), 543),
     "titleshot": ("titleshot", date(2026, 5, 28), 358),
     "poster": ("poster", date(2026, 5, 28), 308),
 }
 FRAMED_URLS = {
-    "daily": "https://framed.wtf",
+    "classic": "https://framed.wtf",
     "one-frame": "https://framed.wtf/one-frame",
     "titleshot": "https://framed.wtf/titleshot",
     "poster": "https://framed.wtf/poster",
 }
+# The bundled static data still keys the Classic mode as "daily".
+_FRAMED_STATIC_KEY = {"classic": "daily"}
 
 
 def _framed_number(mode, d):
@@ -202,15 +206,16 @@ def _framed_number(mode, d):
     return num + _days(d, newest)
 
 
-def framed(d=None, mode="daily"):
-    """Today's Framed answer for one mode (default the daily game)."""
+def framed(d=None, mode="classic"):
+    """Today's Framed answer for one mode (default the classic game)."""
     import requests
     d = d or target_date()
     key = d.isoformat()
-    mode = mode if mode in FRAMED_MODES else "daily"
+    mode = mode if mode in FRAMED_MODES else "classic"
     try:
         data = json.loads((ZAI / "static/framed_data.json").read_text(encoding="utf-8"))
-        entries = ((data.get("modes") or {}).get(mode) or {}).get("entries") or []
+        entries = ((data.get("modes") or {}).get(
+            _FRAMED_STATIC_KEY.get(mode, mode)) or {}).get("entries") or []
         for e in entries:
             if e.get("date") == key:
                 return {"answer": e["answer"], "mode": mode,
@@ -1016,64 +1021,150 @@ def countryle(d=None):
     wordsJi's static archive stops at 2026-05-28, so for any recent day the
     live endpoint is the only source. Its country id is encrypted with
     CryptoJS using the key the frontend ships (live-answer-sources.ts).
+
+    Fetch (fix-loop iter 11): retry + exponential backoff per source,
+    per-attempt logging, validation before accepting (id must be an int
+    present in countries.json), total budget ~120s. Sources: direct
+    (two UAs) + allorigins mirror of the SAME upstream JSON. The old
+    corsproxy.io path is REMOVED — it now returns {"error": "A valid
+    API key is required"} (verified 2026-10-17). No third CORS mirror
+    was added: every other candidate was tested against this endpoint
+    and failed (codetabs 522, cors.lol rate-limited, isomorphic-git /
+    cors.eu.org return Cloudflare HTML, corsfix invalid_url,
+    test.cors.workers 1027, allorigins/raw 522), and an unverified
+    proxy must never be hardcoded. A 200 with valid JSON but no
+    country for the date is NOT retried (unpublished -> defer at once).
     """
     import requests
+    import random as _rnd
+    import time as _time
     d = d or target_date()
     key = d.isoformat()
     countries = json.loads(
         (ZAI / "src/lib/data/countryle/countries.json").read_text("utf-8"))
     by_id = {int(c["id"]): c for c in countries["countries"]}
-    try:
-        # frontend formatCountryleApiDate destructures [year, month, day]
-        # and re-emits DD/MM/YYYY - not the ISO order.
-        yy, mm, dd = key.split("-")
-        url = ("https://www.countryle.com/hidden-api/"
-               f"get-daily-country-valid.php?date={dd}%2F{mm}%2F{yy}")
-        j = None
-        # CI egress to countryle.com is intermittently blocked/403: try
-        # direct (two UAs) then two CORS mirrors of the SAME upstream JSON.
-        for fetch in (
-            lambda: requests.get(url, headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                              "Chrome/120 Safari/537.36",
-                "accept": "application/json"}, timeout=20),
-            lambda: requests.get(url, headers={
-                "User-Agent": "WordSolverX Video",
-                "accept": "application/json"}, timeout=20),
-            lambda: requests.get(
-                "https://api.allorigins.win/get?url="
-                + requests.utils.quote(url, safe=""), timeout=25),
-            lambda: requests.get(
-                "https://corsproxy.io/?url="
-                + requests.utils.quote(url, safe=""), timeout=25),
-        ):
+    _t0 = _time.time()
+    _budget = 120.0
+    _last_errors = []
+
+    def _validate(cand):
+        """Validate a parsed candidate: return (cid, country) or None.
+        Rejects non-JSON / missing country / undecryptable / unknown id.
+        A 200 with valid JSON but no country for the date returns
+        ("no-country", None) — caller defers immediately, no retry."""
+        if not isinstance(cand, dict):
+            return None
+        if "contents" in cand:
             try:
-                r = fetch()
-                if not r.ok:
-                    continue
-                cand = r.json()
-                if isinstance(cand, dict) and "contents" in cand:
-                    cand = json.loads(cand["contents"])
-                if isinstance(cand, dict) and ("country" in cand
-                                               or "number" in cand):
-                    j = cand
-                    break
+                cand = json.loads(cand["contents"])
             except Exception:
-                continue
-        if isinstance(j, dict):
-            raw = j.get("country", j.get("id", j))
+                return None
+            if not isinstance(cand, dict):
+                return None
+        if "country" not in cand and "number" not in cand:
+            return ("no-country", None)
+        raw = cand.get("country", cand.get("id", cand))
+        try:
             if isinstance(raw, (int, float)) or (
                     isinstance(raw, str) and raw.strip().isdigit()):
                 cid = int(raw)
             else:
                 cid = int(_cryptojs_decrypt(str(raw).replace("\\/", "/"),
                                             "4%w!KpB+?FC<P9W*"))
-            c = by_id.get(cid)
-            if c:
-                return {"answer": c["country"], "id": cid, "date": key,
-                        "via": "live"}
+        except Exception:
+            return None
+        c = by_id.get(cid)
+        if not c:
+            return None
+        return (cid, c)
+
+    try:
+        # frontend formatCountryleApiDate destructures [year, month, day]
+        # and re-emits DD/MM/YYYY - not the ISO order.
+        yy, mm, dd = key.split("-")
+        url = ("https://www.countryle.com/hidden-api/"
+               f"get-daily-country-valid.php?date={dd}%2F{mm}%2F{yy}")
+        # (name, fetch-fn, timeout): direct x2 UAs, then the allorigins
+        # mirror of the SAME upstream JSON.
+        _sources = (
+            ("direct-chrome",
+             lambda: requests.get(url, headers={
+                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                               "Chrome/120 Safari/537.36",
+                 "accept": "application/json"}, timeout=20)),
+            ("direct-bot",
+             lambda: requests.get(url, headers={
+                 "User-Agent": "WordSolverX Video",
+                 "accept": "application/json"}, timeout=20)),
+            ("allorigins",
+             lambda: requests.get(
+                 "https://api.allorigins.win/get?url="
+                 + requests.utils.quote(url, safe=""), timeout=25)),
+        )
+        for _name, _fetch in _sources:
+            _budget_hit = False
+            for _attempt in range(3):
+                if _time.time() - _t0 > _budget:
+                    print(f"[countryle] fetch budget {_budget:.0f}s hit; "
+                          f"stopping retries")
+                    _budget_hit = True
+                    break
+                try:
+                    r = _fetch()
+                    print(f"[countryle] fetch {_name} attempt "
+                          f"{_attempt + 1}/3: status={r.status_code} "
+                          f"bytes={len(r.content or b'')}")
+                    # Retry on timeouts / connection errors / 429 / 5xx
+                    # / 403. A 200 with valid JSON but no country for
+                    # the date is unpublished -> defer immediately.
+                    if r.status_code in (429, 403) or r.status_code >= 500:
+                        _last_errors.append(f"{_name}: HTTP {r.status_code}")
+                        raise requests.exceptions.HTTPError(
+                            f"HTTP {r.status_code}")
+                    if not r.ok:
+                        _last_errors.append(
+                            f"{_name}: HTTP {r.status_code}")
+                        # Non-retryable status (e.g. 404): do not burn
+                        # the remaining attempts on this source.
+                        break
+                    try:
+                        cand = r.json()
+                    except Exception:
+                        _last_errors.append(f"{_name}: non-JSON body")
+                        continue
+                    _v = _validate(cand)
+                    if _v is None:
+                        _last_errors.append(f"{_name}: invalid payload")
+                        continue
+                    if _v[0] == "no-country":
+                        print(f"[countryle] {_name}: 200 with valid JSON "
+                              f"but no country for {key} (unpublished); "
+                              f"deferring immediately, no retry")
+                        raise SystemExit(
+                            f"countryle: no answer for {key}")
+                    cid, c = _v
+                    return {"answer": c["country"], "id": cid, "date": key,
+                            "via": "live"}
+                except SystemExit:
+                    raise
+                except Exception as e:
+                    _last_errors.append(f"{_name}: {str(e)[:90]}")
+                    print(f"[countryle] fetch {_name} attempt "
+                          f"{_attempt + 1}/3 failed: {str(e)[:110]}")
+                    if _attempt < 2:
+                        _wait = (2 ** _attempt) + _rnd.uniform(0, 0.5)
+                        print(f"[countryle] backoff {_wait:.1f}s before "
+                              f"retry")
+                        _time.sleep(_wait)
+                    continue
+            if _budget_hit:
+                break
+    except SystemExit:
+        raise
     except Exception as e:
         print(f"[countryle] live failed: {str(e)[:110]}")
+    print(f"[countryle] live failed (all sources+retries): "
+          f"last errors: {_last_errors[-4:]}")
     for name in ("countryle_archive.json", "countryle_today.json"):
         p = ZAI / "static" / name
         if not p.exists():
@@ -1085,6 +1176,9 @@ def countryle(d=None):
         if entry and isinstance(entry, dict):
             c = entry.get("country") or {}
             if c.get("country"):
+                print(f"[countryle] STALE-ARCHIVE fallback: {name} "
+                      f"(archive stops 2026-05-28; using only because "
+                      f"live failed)")
                 return {"answer": c["country"], "id": c.get("id"),
                         "date": key, "via": name}
     raise SystemExit(f"countryle: no answer for {key}")

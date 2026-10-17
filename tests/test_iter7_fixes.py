@@ -122,23 +122,26 @@ class TestAreaDisplayParse(unittest.TestCase):
     def test_textcontent_unit(self):
         val, src = runner._worldle_area_parse_display(
             {"commonText": "Area\n56,785 km²\nGive up"})
-        self.assertEqual((val, src), (56785, "commonText:unit"))
+        self.assertEqual((val, src), (56785, "commonText:single"))
 
     def test_pure_small_start(self):
         # A widget whose whole display element reads "0" (below the
         # old bare >=100 filter) must still be found.
         val, src = runner._worldle_area_parse_display({"pure": "0"})
-        self.assertEqual((val, src), (0, "pure:pure"))
+        self.assertEqual((val, src), (0, "pure:single"))
 
     def test_pure_widget_number(self):
+        # Iter 11: multiple distinct pure candidates = ambiguous,
+        # never max() — the reader returns None, not the largest.
         val, src = runner._worldle_area_parse_display(
             {"pure": "1\n56785"})
-        self.assertEqual((val, src), (56785, "pure:pure"))
+        self.assertIsNone(val)
+        self.assertIsNone(src)
 
     def test_aria_value(self):
         val, src = runner._worldle_area_parse_display(
             {"aria": "56785"})
-        self.assertEqual((val, src), (56785, "aria:pure"))
+        self.assertEqual((val, src), (56785, "aria:single"))
 
     def test_tab_labels_not_display(self):
         val, src = runner._worldle_area_parse_display(
@@ -149,7 +152,7 @@ class TestAreaDisplayParse(unittest.TestCase):
     def test_old_bare_still_works(self):
         val, src = runner._worldle_area_parse_display(
             {"common": "something 56785"})
-        self.assertEqual((val, src), (56785, "common:bare"))
+        self.assertEqual((val, src), (56785, "common:single"))
 
 
 class TestPhrasePick(unittest.TestCase):
@@ -212,7 +215,7 @@ class TestIter7SourceShape(unittest.TestCase):
     def test_area_textcontent(self):
         src = (HERE / "runner.py").read_text(encoding="utf-8")
         self.assertIn("commonText", src)
-        self.assertIn('src + ":pure"', src)
+        self.assertIn('src + ":single"', src)
 
     def test_framed_ad_state(self):
         src = (HERE / "runner.py").read_text(encoding="utf-8")

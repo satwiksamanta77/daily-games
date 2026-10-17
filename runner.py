@@ -92,6 +92,21 @@ _FIRST_ACTION_LABEL = {}
 _SOLVE_SPAN = {}
 # gid -> batterup CDN archive entry for the target day (game_date, game_number).
 _BATTERUP_CDN = {}
+# gid -> list of (start, end) typing windows, RECORDING-relative
+# (fix-loop iter 11): EVERY guess's typing interval, so autocrop can
+# keep every guess's typing (frame-diff reads small typing areas as
+# frozen; first-typing alone let Betweenle's cut drop CRANE/PARTY).
+_TYPE_WINDOWS = {}
+
+
+def _record_type_window(gid, start_s, end_s):
+    """Append one typing window (recording-relative) for autocrop."""
+    try:
+        if gid:
+            _TYPE_WINDOWS.setdefault(gid, []).append(
+                (round(float(start_s), 2), round(float(end_s), 2)))
+    except Exception:
+        pass
 
 
 def _record_first_action(gid, what="typing"):
@@ -213,6 +228,113 @@ def _dbg(gid, msg):
     except Exception:
         pass
 
+# In-flight run state for the SIGTERM handler + preliminary result.json:
+# the handler must be able to record what was in flight when the runner
+# was killed, without trusting any later stage to run.
+_CURRENT_RUN = {"gid": None, "date_key": "", "solved": False,
+                "evidence": "", "stage": "start"}
+
+
+def _close_dbg_handles():
+    """Flush + close every open debug-log handle (fix-loop iter 11:
+    SIGTERM during the tail left the last ~108s of log unflushed and
+    the artifact without result.json). Never raises."""
+    for _fh in list(_DBG_FH.values()):
+        try:
+            _fh.flush()
+            _fh.close()
+        except Exception:
+            pass
+    _DBG_FH.clear()
+
+
+def _write_preliminary_result(gid, date_key, solved, evidence, video=None):
+    """Write result.json IMMEDIATELY (fix-loop iter 11): the old code
+    wrote result.json ONLY after polish + QC, so a SIGTERM during the
+    tail (exit 143, ~108s after the final log line, runs 39038172088 /
+    39039561115) left no result.json and no Upload. The preliminary
+    record (qc: pending) is overwritten by the final record after
+    polish/QC. Never raises."""
+    try:
+        vdir = HERE / "videos" / gid
+        vdir.mkdir(parents=True, exist_ok=True)
+        (vdir / "result.json").write_text(json.dumps(
+            {"game": gid, "date": date_key, "solved": bool(solved),
+             "evidence": str(evidence)[:500],
+             "video": str(video) if video else None,
+             "guesses": ([str(x) for x in _PLAYED[gid]]
+                         if _PLAYED.get(gid) else []),
+             "qc": {"pending": True}}, indent=1), encoding="utf-8")
+        _dbg(gid, f"preliminary result.json written "
+                  f"(solved={bool(solved)}, qc=pending)")
+    except Exception as e:
+        print(f"[{gid}] preliminary result.json failed: {str(e)[:100]}")
+
+
+def _fast_copy_gameplay(src, out_path):
+    """Unsolved-game gameplay artifact: fast remux/copy of the raw
+    recording, NO re-encode, AUTOCROP off (fix-loop iter 11). The old
+    path ran the full _polish_gameplay re-encode (incl. the
+    _card_composite full re-encode) for unsolved games — the most
+    likely place for the SIGTERM tail stall — only to discard the
+    result. QC samples frames from the raw clip the same way."""
+    try:
+        import subprocess as _sp
+        r = _sp.run(["ffmpeg", "-y", "-v", "error", "-i", str(src),
+                     "-c", "copy", str(out_path)],
+                    capture_output=True, text=True, timeout=300)
+        if r.returncode == 0 and Path(str(out_path)).exists():
+            return str(out_path)
+    except Exception:
+        pass
+    try:
+        import shutil as _sh
+        _sh.copy2(str(src), str(out_path))
+        return str(out_path)
+    except Exception:
+        return str(src)
+
+
+def _install_signal_handlers():
+    """SIGTERM/SIGINT handler (fix-loop iter 11): on runner shutdown,
+    flush + write the in-flight result.json (evidence += " [terminated
+    by SIGTERM during <stage>]"), flush/close debug handles, kill
+    ffmpeg children, and exit promptly (~5s grace, never block on
+    ffmpeg). The handler never waits on a child process."""
+    import signal as _signal
+
+    def _handler(signum, _frame):
+        _gid = _CURRENT_RUN.get("gid")
+        if _gid:
+            try:
+                _write_preliminary_result(
+                    _gid, _CURRENT_RUN.get("date_key") or "",
+                    solved=bool(_CURRENT_RUN.get("solved")),
+                    evidence=(str(_CURRENT_RUN.get("evidence") or "")
+                              + " [terminated by SIGTERM during "
+                              + str(_CURRENT_RUN.get("stage") or "run")
+                              + "]"))
+            except Exception:
+                pass
+            try:
+                _close_dbg_handles()
+            except Exception:
+                pass
+        try:
+            import subprocess as _sp
+            _sp.run(["pkill", "-f", "ffmpeg"], timeout=3,
+                    capture_output=True)
+        except Exception:
+            pass
+        raise SystemExit(143)
+
+    try:
+        _signal.signal(_signal.SIGTERM, _handler)
+        _signal.signal(_signal.SIGINT, _handler)
+    except Exception:
+        pass
+
+
 GAMES = {
     "betweenle": {"name": "Betweenle", "url": "https://betweenle.com", "slug": "betweenle-answer-today"},
     "colordle": {"name": "Colordle", "url": "https://colordle.ryantanen.com", "slug": "colordle-answer-today"},
@@ -247,8 +369,13 @@ GAMES = {
 }
 
 # The four Framed modes, in the order they are played in the combined video.
+# Mode id "classic" (the site's menu label is CLASSIC; the old internal id
+# "daily" leaked into chapters/cards/evidence as "Framed Daily"). The
+# titles API still wants gameType "daily" for this mode — see
+# answers.FRAMED_MODES[mode][0] / _FRAMED_API_GAMETYPE, which maps
+# classic -> "daily" explicitly.
 FRAMED_MODES = (
-    ("daily", "Framed Daily", "https://framed.wtf"),
+    ("classic", "Framed Classic", "https://framed.wtf"),
     ("one-frame", "Framed One Frame", "https://framed.wtf/one-frame"),
     ("titleshot", "Framed Titleshot", "https://framed.wtf/titleshot"),
     ("poster", "Framed Poster", "https://framed.wtf/poster"),
@@ -324,7 +451,7 @@ def thumb(out, game, date_str, answer_txt):
 ENTER_LABELS = ("ENTER", "Enter", "enter", "SUBMIT", "Submit")
 
 
-def _polish_gameplay(src, out_path, crf=17, gid=None):
+def _polish_gameplay(src, out_path, crf=17, gid=None, autocrop=True):
     """Delegate to the shared quordle_parity polish + Recordly-grade cursor
     overlay (native-size spring-smoothed arrow fed by the input-telemetry
     bus). Kept as a thin wrapper so every existing call site - including the
@@ -340,9 +467,14 @@ def _polish_gameplay(src, out_path, crf=17, gid=None):
             _ft = _FIRST_TYPE.get(gid) if gid else None
         _label = _FIRST_ACTION_LABEL.get(gid) if gid else None
         _span = _SOLVE_SPAN.get(gid) if gid else None
+        _tw = _TYPE_WINDOWS.get(gid) if gid else None
+        if gid:
+            _dbg(gid, "polish start")
         out = QP.polish_gameplay(str(src), str(out_path), crf=crf,
                                  first_typing_s=_ft, solve_span_s=_span,
-                                 first_action_label=_label)
+                                 first_action_label=_label,
+                                 typing_windows=_tw,
+                                 autocrop=autocrop)
         _lp = QP.LAST_POLISH or {}
         print(f"[polish] done mode={_lp.get('mode')} clips={_lp.get('clips')} "
               f"events={_lp.get('events')} out={out}")
@@ -357,6 +489,8 @@ def _polish_gameplay(src, out_path, crf=17, gid=None):
                       f"coverage={_ac.get('coverage_ratio')} "
                       f"of solve_span={_ac.get('solve_span_s')}s "
                       f"guard_clamped={_ac.get('guard_clamped')}")
+        if gid:
+            _dbg(gid, "polish done")
     except Exception as e:
         print(f"[polish] shared polish failed: {str(e)[:140]}")
         return str(src)
@@ -586,6 +720,13 @@ def _type_like_a_person(page, text, base_delay=150):
     the autocrop anchor (see _record_first_action).
     """
     _record_first_action(getattr(page, "_qp_gid", None), "typing")
+    _gid = getattr(page, "_qp_gid", None)
+    _w_start = None
+    try:
+        if _gid and _gid in _REC_T0:
+            _w_start = time.time() - _REC_T0[_gid]
+    except Exception:
+        _w_start = None
     try:
         page.evaluate("() => { window.__QP_HOLD = 1; window.__QP_HOLD_T = Date.now(); }")
     except Exception:
@@ -601,6 +742,15 @@ def _type_like_a_person(page, text, base_delay=150):
     finally:
         try:
             page.evaluate("() => { window.__QP_HOLD = 0; }")
+        except Exception:
+            pass
+        # Record the typing window for autocrop (fix-loop iter 11):
+        # typing speed / delays are UNCHANGED — this only records
+        # timing so autocrop never cuts a guess's typing.
+        try:
+            if _gid and _w_start is not None and _gid in _REC_T0:
+                _record_type_window(
+                    _gid, _w_start, time.time() - _REC_T0[_gid])
         except Exception:
             pass
 
@@ -1249,10 +1399,23 @@ def _wait_ready(page, gid):
     return False
 
 
+# Games whose sites give NO per-letter feedback. Their cards/steps must
+# never carry a Wordle-style pattern: Betweenle gives only bound rows,
+# Framed gives no feedback at all, Semantle/Contexto give a similarity
+# score. A pattern on any of these would render as fabricated letter
+# scoring ("2 in the word, wrong spot").
+_NO_LETTER_SCORING = {"betweenle", "framed", "semantle", "contexto"}
+
+
 def _result_steps(gid, aval):
     """Steps for slides/chapters/result.json: PLAYED guesses when the solver
     recorded them, else the plan. A rejected-and-replaced guess must never
     be reported as played (contexto 5-vs-6).
+
+    NO-LETTER-SCORING games (Betweenle, Framed, Semantle, Contexto) never
+    get a pattern merged into their steps: their sites give no per-letter
+    feedback, so a planner-computed Wordle pattern would render as
+    fabricated letter scoring on the answer/breakdown cards.
 
     Pool evidence: when the planner's steps carry pool_before/pool_after for
     the SAME guesses (colorfle's Mastermind chain 6840->...->1), merge those
@@ -1277,12 +1440,18 @@ def _result_steps(gid, aval):
                         s["pool_before"] = p.get("pool_before")
                     if p.get("pool_after") is not None:
                         s["pool_after"] = p.get("pool_after")
-                    if p.get("pattern"):
+                    if p.get("pattern") and gid not in _NO_LETTER_SCORING:
                         s["pattern"] = p.get("pattern")
         except Exception:
             pass
         return steps
-    return _steps(gid, aval)
+    # Plan fallback: strip planner patterns for no-letter-scoring games
+    # (same fabricated-scoring rule as the played-steps merge above).
+    _planned = _steps(gid, aval) or []
+    if gid in _NO_LETTER_SCORING:
+        _planned = [dict(s, pattern="") if isinstance(s, dict) else s
+                    for s in _planned]
+    return _planned
 
 
 # Phoodle defensive un-hide (fix-loop iter 3). The live page ships
@@ -2503,7 +2672,7 @@ def _framed_open_board_with_unlock(page, mid):
     the menu ("mode menu never opened into a game board"); (2) run the
     reward unlock (which polls for the board itself).
     """
-    label = {"daily": "CLASSIC", "one-frame": "ONE FRAME",
+    label = {"classic": "CLASSIC", "one-frame": "ONE FRAME",
              "titleshot": "TITLESHOT", "poster": "POSTER"}.get(mid, "")
     _dbg("framed", f"open-board: mode={mid} label={label!r} url={page.url[:60]}")
     # Trusted element click first (same untrusted-event reason as the
@@ -2570,7 +2739,7 @@ def _framed_live_answer(page, mode, fallback):
     # different mode's number: on the Daily page it was reading "ONE FRAME #664"
     # and comparing it with the daily counter (1661), so every lookup "failed to
     # map" and the answer was wrong. Match THIS mode's own label only.
-    label = {"daily": "CLASSIC", "one-frame": "ONE FRAME",
+    label = {"classic": "CLASSIC", "one-frame": "ONE FRAME",
              "titleshot": "TITLESHOT", "poster": "POSTER"}.get(mode, "CLASSIC")
     shown = None
     for _try in range(5):          # header number renders async after board
@@ -2625,6 +2794,9 @@ def _framed_live_answer(page, mode, fallback):
     # Last resort: ask the titles API for the board's own number directly.
     try:
         import requests as _rq
+        # Explicit API mapping: the titles API's gameType for the
+        # Classic mode is "daily" (answers.FRAMED_MODES keeps that as
+        # value[0]); the internal id is "classic" everywhere else.
         _gt = A.FRAMED_MODES[mode][0]
         _r = _rq.get(f"https://titles.framed.wtf/v1/titles/top-ten/{shown}",
                      params={"gameType": _gt}, timeout=20,
@@ -2670,7 +2842,9 @@ def solve_framed_modes(page, answers):
     for mid, mname, murl in FRAMED_MODES:
         ans = answers.get(mid)
         print(f"[framed] --- {mname} ---")
-        mode_start = _time.time() - started
+        # Recording-relative placeholder; overwritten with the
+        # card-anchored value (after board ready) before play.
+        mode_start = _time.time() - _REC_T0.get("framed", started)
         _mode_retry = 0
         if not ans:
             per_mode.append({"mode": mid, "solved": False, "why": "no answer",
@@ -2785,6 +2959,37 @@ def solve_framed_modes(page, answers):
                              "t_start": mode_start})
             print(f"[framed] {mname}: board never became playable")
             continue
+        # CARD-ANCHORED t_start (fix-loop iter 11): the assembly
+        # inserts the mode's NOW PLAYING card at t_start, so t_start
+        # must be the moment play actually begins — AFTER the board is
+        # ready and the ghost-frame guard below, just before the first
+        # guess — NOT the loop-top time (the old value was a nav/menu
+        # timestamp, so cards landed after play / on win screens).
+        # Recording-relative: the recording starts at page creation
+        # (_REC_T0), while solve_framed_modes starts after goto+6s.
+        mode_start = _time.time() - _REC_T0.get(
+            "framed", started)
+        # C4 ghost-frame guard: the Classic board briefly shows an
+        # off-site page ("GHOST TOWNS OF AMERICA") inside the
+        # movie-frame area while the solver is already typing. Do not
+        # type the first guess while that text is on the page; wait
+        # for it to clear (bounded) and log the frame-area evidence.
+        # Root cause still unproven from frames (site ad behaviour vs
+        # solver timing) — this guard + log is the honest partial fix.
+        for _gw in range(20):
+            try:
+                _gtxt = (page.evaluate(
+                    "() => document.body.innerText") or "")
+            except Exception:
+                _gtxt = ""
+            if "ghost towns" not in _gtxt.lower():
+                break
+            _dbg("framed", f"{mid}: ghost-frame text still showing "
+                           f"(wait {_gw + 1}/20); holding first guess")
+            page.wait_for_timeout(500)
+        else:
+            _dbg("framed", f"{mid}: ghost-frame text never cleared; "
+                           f"proceeding (logged for diagnosis)")
         # The board is live: agree with the day the site is actually serving.
         ans = _framed_live_answer(page, mid, ans)
         # Framed reveals nothing - no letters, no similarity score - so there is
@@ -2828,7 +3033,7 @@ def solve_framed_modes(page, answers):
             ok, ev = _strict_win(page, ans)
         if not ok:
             try:
-                body = (page.content() or "").lower()
+                body = _visible_page_text(page).lower()
                 if "guesses remaining" in body and "share" in body:
                     ok, ev = True, "post-win screen with SHARE + guesses remaining"
             except Exception:
@@ -2853,7 +3058,7 @@ def solve_framed_modes(page, answers):
                     ok, ev = _strict_win(page, ans)
                     if not ok:
                         try:
-                            _b2 = (page.content() or "").lower()
+                            _b2 = _visible_page_text(page).lower()
                             if "guesses remaining" in _b2 and "share" in _b2:
                                 ok, ev = True, "retry: post-win SHARE screen"
                         except Exception:
@@ -3135,6 +3340,64 @@ def _semantic_guess_accepted(page, word, before_txt):
     return False, None
 
 
+def _semantic_closeness(gid, score):
+    """Closeness bucket for one accepted guess: "high" (next word
+    should share stem/letters with this guess), "low" (next word
+    should be distant/broad), or None (score unusable — keep plan
+    order). Semantle scores are similarity (higher = closer);
+    Contexto scores are ranks (lower = closer)."""
+    try:
+        v = float(str(score).strip().rstrip("%"))
+    except Exception:
+        return None
+    if gid == "contexto":
+        if v <= 500:
+            return "high"
+        if v > 5000:
+            return "low"
+        return None
+    if v > 25:
+        return "high"
+    if v < 5:
+        return "low"
+    return None
+
+
+def _semantic_feedback_reorder(spare, guess, gid, score):
+    """Reorder the spare pool by the last accepted guess's feedback:
+    high closeness -> stem/letter-sharing words first; low closeness
+    -> distant broad words first. Pure list operation (unit-tested)."""
+    close = _semantic_closeness(gid, score)
+    if close is None or not spare:
+        return list(spare)
+    g = str(guess or "").lower()
+
+    def _shares(w):
+        w = str(w).lower()
+        if len(w) >= 3 and len(g) >= 3 and (
+                w[:3] == g[:3] or w[-3:] == g[-3:]):
+            return True
+        for n in range(4, min(len(w), len(g)) + 1):
+            if any(w[i:i + n] in g for i in range(len(w) - n + 1)):
+                return True
+        return False
+
+    def _dist(w):
+        return len(set(str(w).lower()) & set(g))
+
+    if close == "high":
+        return sorted(spare, key=lambda w: (not _shares(w), _dist(w)))
+    return sorted(spare, key=lambda w: (_shares(w), -_dist(w)))
+
+
+# HARD CAP (fix-loop iter 11): total TYPED attempts <= 5 including the
+# answer (<= 4 probes + answer). Replacements count against the cap;
+# when the cap is hit without a win, the solver returns False and
+# never types a 6th word.
+_SEMANTIC_MAX_TYPED = 5
+_SEMANTIC_MAX_PROBES = _SEMANTIC_MAX_TYPED - 1
+
+
 def solve_semantle(page, ans, gid="semantle"):
     """Semantle: play a real semantic guess path, answer last.
 
@@ -3142,7 +3405,8 @@ def solve_semantle(page, ans, gid="semantle"):
     by the puzzle date, so it differs every day, and any word the site refuses is
     dropped and replaced rather than burning a guess.
     """
-    gs, _ = S.semantic_probe_path(ans, gid=gid, width=5, seed=_day_seed(gid))
+    gs, _ = S.semantic_probe_path(ans, gid=gid, width=_SEMANTIC_MAX_PROBES,
+                            seed=_day_seed(gid))
     inp = "input[placeholder='Enter a word...']"
     rejected, used, scores = set(), [], []
     spare = [w for w in S.words_semantic(gid)
@@ -3159,8 +3423,19 @@ def solve_semantle(page, ans, gid="semantle"):
     while _qi < len(gs):
         w = gs[_qi]
         _qi += 1
-        if w in rejected:
+        # Dedupe guard (fix-loop iter 11): NEVER type a word already in
+        # played[] or rejected[] (case-insensitive) — Contexto typed
+        # the same word twice. A duplicate is skipped, not retyped.
+        if (w in rejected or w in used
+                or str(w).lower() in {str(u).lower() for u in used}):
+            _dbg(gid, f"duplicate {w!r} skipped (already played/rejected)")
             continue
+        # HARD CAP: probes stop at 4 so the answer stays the 5th typed
+        # word; a 6th typed word is never allowed.
+        if len(used) >= _SEMANTIC_MAX_PROBES:
+            _dbg(gid, f"probe cap hit ({_SEMANTIC_MAX_PROBES}); "
+                      f"stopping probes for the answer")
+            break
         _attempted += 1
         _dbg(gid, f"guess {_attempted} {w!r} (queue {_qi}/{len(gs)})")
         _idle_drift(page)
@@ -3179,8 +3454,19 @@ def solve_semantle(page, ans, gid="semantle"):
             _REJECTED[gid] = sorted(rejected)
             _dbg(gid, f"{w!r} rejected by the site; replacing it "
                       f"(rejected={sorted(rejected)})")
+            # Replacement counts against the cap and must differ
+            # from ALL previously typed words (used + rejected + queue).
+            _can_replace = (len(used) + (len(gs) - _qi)
+                            < _SEMANTIC_MAX_PROBES)
             for alt in list(spare):
-                if alt not in rejected and alt not in gs:
+                if (not _can_replace):
+                    break
+                if (alt not in rejected and alt not in gs
+                        and alt not in used
+                        and str(alt).lower() not in
+                        {str(u).lower() for u in used}
+                        and str(alt).lower() not in
+                        {str(r).lower() for r in rejected}):
                     gs.append(alt)
                     spare.remove(alt)
                     _dbg(gid, f"replacement queued: {alt!r} "
@@ -3193,18 +3479,47 @@ def solve_semantle(page, ans, gid="semantle"):
         _PLAYED[gid] = list(used)
         if score is not None:
             scores.append((w, score))
+        # Feedback-driven next choice: reorder the spare pool by this
+        # guess's score/rank (high -> stem-sharing words first; low ->
+        # distant broad words first) so the next word actually follows
+        # from the feedback just read, and swap the next queued probe
+        # for the best feedback-fitting spare when the queued word
+        # does not fit the feedback direction.
+        try:
+            spare = _semantic_feedback_reorder(spare, w, gid, score)
+            if spare and _qi < len(gs) and score is not None:
+                _next_q = gs[_qi]
+                _best = spare[0]
+                _close = _semantic_closeness(gid, score)
+                if _best != _next_q and _close in ("high", "low"):
+                    gs[_qi] = _best
+                    spare[0] = _next_q
+                    _dbg(gid, f"feedback-driven next: queue "
+                              f"{_next_q!r} -> {_best!r} "
+                              f"(score={score!r} closeness={_close})")
+        except Exception as _fe:
+            _dbg(gid, f"feedback reorder skipped: {str(_fe)[:60]}")
         _dbg(gid, f"guess {_attempted} accepted: {w!r} score={score!r} "
                   f"(played={used})")
     # Answer last, after every probe/replacement has actually been played.
-    try:
-        _idle_drift(page)
-        _type_into(page, "input", _ans_l, base_delay=150)
-        page.keyboard.press("Enter")
-    except Exception as e:
-        return False, f"answer {_ans_l!r} failed: {str(e)[:120]}"
-    _settle(page, base=2600)
-    used.append(_ans_l)
-    _PLAYED[gid] = list(used)
+    # HARD CAP + dedupe: if the answer was already typed (duplicate),
+    # do not type it again; if 5 words are already typed, return False
+    # — never type a 6th word.
+    if _ans_l in [str(u).lower() for u in used]:
+        _dbg(gid, f"answer {_ans_l!r} already typed; not retyping")
+    elif len(used) >= _SEMANTIC_MAX_TYPED:
+        return False, (f"cap hit: {len(used)} typed without win; "
+                       f"never typing a 6th word")
+    else:
+        try:
+            _idle_drift(page)
+            _type_into(page, "input", _ans_l, base_delay=150)
+            page.keyboard.press("Enter")
+        except Exception as e:
+            return False, f"answer {_ans_l!r} failed: {str(e)[:120]}"
+        _settle(page, base=2600)
+        used.append(_ans_l)
+        _PLAYED[gid] = list(used)
     _REJECTED[gid] = sorted(rejected)
     _dbg(gid, f"guess {len(used)} answer {_ans_l!r} played "
               f"(played={used} rejected={sorted(rejected)})")
@@ -3241,7 +3556,8 @@ def solve_contexto(page, ans, gid="contexto"):
         page.wait_for_selector("input.word", state="visible", timeout=12000)
     except Exception:
         pass
-    gs, _ = S.semantic_probe_path(ans, gid=gid, width=5, seed=_day_seed(gid))
+    gs, _ = S.semantic_probe_path(ans, gid=gid, width=_SEMANTIC_MAX_PROBES,
+                            seed=_day_seed(gid))
     rejected, used, scores = set(), [], []
     spare = [w for w in S.words_semantic(gid)
              if w not in set(gs) and w != str(ans).lower()]
@@ -3258,8 +3574,19 @@ def solve_contexto(page, ans, gid="contexto"):
     while _qi < len(gs):
         w = gs[_qi]
         _qi += 1
-        if w in rejected:
+        # Dedupe guard (fix-loop iter 11): NEVER type a word already in
+        # played[] or rejected[] (case-insensitive) — Contexto typed
+        # the same word twice. A duplicate is skipped, not retyped.
+        if (w in rejected or w in used
+                or str(w).lower() in {str(u).lower() for u in used}):
+            _dbg(gid, f"duplicate {w!r} skipped (already played/rejected)")
             continue
+        # HARD CAP: probes stop at 4 so the answer stays the 5th typed
+        # word; a 6th typed word is never allowed.
+        if len(used) >= _SEMANTIC_MAX_PROBES:
+            _dbg(gid, f"probe cap hit ({_SEMANTIC_MAX_PROBES}); "
+                      f"stopping probes for the answer")
+            break
         _attempted += 1
         _dbg(gid, f"guess {_attempted} {w!r} (queue {_qi}/{len(gs)})")
         _idle_drift(page)
@@ -3276,8 +3603,19 @@ def solve_contexto(page, ans, gid="contexto"):
             _REJECTED[gid] = sorted(rejected)
             _dbg(gid, f"{w!r} rejected by the site; replacing it "
                       f"(rejected={sorted(rejected)})")
+            # Replacement counts against the cap and must differ
+            # from ALL previously typed words (used + rejected + queue).
+            _can_replace = (len(used) + (len(gs) - _qi)
+                            < _SEMANTIC_MAX_PROBES)
             for alt in list(spare):
-                if alt not in rejected and alt not in gs:
+                if (not _can_replace):
+                    break
+                if (alt not in rejected and alt not in gs
+                        and alt not in used
+                        and str(alt).lower() not in
+                        {str(u).lower() for u in used}
+                        and str(alt).lower() not in
+                        {str(r).lower() for r in rejected}):
                     gs.append(alt)
                     spare.remove(alt)
                     _dbg(gid, f"replacement queued: {alt!r} "
@@ -3290,8 +3628,32 @@ def solve_contexto(page, ans, gid="contexto"):
         _PLAYED[gid] = list(used)
         if score is not None:
             scores.append((w, score))
+        # Feedback-driven next choice: reorder the spare pool by this
+        # guess's score/rank (high -> stem-sharing words first; low ->
+        # distant broad words first) so the next word actually follows
+        # from the feedback just read, and swap the next queued probe
+        # for the best feedback-fitting spare when the queued word
+        # does not fit the feedback direction.
+        try:
+            spare = _semantic_feedback_reorder(spare, w, gid, score)
+            if spare and _qi < len(gs) and score is not None:
+                _next_q = gs[_qi]
+                _best = spare[0]
+                _close = _semantic_closeness(gid, score)
+                if _best != _next_q and _close in ("high", "low"):
+                    gs[_qi] = _best
+                    spare[0] = _next_q
+                    _dbg(gid, f"feedback-driven next: queue "
+                              f"{_next_q!r} -> {_best!r} "
+                              f"(score={score!r} closeness={_close})")
+        except Exception as _fe:
+            _dbg(gid, f"feedback reorder skipped: {str(_fe)[:60]}")
         _dbg(gid, f"guess {_attempted} accepted: {w!r} score={score!r} "
                   f"(played={used})")
+    if len(used) >= _SEMANTIC_MAX_TYPED and \
+            _ans_l not in [str(u).lower() for u in used]:
+        return False, (f"cap hit: {len(used)} typed without win; "
+                       f"never typing a 6th word")
     if _ans_l not in [u.lower() for u in used]:
         try:
             _idle_drift(page)
@@ -3368,16 +3730,20 @@ def _framed_probe_path(answer, max_guesses=2):
     return out, steps
 
 
-def _honest_fallback(answer, opener=None, max_guesses=6):
+def _honest_fallback(answer, opener=None, max_guesses=6, seed=None):
     """Last-resort plan that still never gives the answer away early.
 
     Every game used to fall back to `[answer]` here, which typed the secret on
     guess 1 whenever a word bank was missing. This builds a real probe list
-    instead, and reserves the answer for the final move.
+    instead, and reserves the answer for the final move. The probe order
+    is DATE-SEEDED shuffled (fix-loop iter 11): the old fixed order
+    CRANE, SLATE, AUDIO, ... opened every fallback video identically.
     """
     a = str(answer).upper()
     probes = [p for p in (opener, "CRANE", "SLATE", "AUDIO", "TILES", "ROAST",
                           "TRACE", "HEART", "STONE", "NOTES") if p]
+    import random as _r
+    _r.Random(seed if seed is not None else a).shuffle(probes)
     out, seen = [], {a}
     for p in probes:
         if p not in seen:
@@ -3423,9 +3789,19 @@ def _plan_for(gid, answer):
                         default=(None, []))[1]
             bank = other or []
         if not bank:
-            p = _honest_fallback(a, "RATE" if n == 4 else "CRANE")
+            p = _honest_fallback(a, "RATE" if n == 4 else "CRANE",
+                              seed=_day_seed(gid))
         else:
-            opener = "RATE" if n == 4 else ("CRANE" if n == 5 else None)
+            # Date-seeded opener among length-appropriate openers, never
+            # a fixed RATE/CRANE (fix-loop iter 11): the opener varies
+            # daily while staying a valid high-information guess.
+            import random as _r2
+            _openers = {4: ["RATE", "CARE", "LATE", "TARE", "TEAR"],
+                        5: ["CRANE", "SLATE", "TRACE", "ADIEU", "ROAST",
+                            "AUDIO"],
+                        6: ["CRANES", "SLATES", "TRACES", "ROASTS"]}.get(n)
+            opener = (_r2.Random(_day_seed(gid)).choice(_openers)
+                      if _openers else None)
             p = S.plan_sequence(a, bank, bank, opener=opener)
     elif gid == "phrazle":
         # Use the SITE's own phrase list (phrazle_live.json, extracted from the
@@ -3442,7 +3818,7 @@ def _plan_for(gid, answer):
                     bank = []
                 break
         p = (S.plan_phrase(a, bank) if bank
-             else _honest_fallback(a, max_guesses=5))
+             else _honest_fallback(a, max_guesses=5, seed=_day_seed(gid)))
     elif gid == "colordle":
         # Colour-distance search over the site's own colour list. Needs the
         # secret hex, which the caller stashes in _HEX (see run_one).
@@ -3450,13 +3826,13 @@ def _plan_for(gid, answer):
         if hx:
             p = S.plan_colordle(hx, date_str=A.target_date().isoformat())
         else:
-            p = _honest_fallback(a, max_guesses=5)
+            p = _honest_fallback(a, max_guesses=5, seed=_day_seed(gid))
     elif gid == "colorfle":
         cols = _COLORS.get(gid)
         if cols:
             p = S.plan_colorfle([int(c) for c in cols])
         else:
-            p = _honest_fallback(a, max_guesses=6)
+            p = _honest_fallback(a, max_guesses=6, seed=_day_seed(gid))
     elif gid in ("semantle", "contexto"):
         # Semantic games score a guess 0-100 with no letter feedback, so the
         # honest plan is a spread of real probes ending on the answer. Both
@@ -3464,7 +3840,8 @@ def _plan_for(gid, answer):
         # winning move. The pool is thousands of real words seeded by the
         # puzzle DATE, so the opening is different every day instead of the
         # same six hand-written words in every video.
-        p = S.semantic_probe_path(a, gid=gid, width=5, seed=_day_seed(gid))
+        p = S.semantic_probe_path(a, gid=gid, width=_SEMANTIC_MAX_PROBES,
+                            seed=_day_seed(gid))
     elif gid.startswith("framed"):
         # Framed is a movie-frame game: the site gives NO letter feedback and no
         # similarity score, so constraint propagation is impossible. The
@@ -3516,16 +3893,22 @@ def _plan_for(gid, answer):
         if bank:
             p = S.plan_sequence(a, bank, bank, opener=None)
         else:
-            p = _honest_fallback(a)
+            p = _honest_fallback(a, seed=_day_seed(gid))
     elif gid in ("marveldle", "batterup"):
         # Attribute games: 2 spread probes from the vendored pool + answer.
         # This is the same list solve_attr_game plays, so slides/captions
         # always match the footage (never generic CRANE/SLATE filler).
         pool = [str(n) for n in _attr_pool(gid)
                 if str(n).lower() != str(a).lower()]
+        # Date-seeded sample (fix-loop iter 11): the old pool[0] /
+        # pool[mid] picks opened every Batterup/Marveldle video with
+        # the same two probes. Same seed as solve_attr_game so slides
+        # match footage; the answer is excluded from the pool above.
+        import random as _r3
+        _sample = (_r3.Random(_day_seed(gid)).sample(
+            pool, min(2, len(pool))) if pool else [])
         seq = []
-        for cand in ([pool[0] if pool else None,
-                      pool[len(pool) // 2] if pool else None]):
+        for cand in _sample:
             if cand and cand not in seq:
                 seq.append(cand)
         seq = (seq[:2] + [a]) if a else seq
@@ -3534,7 +3917,7 @@ def _plan_for(gid, answer):
                  for i, g in enumerate(seq)]
         p = (seq, steps)
     else:
-        p = _honest_fallback(a)
+        p = _honest_fallback(a, seed=_day_seed(gid))
     _PLANS[gid] = p
     return p
 
@@ -3548,24 +3931,58 @@ def _steps(gid, answer):
 
 
 def _betweenle_bounds(page):
-    """Current (lo, hi) bounds from the board text: 'Secret word is placed
-    in dictionary between LEVEL and SLATE'. Guesses outside these bounds are
-    rejected with an 'Enter word placed in dictionary after ...' prompt."""
+    """Current (lo, hi) bounds from the live game, either side None when
+    unknown. Sources, in order: (1) the bound rows' own text — "Secret
+    word is placed in dictionary between LEVEL and SLATE"; (2) the
+    rejection banner — "Enter word placed in dictionary before PARTY"
+    (hi=PARTY) / "... after CRANE" (lo=CRANE). A bounds read that
+    returns None for every guess (old code: only source (1), and the
+    migrated build no longer prints that sentence) silently disabled
+    the in-bounds guard, so out-of-bounds words were typed and then
+    replayed in a ~38s stuck loop. Returns (lo, hi) or (None, None)."""
     try:
         t = (page.evaluate("() => document.body.innerText") or "")
     except Exception:
-        return None
+        return (None, None)
     import re as _re
     m = _re.search(r"between\s+([A-Za-z]{3,15})\s+and\s+([A-Za-z]{3,15})", t)
     if m:
         return m.group(1).upper(), m.group(2).upper()
-    return None
+    lo = hi = None
+    m2 = _re.search(r"placed in dictionary after\s+([A-Za-z]{3,15})", t,
+                    _re.IGNORECASE)
+    if m2:
+        lo = m2.group(1).upper()
+    m3 = _re.search(r"placed in dictionary before\s+([A-Za-z]{3,15})", t,
+                    _re.IGNORECASE)
+    if m3:
+        hi = m3.group(1).upper()
+    return (lo, hi)
+
+
+def _betweenle_rejected_showing(page):
+    """True when the game is showing a rejection for the last word:
+    dictionary rejection ("not a word" family) or an out-of-bounds
+    banner ("Enter word placed in dictionary before/after X"). A
+    rejected word must NEVER be retyped — the solver moves to the
+    next candidate."""
+    try:
+        txt = (page.evaluate("() => document.body.innerText") or "").lower()
+    except Exception:
+        return False
+    return any(s in txt for s in (
+        "not a word", "not valid", "invalid word", "not in the word list",
+        "unknown word", "placed in dictionary before",
+        "placed in dictionary after"))
 
 
 def _betweenle_pick_in_bounds(gs, bank, bounds, used, answer):
     """Next guess strictly inside bounds: prefer the planned word, else the
-    bank word closest to the alphabetical middle of (lo, hi)."""
-    lo, hi = bounds if bounds else ("AAAAA", "ZZZZZ")
+    bank word closest to the alphabetical middle of (lo, hi). Either
+    bound may be None (unknown side = unbounded)."""
+    lo, hi = bounds if bounds else (None, None)
+    lo = lo or "AAAAA"
+    hi = hi or "ZZZZZ"
     def inside(w):
         w = str(w).upper()
         return lo < w < hi and w not in used
@@ -3606,6 +4023,13 @@ def _s_betweenle(page, ans, gid):
     # starting the daily game, and it swallows all keyboard input until closed.
     _close_betweenle_help(page)
     _used_bl = set()
+    # Submitted-guess ledger: chapters/cards/evidence count SUBMITTED
+    # guesses only (game counters), never planned/rejected words (run
+    # 39039561115: RATIO was counted as guess 3 though the game
+    # rejected it — "Full solve (4 guesses)" was false; real submitted
+    # = 3). _PLAYED is updated as each guess is confirmed submitted.
+    _submitted_bl = []
+    _rejected_bl = []
     gs = _guesses(gid, ans)
     try:
         _bank, _ = S.words_betweenle()
@@ -3680,7 +4104,9 @@ def _s_betweenle(page, ans, gid):
         _cnt_before = (_betweenle_counters(page) or {}).get("guess_n") or 0
         _bd = _betweenle_bounds(page)
         _dbg(gid, f"bounds before guess {gi + 1}: {_bd}")
-        if _bd and not (_bd[0] < str(g).upper() < _bd[1]):
+        _blo, _bhi = _bd if _bd else (None, None)
+        if (_blo or _bhi) and not (
+                (_blo or "AAAAA") < str(g).upper() < (_bhi or "ZZZZZ")):
             _alt = _betweenle_pick_in_bounds(gs[gi:], _bank, _bd,
                                              _used_bl, ans)
             _dbg(gid, f"{g!r} outside bounds {_bd}; playing {_alt!r}")
@@ -3730,80 +4156,59 @@ def _s_betweenle(page, ans, gid):
                   f"{_cnt1.get('guess_n')}/{_cnt1.get('guess_total')} "
                   f"(was {_cnt_before}) stats={_cnt1.get('stats_word')!r} "
                   f"submitted={_submitted1}")
-        if not _submitted1:
-            # out-of-bounds prompt or stolen focus: dismiss + resend once
-            _dbg(gid, f"{g!r} did not submit; dismissing prompt + resending")
+        if _submitted1:
+            _submitted_bl.append(str(g).upper())
+            _PLAYED[gid] = list(_submitted_bl)
+            _dbg(gid, f"{g!r} submitted (game counters GUESS "
+                      f"{_cnt1.get('guess_n')}/{_cnt1.get('guess_total')})")
+        else:
+            # NOT submitted. First ask the game WHY: a rejection
+            # banner ("not a word" / "placed in dictionary before/after
+            # X") means the word was REJECTED — never retype it, move
+            # to the next candidate at once. The old code replayed the
+            # rejected word through resend + key-retype + synthetic
+            # dispatch (~38s stuck loop on RATIO, run 39039561115).
+            if _betweenle_rejected_showing(page):
+                _dbg(gid, f"{g!r} REJECTED by the game; never retyping "
+                          f"(moving to next candidate)")
+                _rejected_bl.append(str(g).upper())
+                _REJECTED[gid] = list(_rejected_bl)
+                continue
+            # No rejection banner: a focus stall (ad stole input).
+            # STALL BREAKER: ONE Enter resend only (the typed letters
+            # may still be sitting in the input — resending Enter
+            # submits them without retyping). Then the game's own
+            # counters arbitrate; if still not submitted, advance —
+            # never retype, never sweep-and-retype, never synthetic
+            # dispatch. Max cost of a stall: one resend, not 38s.
+            _dbg(gid, f"{g!r} did not submit (no rejection banner); "
+                      f"stall breaker: ONE Enter resend, then advance")
             try:
                 page.evaluate(
                     "() => { const a = document.activeElement; "
-                    "if (a && a !== document.body) a.blur(); " "if (a && a.tagName === 'IFRAME') { try { a.contentWindow.blur(); } " "catch (e) {} } try { window.top.focus(); } catch (e) {} " "window.focus(); }")
+                    "if (a && a !== document.body) a.blur(); "
+                    "try { window.top.focus(); } catch (e) {} "
+                    "window.focus(); }")
             except Exception:
                 pass
-            page.wait_for_timeout(2500)
+            page.wait_for_timeout(1200)
             page.keyboard.press("Enter")
             _settle(page, base=2500)
-            _st2 = _betweenle_state(page)
-            if (_st2.get("rows") or 0) <= _rows_before:
-                # US ad stack paints a CANVAS interstitial after a couple of
-                # guesses that swallows all input until its button is hit.
-                # Sweep the likely button spots (harmless on empty canvas),
-                # then retype + submit.
-                _dbg(gid, "submit stalled; sweeping canvas for interstitial")
-                try:  # capture the interstitial for coordinate mapping
-                    _sp = HERE / "videos" / gid / f"stall_{_rows_before}.png"
-                    _sp.parent.mkdir(parents=True, exist_ok=True)
-                    page.screenshot(path=str(_sp))
-                    _dbg(gid, f"stall screenshot saved: {_sp.name}")
-                except Exception:
-                    pass
-                _evict_interceptors(page, gid)
-                for _pt in ((960, 540), (960, 760), (960, 420),
-                            (700, 540), (1220, 540), (960, 900)):
-                    page.mouse.click(_pt[0], _pt[1])
-                    QP.ev_push(_pt[0], _pt[1], "click")
-                    page.wait_for_timeout(500)
-                _type_betweenle_via_keys(page, g)
-                page.wait_for_timeout(300)
-                _submit_betweenle(page)
-                _settle(page, base=2500)
-                _st2 = _betweenle_state(page)
-            if (_st2.get("rows") or 0) <= _rows_before:
-                # Keystrokes still dead: dispatch synthetic KeyboardEvents
-                # straight at document (focus-proof), then read again.
-                _dbg(gid, f"{g!r} still not in; synthetic key dispatch")
-                try:
-                    page.evaluate("""(w) => {
-                      const send = (type, key, code) => document.dispatchEvent(
-                        new KeyboardEvent(type, {key, code, bubbles: true}));
-                      for (const ch of w) {
-                        const code = 'Key' + ch.toUpperCase();
-                        send('keydown', ch, code); send('keypress', ch, code);
-                        send('keyup', ch, code);
-                      }
-                      send('keydown', 'Enter', 'Enter');
-                      send('keypress', 'Enter', 'Enter');
-                      send('keyup', 'Enter', 'Enter');
-                    }""", str(g))
-                except Exception:
-                    pass
-                _settle(page, base=2500)
-                _st2 = _betweenle_state(page)
-            # Final verdict from the GAME'S OWN counters (settle + double
-            # read), not from the stale bounds/board snapshot. Only log
-            # "did not submit" when the counters confirm it.
             _submitted_f, _cntf = _betweenle_submitted(page, _cnt_before, g)
-            if not _submitted_f:
-                _dbg(gid, f"{g!r} did not submit after retries; skipping "
-                          f"(game counters confirm: GUESS "
+            if _submitted_f:
+                _submitted_bl.append(str(g).upper())
+                _PLAYED[gid] = list(_submitted_bl)
+                _dbg(gid, f"{g!r} confirmed submitted by game counters "
+                          f"(GUESS {_cntf.get('guess_n')}/"
+                          f"{_cntf.get('guess_total')})")
+            else:
+                _dbg(gid, f"{g!r} still not submitted after ONE resend; "
+                          f"advancing (game counters: GUESS "
                           f"{_cntf.get('guess_n')}/{_cntf.get('guess_total')}, "
-                          f"was {_cnt_before}, stats={_cntf.get('stats_word')!r})")
+                          f"was {_cnt_before}); never retyping")
+                _rejected_bl.append(str(g).upper() + " (not submitted)")
+                _REJECTED[gid] = list(_rejected_bl)
                 continue
-            _dbg(gid, f"{g!r} confirmed submitted by game counters "
-                      f"(GUESS {_cntf.get('guess_n')}/{_cntf.get('guess_total')})")
-            # DECISION (fix-loop iter 4): the counters CONFIRM submission —
-            # do NOT retype. The old code typed the word again + resubmitted
-            # here, double-submitting a confirmed guess and garbling the
-            # next row. Retypes happen only on the NOT-submitted path above.
         try:
             _st = _betweenle_state(page)
             _cntf2 = _betweenle_counters(page) or {}
@@ -3847,10 +4252,10 @@ def _s_betweenle(page, ans, gid):
             _final_st = _betweenle_state(page) or {}
         except Exception:
             _final_st = {}
-        if stat and str(ans).lower() in stat.lower() and str(ans).upper() in _used_bl and (_final_st.get("rows") or 0) > 0:
+        if stat and str(ans).lower() in stat.lower() and str(ans).upper() in _submitted_bl and (_final_st.get("rows") or 0) > 0:
             return True, f"stats panel word={stat!r} (submitted, rows={_final_st.get('rows')})"
         if stat and str(ans).lower() in stat.lower():
-            _dbg(gid, f"stats panel shows {stat!r} but answer not in submitted set {_used_bl} / rows={_final_st.get('rows')}; NOT claiming solved")
+            _dbg(gid, f"stats panel shows {stat!r} but answer not in submitted set {_submitted_bl} / rows={_final_st.get('rows')}; NOT claiming solved")
         return False, f"{ev}; stats={stat!r}"
     return ok, ev
 
@@ -4343,7 +4748,7 @@ def _s_worldle_final_chapters(intro_s, gameplay_s, cards_s=15.0):
     10 s hints cards (cards_s=15) before gameplay, then the end cards.
     One chapter per played mode, plus Summary at gameplay end. Callers
     with a different card layout pass their own cards_s."""
-    out = [(0, "Intro")]
+    out = [(0, "Intro")] if intro_s else [(0, "Today's Worldle puzzle")]
     base = float(intro_s or 0) + float(cards_s)
     for off, title in _WORLDLE_SEGMENTS:
         out.append((round(base + float(off), 1), title))
@@ -5324,10 +5729,16 @@ def _s_worldle_switch_mode(page, gid, mode, day_string):
 
 
 def _s_worldle_live_round_modes(page, gid):
-    """Read the live round list from the open dropdown (labels -> mode
-    ids). Returns a set of mode ids, or None when the dropdown cannot be
-    read. Rounds the game removed for missing data are ABSENT here —
-    that is the authoritative availability signal."""
+    """Read the live round list from the open dropdown.
+
+    Returns {"mapped": set of mode ids, "raw": [all visible dropdown
+    entry texts], "unmapped": [raw entries matching no known label and
+    no chrome string]}, or None when the dropdown cannot be read.
+    Rounds the game removed for missing data are ABSENT here — that is
+    the authoritative availability signal. The RAW list is returned
+    too: the old code filtered inside page JS and dropped unknown
+    labels before Python ever saw them, so a renamed round would be
+    silently lost (fix-loop iter 11)."""
     try:
         labels = list(_WORLDLE_MODE_LABELS.values())
         opened = page.evaluate("""(labels) => {
@@ -5350,26 +5761,55 @@ def _s_worldle_live_round_modes(page, gid):
         if not opened:
             return None
         page.wait_for_timeout(700)
-        found = page.evaluate("""(labels) => {
+        # RAW: every visible entry in the open dropdown — NO label
+        # filter in JS. Mapping to known labels happens in Python so
+        # an unknown/renamed label survives as `unmapped`.
+        raw = page.evaluate("""() => {
           const vis = e => e && e.offsetParent !== null;
-          const norm = s => (s||'').toLowerCase().replace(/\\s+/g,' ').trim();
+          const norm = s => (s||'').replace(/\\s+/g,' ').trim();
           const out = [];
-          for (const e of Array.from(document.querySelectorAll(
+          const seen = new Set();
+          const push = t => { const n = norm(t);
+            if (n && n.length < 80 && !seen.has(n.toLowerCase())) {
+              seen.add(n.toLowerCase()); out.push(n); } };
+          // Prefer the open menu/listbox container when identifiable.
+          const menus = Array.from(document.querySelectorAll(
+            '[role=menu], [role=listbox], [class*=dropdown i], ' +
+            '[class*=menu i]')).filter(vis);
+          let scope = null;
+          for (const m of menus) {
+            const leaves = Array.from(m.querySelectorAll(
               'button, [role=option], [role=menuitem], ' +
-              '[role=menuitemradio], a, li')).filter(vis)) {
-            const t = norm(e.innerText);
-            if (labels.some(l => norm(l) === t)) out.push(t);
+              '[role=menuitemradio], a, li, span, div'))
+              .filter(vis).filter(e => e.children.length === 0);
+            if (leaves.length >= 3) { scope = leaves; break; }
           }
-          return Array.from(new Set(out));
-        }""", labels)
+          if (scope) {
+            for (const e of scope) push(e.innerText);
+          } else {
+            for (const e of Array.from(document.querySelectorAll(
+                'button, [role=option], [role=menuitem], ' +
+                '[role=menuitemradio], a, li')).filter(vis))
+              push(e.innerText);
+          }
+          return out;
+        }""") or []
         try:
             page.keyboard.press("Escape")
         except Exception:
             pass
         inv = {_s_worldle_norm(v): k
                for k, v in _WORLDLE_MODE_LABELS.items()}
-        return {inv[_s_worldle_norm(f)] for f in (found or [])
-                if _s_worldle_norm(f) in inv}
+        mapped = {inv[_s_worldle_norm(f)] for f in (raw or [])
+                  if _s_worldle_norm(f) in inv}
+        chrome = {"close", "done", "cancel", "back", "menu", "rounds",
+                  "select round", "choose a round", "all rounds",
+                  "select a round", "choose round", "round"}
+        unmapped = [f for f in (raw or [])
+                    if _s_worldle_norm(f) not in inv
+                    and _s_worldle_norm(f) not in chrome]
+        return {"mapped": mapped, "raw": list(raw or []),
+                "unmapped": unmapped}
     except Exception as e:
         _dbg(gid, f"worldle live round list unreadable: {str(e)[:90]}")
         return None
@@ -5480,7 +5920,13 @@ def _worldle_pin_probe(page, px, py):
     circles/ellipses/marker classes + Leaflet/MapLibre markers, and the
     map-host HTML signature catches a newly added pin node. The topmost
     element answers the other failure mode: an overlay/ad covering the
-    point swallows the real mouse click. Pure probe (no clicks)."""
+    point swallows the real mouse click. Pure probe (no clicks).
+
+    Probe v2 (fix-loop iter 11): also log the FULL elementFromPoint
+    ancestor chain (tag/class/id, 6 levels), whether the topmost
+    element is the picked map element or its descendant (picked vs
+    topmost identity), and canvas-vs-SVG/DOM — so a "markers 4->4"
+    failure can be diagnosed from the log instead of guessed."""
     try:
         return page.evaluate("""(pt) => {
           const top = document.elementFromPoint(pt.x, pt.y);
@@ -5497,13 +5943,44 @@ def _worldle_pin_probe(page, px, py):
             'svg, teuteuf-geo-map, [data-projection]') || top) : null;
           if (host) sig = String((host.outerHTML || '').length) + ':' +
             String(host.childElementCount || 0);
+          // v2: ancestor chain of the topmost element + picked-map identity.
+          const chain = [];
+          let n = top;
+          for (let i = 0; i < 6 && n; i++) {
+            chain.push((n.tagName || '') + '#' + (n.id || '') + '.' +
+              String(n.getAttribute && n.getAttribute('class') || '')
+              .slice(0, 50));
+            n = n.parentElement;
+          }
+          const vis = e => e && e.offsetParent !== null;
+          const mapEls = Array.from(document.querySelectorAll(
+            'teuteuf-geo-map, [data-projection], svg, canvas'))
+            .filter(vis);
+          let picked = null, pickedArea = -1;
+          for (const el of mapEls) {
+            const r = el.getBoundingClientRect();
+            if (r.width * r.height > pickedArea) {
+              pickedArea = r.width * r.height; picked = el;
+            }
+          }
+          const topInPicked = !!(picked && top &&
+            (top === picked || picked.contains(top)));
           return {topTag: top ? top.tagName : null,
                   topCls: top ? (top.getAttribute('class') || '')
                     .slice(0, 100) : '',
                   topId: top ? (top.id || '') : '',
                   topTestId: top ? (top.getAttribute('data-testid') || '')
                     : '',
-                  inMap: inMap, markers: markers, sig: sig};
+                  inMap: inMap, markers: markers, sig: sig,
+                  chain: chain,
+                  pickedTag: picked ? picked.tagName : null,
+                  pickedCls: picked ?
+                    String(picked.getAttribute('class') || '')
+                    .slice(0, 100) : '',
+                  pickedId: picked ? (picked.id || '') : '',
+                  topInPicked: topInPicked,
+                  topIsCanvas: !!(top && top.tagName === 'CANVAS'),
+                  topInSvg: !!(top && top.closest('svg'))};
         }""", {"x": float(px), "y": float(py)}) or {}
     except Exception:
         return {}
@@ -5559,21 +6036,54 @@ def _s_worldle_play_capital(page, gid, day):
     # point WITHOUT ever clicking the PINPOINT tab — with the NAME tab
     # active the map click registers nothing (rerun #8: markers 4->4,
     # no PINPOINT log line; the bbox fit itself was already correct).
+    # Tab activation via a Playwright LOCATOR click (fix-loop iter 11),
+    # verified by DOM effect — NOT a JS hit.click(), which bypasses the
+    # framework's event handling and can leave the tab visually
+    # "clicked" without switching the view. JS click stays as fallback.
+    _pin_tab = {}
     try:
-        _pin_tab = page.evaluate("""() => {
-          const vis = e => e && e.offsetParent !== null;
-          const hit = Array.from(document.querySelectorAll(
-            'button, [role=tab]')).filter(vis)
-            .find(e => /^\\s*2\\.\\s*PINPOINT\\s*$/i
-              .test(e.innerText || ''));
-          if (!hit) return {found: false};
-          const was = hit.getAttribute('aria-selected') === 'true' ||
-            /active|selected/i.test(hit.className || '');
-          hit.click();
-          return {found: true, was_active: !!was};
-        }""") or {}
+        _loc = None
+        for _sel in ("[role=tab]:has-text('PINPOINT')",
+                     "button:has-text('PINPOINT')"):
+            try:
+                _cand = page.locator(_sel).first
+                if _cand.count() > 0 and _cand.is_visible():
+                    _loc = _cand
+                    break
+            except Exception:
+                continue
+        if _loc is not None:
+            _was = bool(page.evaluate("""() => {
+              const vis = e => e && e.offsetParent !== null;
+              const hit = Array.from(document.querySelectorAll(
+                'button, [role=tab]')).filter(vis)
+                .find(e => /^\\s*2\\.\\s*PINPOINT\\s*$/i
+                  .test(e.innerText || ''));
+              if (!hit) return false;
+              return hit.getAttribute('aria-selected') === 'true' ||
+                /active|selected/i.test(hit.className || '');
+            }"""))
+            _loc.click(timeout=5000)
+            _pin_tab = {"found": True, "was_active": _was,
+                        "via": "locator"}
     except Exception:
         _pin_tab = {}
+    if not _pin_tab.get("found"):
+        try:
+            _pin_tab = page.evaluate("""() => {
+              const vis = e => e && e.offsetParent !== null;
+              const hit = Array.from(document.querySelectorAll(
+                'button, [role=tab]')).filter(vis)
+                .find(e => /^\\s*2\\.\\s*PINPOINT\\s*$/i
+                  .test(e.innerText || ''));
+              if (!hit) return {found: false};
+              const was = hit.getAttribute('aria-selected') === 'true' ||
+                /active|selected/i.test(hit.className || '');
+              hit.click();
+              return {found: true, was_active: !!was, via: 'js-click'};
+            }""") or {}
+        except Exception:
+            _pin_tab = {}
     if not _pin_tab.get("found"):
         return "partial", [name], \
             "name played; 2. PINPOINT tab not found (pinpoint sub-round " \
@@ -5746,16 +6256,18 @@ def _s_worldle_play_capital(page, gid, day):
                   f"-> px=({px:.1f},{py:.1f}) projection={proj or 'equirect(bounds)'}")
         before = _worldle_pin_probe(page, px, py)
         before_markers = int(before.get("markers") or 0)
-        _dbg(gid, "worldle capital pin probe before: top="
+        gs_before = _s_worldle_day_guesses(page, "city-guesses", ds)
+        _dbg(gid, "worldle capital pin probe-v2 before: top="
                   f"{before.get('topTag')} cls={str(before.get('topCls'))[:60]!r} "
-                  f"inMap={before.get('inMap')} markers={before_markers} "
-                  f"sig={before.get('sig')}")
+                  f"inMap={before.get('inMap')} topInPicked={before.get('topInPicked')} "
+                  f"picked={before.get('pickedTag')}#{before.get('pickedId')} "
+                  f"canvas={before.get('topIsCanvas')} svg={before.get('topInSvg')} "
+                  f"markers={before_markers} chain={before.get('chain')}")
+        # Click the VERIFIED target with a real mouse click
+        # (page.mouse.click, not move/down/up, not a JS dispatch).
+        _landed = bool(before.get("inMap"))
         try:
-            page.mouse.move(px, py)
-            page.wait_for_timeout(200)
-            page.mouse.down()
-            page.wait_for_timeout(100)
-            page.mouse.up()
+            page.mouse.click(px, py)
         except Exception as e:
             return "partial", [name], \
                 f"pin click failed ({str(e)[:80]}); name played"
@@ -5773,13 +6285,10 @@ def _s_worldle_play_capital(page, gid, day):
                            or a.get("topTag") in ("CIRCLE", "ELLIPSE"))
             return bool(_sig_changed and _top_marker)
 
-        if not _marker_appeared(before, after) and not before.get("inMap"):
-            # The click point is covered by a NON-map element (overlay /
-            # ad / decorative layer): the real mouse click went to the
-            # cover, not the map. Fallback: dispatch a
-            # coordinate-carrying click on the picked map element
-            # itself (its handler reads clientX/clientY). Still only
-            # believed if a marker appears afterwards — never assumed.
+        if not _landed and not _marker_appeared(before, after):
+            # The click point is covered by a NON-map element: ONE
+            # coordinate-carrying dispatch on the picked map element,
+            # then re-probe. Still only believed if it lands.
             _dbg(gid, "worldle capital pin: point covered by non-map "
                       f"top={before.get('topTag')} cls="
                       f"{str(before.get('topCls'))[:60]!r}; dispatching "
@@ -5810,41 +6319,65 @@ def _s_worldle_play_capital(page, gid, day):
             _settle(page, base=1200)
             after = _worldle_pin_probe(page, px, py)
             after_markers = int(after.get("markers") or 0)
-        if not _marker_appeared(before, after):
+            _landed = bool(after.get("inMap")) or _marker_appeared(
+                before, after)
+        if not _landed and not _marker_appeared(before, after):
+            _dbg(gid, f"worldle capital pin NOT LANDED probe-v2: {after}")
             return "partial", [name], \
-                "pin click produced no marker (markers " \
+                "pin click did not land on the map (markers " \
                 f"{before_markers}->{after_markers}); name played; " \
-                f"top={after.get('topTag')} cls=" \
-                f"{str(after.get('topCls'))[:60]!r} " \
-                f"inMap={after.get('inMap')} sig={after.get('sig')}"
+                f"probe-v2={after}"
+        # ALWAYS submit after a plausibly landed click, then arbitrate
+        # with the win check. Placement verification is DECOUPLED from
+        # DOM markers: a pin can land without a countable marker, and
+        # the store (city-guesses delta / pin_right) is the authority.
         _s_worldle_submit_guarded(page, gid, "capital", ds)
         _settle(page, base=2000)
-        try:
-            body2 = (page.evaluate("() => document.body.innerText") or "")
-        except Exception:
-            body2 = ""
-        gs2 = _s_worldle_day_guesses(page, "city-guesses", ds)
-        pin_right = any("right" in str((g or {}).get("name") or "").lower()
-                        for g in gs2
-                        if (g or {}).get("question") not in (0,))
-        if not pin_right and "try again" in body2.lower():
-            # One retry, logged as retry #2.
-            _dbg(gid, "worldle capital pin: game offers 'try again'; "
-                      "retry #2 (one re-click, same derived coords)")
+
+        def _pin_ok():
+            _gs = _s_worldle_day_guesses(page, "city-guesses", ds)
+            _delta = len(_gs) > len(gs_before)
+            _nonq0 = [g for g in _gs
+                      if (g or {}).get("question") not in (0,)]
+            _right = any("right" in str((g or {}).get("name") or "")
+                         .lower() for g in _nonq0)
+            _mk = _marker_appeared(
+                before, _worldle_pin_probe(page, px, py))
+            return (_mk or _delta or _right), \
+                {"delta": _delta, "right": _right, "marker": _mk}
+
+        _ok, _info = _pin_ok()
+        _dbg(gid, f"worldle capital pin arbitrate: pin_ok={_ok} {_info}")
+        if not _ok:
             try:
-                page.mouse.move(px, py)
-                page.wait_for_timeout(200)
-                page.mouse.down()
-                page.wait_for_timeout(100)
-                page.mouse.up()
-            except Exception as e:
-                return "partial", [name], \
-                    f"pin retry click failed ({str(e)[:80]}); name played"
-            _settle(page, base=1200)
-            _s_worldle_submit_guarded(page, gid, "capital", ds)
-            _settle(page, base=2000)
-    return "attempted", [name], \
-        "name + pin played for " + str(len(caps)) + " capital(s)"
+                _body2 = (page.evaluate(
+                    "() => document.body.innerText") or "")
+            except Exception:
+                _body2 = ""
+            if "try again" in _body2.lower():
+                # One retry, logged as retry #2.
+                _dbg(gid, "worldle capital pin: game offers 'try again'; "
+                          "retry #2 (one re-click + submit, same coords)")
+                try:
+                    page.mouse.click(px, py)
+                except Exception as e:
+                    return "partial", [name], \
+                        f"pin retry click failed ({str(e)[:80]}); name played"
+                _settle(page, base=1200)
+                _s_worldle_submit_guarded(page, gid, "capital", ds)
+                _settle(page, base=2000)
+                _ok, _info = _pin_ok()
+                _dbg(gid, "worldle capital pin retry arbitrate: "
+                          f"pin_ok={_ok} {_info}")
+        if not _ok:
+            _after2 = _worldle_pin_probe(page, px, py)
+            _dbg(gid, "worldle capital pin FAILED probe-v2: "
+                      f"{_after2}")
+            return "partial", [name], \
+                "pin click produced no marker and no city-guesses " \
+                f"delta (markers {before_markers}->{after_markers}); " \
+                f"name played; probe-v2={_after2}"
+
 
 
 def _s_worldle_play_orientation(page, gid, day):
@@ -6716,6 +7249,245 @@ def _worldle_phrase_pick(phrase_json, prompt, lang_codes, lang_names,
     return None
 
 
+def _worldle_phrase_drag(page, gid, picked, codes, names, prompts, ds):
+    """Drag-and-drop for the Worldle Q1 PHRASE round (fix-loop iter 11).
+
+    Clicks do NOT register on phrase options (store changed=False):
+    the game's own string says "Simply drag and drop each phrase into
+    the correct position". Flow: (1) verify the prompt is myNameIs
+    before using day phrases; (2) ONE evaluate probing draggable chips
+    (leaf text -> walk ancestors to the draggable card) + drop slots
+    ([data-slot], slot/drop/target/position/placeholder classes,
+    labelled boxes); (3) pair deterministically — labelled slots by
+    language label, unlabelled ordered slots by prompt/day.languages
+    order, else partial with the full probe (no drag); (4) drag per
+    pair: attempt 1 = Playwright mouse drag in 10 steps + verify;
+    attempt 2 = in-page DragEvent sequence with a real DataTransfer
+    (dragstart/dragover/drop/dragend) + verify; (5) submit via
+    _s_worldle_submit_guarded, arbitrate with the store win check.
+    Returns (status, detail); status "click-fallback" when no
+    draggable chips exist (caller falls back to the click path).
+    Needs live-browser verification for the slot DOM + which drag
+    primitive the widget accepts — the probe is logged on failure."""
+    import time as _t
+    _low_prompts = " ".join(prompts or []).lower()
+    if "my name is" not in _low_prompts:
+        return ("partial", "phrase prompt is not myNameIs "
+                f"(prompts={prompts}); day phrases not used")
+    try:
+        _probe = page.evaluate("""(picked) => {
+          const vis = e => e && e.offsetParent !== null;
+          const norm = s => (s||'').toLowerCase()
+            .replace(/\\s+/g,' ').trim();
+          const chips = [];
+          for (const [code, phrase] of Object.entries(picked || {})) {
+            const leaves = Array.from(document.querySelectorAll('body *'))
+              .filter(vis)
+              .filter(e => !e.closest('nav, header, footer'))
+              .filter(e => e.children.length === 0)
+              .filter(e => norm(e.innerText) === norm(phrase));
+            let card = leaves[0] || null;
+            let draggable = false;
+            if (card) {
+              let n = card;
+              while (n && n !== document.body) {
+                if (n.getAttribute && n.getAttribute('draggable') === 'true') {
+                  card = n; draggable = true; break;
+                }
+                n = n.parentElement;
+              }
+              if (card && card.getAttribute &&
+                  card.getAttribute('draggable') === 'true')
+                draggable = true;
+            }
+            if (card) {
+              const r = card.getBoundingClientRect();
+              chips.push({code: code, phrase: phrase, draggable: draggable,
+                          x: r.x + r.width / 2, y: r.y + r.height / 2});
+            } else {
+              chips.push({code: code, phrase: phrase, draggable: false,
+                          x: null, y: null});
+            }
+          }
+          const slotSel = '[data-slot], [class*=slot i], ' +
+            '[class*=drop-zone i], [class*=dropzone i], ' +
+            '[class*=drop-target i], [class*=drop--target i], ' +
+            '[class*=position i], [class*=placeholder i]';
+          const slots = [];
+          const seen = new Set();
+          for (const e of Array.from(document.querySelectorAll(slotSel))
+               .filter(vis)
+               .filter(e => !e.closest('nav, header, footer'))) {
+            const r = e.getBoundingClientRect();
+            if (r.width < 10 || r.height < 10) continue;
+            const key = Math.round(r.x) + ',' + Math.round(r.y);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const label = ((e.getAttribute('aria-label') || '') ||
+                           (e.getAttribute('data-label') || '') ||
+                           (e.getAttribute('data-language') || '') ||
+                           (e.getAttribute('data-slot') || '') ||
+                           (e.innerText || '').split('\\n')[0] || '')
+              .trim().slice(0, 80);
+            slots.push({label: label, x: r.x + r.width / 2,
+                        y: r.y + r.height / 2,
+                        text: (e.innerText || '').trim().slice(0, 120)});
+          }
+          return {chips: chips, slots: slots};
+        }""", picked) or {}
+    except Exception as e:
+        return ("partial", f"phrase probe failed: {str(e)[:100]}")
+    _chips = _probe.get("chips") or []
+    _slots = _probe.get("slots") or []
+    _dbg(gid, f"worldle phrase probe: chips={_chips} slots={_slots}")
+    if not any(c.get("draggable") and c.get("x") is not None
+               for c in _chips):
+        return ("click-fallback", "no draggable phrase chips found")
+    if not _slots:
+        return ("partial", "draggable phrase chips found but no drop "
+                f"slots in DOM; probe={_probe}")
+    # ---- Deterministic pairing ----
+    _by_code = {str(c).lower(): c for c in codes}
+    _name_of = {}
+    for _c, _n in zip(codes, names):
+        _name_of[str(_c).lower()] = str(_n)
+    _pairs = []  # (code, chip, slot_idx)
+    _labelled = [s for s in _slots if (s.get("label") or "").strip()]
+    if _labelled and len(_labelled) >= len(codes):
+        _used_slots = set()
+        for _ch in _chips:
+            _code = str(_ch.get("code") or "").lower()
+            _want = _name_of.get(_code, "").lower()
+            _hit = None
+            for _si, _s in enumerate(_slots):
+                if _si in _used_slots:
+                    continue
+                _lab = str(_s.get("label") or "").lower()
+                if _want and (_want in _lab or _lab in _want):
+                    _hit = _si
+                    break
+            if _hit is None:
+                return ("partial", "labelled slots do not cover all "
+                        f"languages (code={_code} name={_want}); "
+                        f"probe={_probe}")
+            _used_slots.add(_hit)
+            _pairs.append((_code, _ch, _hit))
+    elif len(_slots) == len(codes) and not _labelled:
+        # Unlabelled ordered slots -> prompt/day.languages order (codes
+        # order as passed in, which follows day.languages).
+        for _ch, _si in zip(_chips, range(len(_slots))):
+            _pairs.append((str(_ch.get("code") or "").lower(), _ch, _si))
+    else:
+        return ("partial", "cannot pair chips to slots deterministically "
+                f"(slots={len(_slots)} codes={len(codes)} "
+                f"labelled={len(_labelled)}); probe={_probe}; no drag")
+    _dbg(gid, f"worldle phrase pairs: {[(c, s) for c, _, s in _pairs]}")
+    _slot_sel = ('[data-slot], [class*=slot i], [class*=drop-zone i], '
+                 '[class*=dropzone i], [class*=drop-target i], '
+                 '[class*=drop--target i], [class*=position i], '
+                 '[class*=placeholder i]')
+
+    def _verify(_slot_idx, _phrase):
+        try:
+            return bool(page.evaluate("""(args) => {
+              const vis = e => e && e.offsetParent !== null;
+              const norm = s => (s||'').toLowerCase()
+                .replace(/\\s+/g,' ').trim();
+              const slots = Array.from(document.querySelectorAll(args.sel))
+                .filter(vis)
+                .filter(e => !e.closest('nav, header, footer'));
+              const s = slots[args.idx];
+              if (!s) return false;
+              return norm(s.innerText).includes(norm(args.phrase));
+            }""", {"sel": _slot_sel, "idx": int(_slot_idx),
+                   "phrase": _phrase}))
+        except Exception:
+            return False
+
+    for _code, _chip, _slot_idx in _pairs:
+        _phrase = _chip.get("phrase") or ""
+        _slot = _slots[_slot_idx]
+        _placed = False
+        # Attempt 1: Playwright mouse drag, 10 steps + verify.
+        try:
+            page.mouse.move(_chip["x"], _chip["y"])
+            page.mouse.down()
+            for _step in range(1, 11):
+                page.mouse.move(
+                    _chip["x"] + (_slot["x"] - _chip["x"]) * _step / 10.0,
+                    _chip["y"] + (_slot["y"] - _chip["y"]) * _step / 10.0,
+                    steps=1)
+                page.wait_for_timeout(60)
+            page.mouse.up()
+            page.wait_for_timeout(800)
+        except Exception as e:
+            _dbg(gid, f"worldle phrase mouse drag failed for {_code}: "
+                      f"{str(e)[:80]}")
+        _placed = _verify(_slot_idx, _phrase)
+        _dbg(gid, f"worldle phrase drag mouse {_code} -> slot "
+                  f"{_slot_idx} placed={_placed}")
+        if not _placed:
+            # Attempt 2: in-page DragEvent sequence with a real
+            # DataTransfer (dragstart/dragover/drop/dragend).
+            try:
+                page.evaluate("""(args) => {
+                  const vis = e => e && e.offsetParent !== null;
+                  const norm = s => (s||'').toLowerCase()
+                    .replace(/\\s+/g,' ').trim();
+                  const leaves = Array.from(
+                    document.querySelectorAll('body *')).filter(vis)
+                    .filter(e => !e.closest('nav, header, footer'))
+                    .filter(e => e.children.length === 0)
+                    .filter(e => norm(e.innerText) === norm(args.phrase));
+                  let chip = leaves[0] || null;
+                  if (chip) {
+                    let n = chip;
+                    while (n && n !== document.body) {
+                      if (n.getAttribute &&
+                          n.getAttribute('draggable') === 'true') {
+                        chip = n; break;
+                      }
+                      n = n.parentElement;
+                    }
+                  }
+                  const slots = Array.from(
+                    document.querySelectorAll(args.sel)).filter(vis)
+                    .filter(e => !e.closest('nav, header, footer'));
+                  const slot = slots[args.idx];
+                  if (!chip || !slot) return false;
+                  const dt = new DataTransfer();
+                  const mk = (t, tgt) => new DragEvent(t, {bubbles: true,
+                    cancelable: true, dataTransfer: dt});
+                  chip.dispatchEvent(mk('dragstart', chip));
+                  slot.dispatchEvent(mk('dragenter', slot));
+                  slot.dispatchEvent(mk('dragover', slot));
+                  slot.dispatchEvent(mk('drop', slot));
+                  chip.dispatchEvent(mk('dragend', chip));
+                  return true;
+                }""", {"phrase": _phrase, "sel": _slot_sel,
+                       "idx": int(_slot_idx)})
+                page.wait_for_timeout(800)
+            except Exception as e:
+                _dbg(gid, "worldle phrase DragEvent failed for "
+                          f"{_code}: {str(e)[:80]}")
+            _placed = _verify(_slot_idx, _phrase)
+            _dbg(gid, f"worldle phrase drag DragEvent {_code} -> slot "
+                      f"{_slot_idx} placed={_placed}")
+        if not _placed:
+            return ("partial", f"phrase drag failed for {_code} "
+                    f"({_phrase!r} -> slot {_slot_idx}); both drag "
+                    f"primitives failed; probe={_probe}")
+    _s_worldle_submit_guarded(page, gid, "spokenLanguages", ds)
+    _settle(page, base=1500)
+    _gs = _s_worldle_day_guesses(page, "language-guesses", ds)
+    _t1, _c1 = _s_worldle_language_counts(_gs, 1)
+    if _c1 == len(names):
+        return ("attempted", "Q0 language-pick + Q1 phrase DRAGGED "
+                f"and submitted (store correct q1={_c1}/{len(names)})")
+    return ("partial", "Q1 phrase drags placed but store shows "
+            f"q1 correct={_c1}/{len(names)}")
+
+
 def _s_worldle_play_language(page, gid, day):
     """Spoken languages: round exists iff exactly 2 languages. Q0/Q1
     each need isCorrect count == #languages. Option clicks use the
@@ -6913,6 +7685,19 @@ def _s_worldle_play_language(page, gid, day):
                               f"data {_url[:80]} maps prompt to {_picked}")
                     break
         if _picked:
+            # Drag first (fix-loop iter 11): clicks do not register on
+            # phrase options (store changed=False). The helper probes
+            # chips + slots, pairs deterministically, drags per pair,
+            # submits, and arbitrates with the store. Only when no
+            # draggable chips exist does the click path below run.
+            _drag_res = _worldle_phrase_drag(page, gid, _picked, codes,
+                                             names, _prompts, ds)
+            if _drag_res[0] == "attempted":
+                return "attempted", list(names), _drag_res[1]
+            if _drag_res[0] == "partial":
+                return "partial", list(names), _drag_res[1]
+            _dbg(gid, "worldle phrase: no draggable chips; "
+                      "falling back to click path")
             _all_ok = True
             _drag = False
             for _code in codes:
@@ -7401,60 +8186,80 @@ def _worldle_area_parse_display(texts):
     keys {commonText, betweenText, pure, aria} plus the iter-9 key
     {inputs} (live <input> values inside the widget).
 
-    Priority: the COMMON ANCESTOR of both steppers (the widget
-    container), then the element BETWEEN the steppers in DOM order,
-    then the DIV role=button, then the textContent variants (catch
-    SVG <text> / CSS-hidden numbers innerText misses), then the
-    PURE-number leaf elements inside the widget and aria/data values,
-    then the live input values, then the game store, then the body.
-    Unit-qualified numbers ("56,785 km2") win over bare numbers; bare
-    numbers must be >= 100 (tab labels "1."/"2." and other small
-    counters are not the display) — EXCEPT the pure/aria/inputs widget
-    candidates, whose elements' whole text IS a number inside the
-    widget, so any magnitude counts (the display may start at 0).
-    Returns (value, source) or (None, None). Pure function
+    Fix-loop iter 11 — reader FIRST, no distractor numbers: the old
+    code took max() over the widget-container text, so a distractor
+    number elsewhere in the container (start=111369) became the
+    "display" and the steppers "never moved" it. Rules now:
+    (1) the element BETWEEN the steppers is the display — its number
+    wins; (2) a SINGLE pure-number leaf / aria / input value inside
+    the widget wins; (3) the common-container text wins ONLY when it
+    holds EXACTLY ONE number candidate (unit-qualified or bare) —
+    multiple candidates = ambiguous = None, never max(); (4) body /
+    store / roleBtn sources are dropped (not widget-local). Return
+    None (unknown) rather than a distractor. Pure function
     (unit-tested on fixture DOM texts).
     """
     import re as _re
-    for src in ("common", "between", "roleBtn", "commonText",
-                "betweenText", "pure", "aria", "inputs", "store", "body"):
-        txt = str((texts or {}).get(src) or "")
-        if not txt:
-            continue
-        units = []
+
+    def _nums(txt):
+        out = []
         for _m in _re.finditer(
                 r"(\d[\d,]*)\s*(km2|km²|sq\.?\s*km|square km|km)",
                 txt, _re.IGNORECASE):
             try:
-                units.append(int(_m.group(1).replace(",", "")))
+                out.append(int(_m.group(1).replace(",", "")))
             except Exception:
                 pass
-        if units:
-            return max(units), src + ":unit"
-        if src in ("pure", "aria", "inputs"):
-            bare = []
-            for _line in txt.split("\n"):
-                _line = _line.strip()
-                if _re.fullmatch(r"\d[\d,]*", _line):
-                    try:
-                        bare.append(int(_line.replace(",", "")))
-                    except Exception:
-                        pass
-            if bare:
-                return max(bare), src + ":pure"
+        return out
+
+    def _bare(txt):
+        out = []
+        for _x in _re.findall(r"\b\d[\d,]{2,}\b", txt):
+            try:
+                _v = int(_x.replace(",", ""))
+            except Exception:
+                continue
+            if _v >= 100:
+                out.append(_v)
+        return out
+
+    def _single(vals):
+        uniq = sorted(set(vals))
+        return uniq[0] if len(uniq) == 1 else None
+
+    # (1) between the steppers — the display element.
+    for src in ("between", "betweenText"):
+        txt = str((texts or {}).get(src) or "")
+        if not txt:
             continue
-        if src in ("common", "between", "roleBtn", "commonText",
-                   "betweenText"):
-            bare = []
-            for _x in _re.findall(r"\b\d[\d,]{2,}\b", txt):
+        v = _single(_nums(txt)) if _nums(txt) else _single(_bare(txt))
+        if v is not None:
+            return v, src + ":display"
+    # (2) single pure-number leaf / aria / live input inside the widget.
+    for src in ("pure", "aria", "inputs"):
+        txt = str((texts or {}).get(src) or "")
+        if not txt:
+            continue
+        vals = []
+        for _line in txt.split("\n"):
+            _line = _line.strip()
+            if _re.fullmatch(r"\d[\d,]*", _line):
                 try:
-                    _v = int(_x.replace(",", ""))
+                    vals.append(int(_line.replace(",", "")))
                 except Exception:
-                    continue
-                if _v >= 100:
-                    bare.append(_v)
-            if bare:
-                return max(bare), src + ":bare"
+                    pass
+        v = _single(vals)
+        if v is not None:
+            return v, src + ":single"
+    # (3) common container: exactly ONE candidate or unknown.
+    for src in ("common", "commonText"):
+        txt = str((texts or {}).get(src) or "")
+        if not txt:
+            continue
+        cands = _nums(txt) or _bare(txt)
+        v = _single(cands)
+        if v is not None:
+            return v, src + ":single"
     return None, None
 
 
@@ -7492,6 +8297,12 @@ _AREA_STEPPER_SELECT_JS = """
     if (/^[+\\-\\u2212]$/.test(t) || /^[+\\-\\u2212]\\d+$/.test(t)) return true;
     if (/increment|decrement|increase|decrease|step up|step down|\\bplus\\b|\\bminus\\b/i.test(aria)) return true;
     if (/^(increase|decrease|increment|decrement|plus|minus)$/i.test(t)) return true;
+    // Fix-loop iter 11: a bare icon-only button (no text, no aria)
+    // counts ONLY as part of a tight pair — the LCA check below
+    // rejects pairs whose common ancestor is BODY/HTML (outside any
+    // widget container). Icon-only widget buttons (iter-9 fixture:
+    // empty text, tight widget LCA) still qualify; far-apart nav
+    // arrows / close buttons do not.
     if (!t && !aria) return true;
     return false;
   };
@@ -7516,7 +8327,34 @@ _AREA_STEPPER_SELECT_JS = """
       }
     if (best) st = best;
   }
+  // Fix-loop iter 11: the chosen pair must share a NON-BODY/HTML
+  // common ancestor (a tight widget container). Two far-apart page
+  // controls whose LCA is BODY/HTML are not a stepper pair — treat
+  // as no steppers, never blind-click.
+  if (st.length >= 2) {
+    const l = _areaLca(st[0], st[1]);
+    if (!l || /^(BODY|HTML)$/.test(l.tagName)) st = [];
+  }
 """
+
+
+def _area_stepper_boxes(page):
+    """Re-resolve the stepper pair's LIVE boxes (fix-loop iter 11):
+    clicks can re-render the widget, so cached boxes go stale — the
+    drive loop re-resolves every batch. scrollIntoView first so the
+    rects are viewport-relative and clickable. Returns [{x,y,w,h}]."""
+    try:
+        return page.evaluate("""() => {
+          const vis = e => e && e.offsetParent !== null;
+""" + _AREA_STEPPER_SELECT_JS + """
+          for (const e of st) {
+            try { e.scrollIntoView({block: 'center'}); } catch (err) {}
+          }
+          return st.map(e => { const r = e.getBoundingClientRect();
+            return {x: r.x, y: r.y, w: r.width, h: r.height}; });
+        }""") or []
+    except Exception:
+        return []
 
 
 def _s_worldle_play_area_stepper(page, gid, size):
@@ -7701,7 +8539,8 @@ def _s_worldle_play_area_stepper(page, gid, size):
         # the (new) start, so the moved value is still handled.
         for _bi in (0, 1):
             try:
-                _b = steppers[_bi]
+                _live0 = _area_stepper_boxes(page)
+                _b = _live0[_bi] if len(_live0) > _bi else steppers[_bi]
                 page.mouse.click(_b["x"] + _b["w"] / 2,
                                  _b["y"] + _b["h"] / 2)
                 page.wait_for_timeout(600)
@@ -7723,7 +8562,8 @@ def _s_worldle_play_area_stepper(page, gid, size):
     # Probe-click candidate 0: watch which way the display moves.
     plus_idx = None
     try:
-        b0 = steppers[0]
+        _live1 = _area_stepper_boxes(page)
+        b0 = _live1[0] if _live1 else steppers[0]
         page.mouse.click(b0["x"] + b0["w"] / 2, b0["y"] + b0["h"] / 2)
         page.wait_for_timeout(600)
         after0 = _read_display()
@@ -7736,7 +8576,8 @@ def _s_worldle_play_area_stepper(page, gid, size):
     if plus_idx is None:
         # Candidate 0 did not move the display: try candidate 1.
         try:
-            b1 = steppers[1]
+            _live2 = _area_stepper_boxes(page)
+            b1 = _live2[1] if len(_live2) > 1 else steppers[1]
             page.mouse.click(b1["x"] + b1["w"] / 2, b1["y"] + b1["h"] / 2)
             page.wait_for_timeout(600)
             after1 = _read_display()
@@ -7756,7 +8597,15 @@ def _s_worldle_play_area_stepper(page, gid, size):
     cur = _read_display()
     while cur is not None and cur < int(size) and clicks < 600:
         batch = 10
-        b = steppers[plus_idx]
+        # Per-batch locator re-resolve (fix-loop iter 11): never click
+        # a stale cached box; scroll_into_view + fresh rect each batch.
+        _live = _area_stepper_boxes(page)
+        if len(_live) <= plus_idx:
+            return False, ("area stepper: stepper elements vanished "
+                           f"mid-drive (re-resolved {len(_live)}); "
+                           f"display={cur} target={int(size)} "
+                           f"clicks={clicks}")
+        b = _live[plus_idx]
         for _ in range(batch):
             page.mouse.click(b["x"] + b["w"] / 2, b["y"] + b["h"] / 2)
             clicks += 1
@@ -7800,16 +8649,43 @@ def _s_worldle_play_area(page, gid, day):
         # Drive the steppers toward the target, verifying the display.
         ok, detail = _s_worldle_play_area_stepper(page, gid, size)
         if not ok:
+            # Submit-and-arbitrate fallback (fix-loop iter 11): the
+            # display may be unreadable while the widget still holds
+            # a value — submit once and let the game's own win check
+            # arbitrate, instead of failing on the unreadable display.
+            _dbg(gid, f"worldle area stepper failed ({detail}); "
+                      f"submit-and-arbitrate fallback")
+            _s_worldle_submit_guarded(page, gid, "area", ds)
+            _settle(page, base=2000)
+            _win = _s_worldle_win_check(page, "area", day, ds)
+            if _win[0]:
+                return "attempted", [str(size)], \
+                    f"area {size} km2 via submit-arbitrate ({_win[2]}; " \
+                    f"stepper path failed: {detail})"
             dump = _s_worldle_dom_dump(page, gid, "area")
-            return "failed", [], f"area stepper: {detail}; DOM dump logged"
+            return "failed", [], \
+                f"area stepper: {detail}; submit-arbitrate win_check=" \
+                f"{_win[2]}; DOM dump logged"
         _dbg(gid, f"worldle area stepper played: {detail}")
     else:
         ok, detail = _s_worldle_set_picked_value(page, gid, str(int(size)),
                                                  "area")
         if not ok:
+            # Same submit-and-arbitrate fallback for the typed/slider
+            # path: a failed set does not prove the game has nothing.
+            _dbg(gid, f"worldle area set failed ({detail}); "
+                      f"submit-and-arbitrate fallback")
+            _s_worldle_submit_guarded(page, gid, "area", ds)
+            _settle(page, base=2000)
+            _win = _s_worldle_win_check(page, "area", day, ds)
+            if _win[0]:
+                return "attempted", [str(size)], \
+                    f"area {size} km2 via submit-arbitrate ({_win[2]}; " \
+                    f"set path failed: {detail})"
             dump = _s_worldle_dom_dump(page, gid, "area")
             return "failed", [], \
-                f"area number set failed ({detail}); DOM dump logged"
+                f"area number set failed ({detail}); submit-arbitrate " \
+                f"win_check={_win[2]}; DOM dump logged"
     _s_worldle_submit_guarded(page, gid, "area", ds)
     _settle(page, base=2000)
     try:
@@ -7988,9 +8864,14 @@ def _s_worldle(page, ans, gid):
                        f"({ev_c}; win_check={win_c[2]})")
 
     # ---- Live round list: the game removes rounds with missing data.
-    live = _s_worldle_live_round_modes(page, gid)
-    if live is not None:
-        _dbg(gid, f"worldle live rounds: {sorted(live)}")
+    # Raw evidence (fix-loop iter 11): log raw / mapped / unmapped on
+    # three lines so a renamed round can never be silently dropped.
+    live_ev = _s_worldle_live_round_modes(page, gid)
+    live = (live_ev or {}).get("mapped") if live_ev else None
+    if live_ev is not None:
+        _dbg(gid, f"worldle live rounds raw: {live_ev.get('raw')}")
+        _dbg(gid, f"worldle live rounds mapped: {sorted(live or [])}")
+        _dbg(gid, f"worldle live rounds unmapped: {live_ev.get('unmapped')}")
     avail = day.get("available") or {}
     for mode in _WORLDLE_PLAY_ORDER[1:]:
         label = _WORLDLE_MODE_LABELS.get(mode, mode)
@@ -8091,6 +8972,28 @@ def _s_worldle(page, ans, gid):
                if r["mode"] != "summary"
                and r["status"] in ("partial", "skipped", "failed")]
     n_offered = len(offered)
+    # ---- Classification cross-check (fix-loop iter 11): derive from
+    # the LIVE list + switch verification every run, never hardcode.
+    # offered + verified-removed must equal the user-stated TOTAL 13,
+    # and unmapped must hold no non-summary entry. Either failure =>
+    # classification BLOCKED with the raw list in evidence, solved=False
+    # (honest failure, not a silently dropped round).
+    n_removed = len([r for r in _WORLDLE_MODES
+                     if r["mode"] != "summary"
+                     and r["status"] == "removed"])
+    _unmapped = (live_ev or {}).get("unmapped") or []
+    _xcheck_fail = None
+    if live_ev is not None:
+        if n_offered + n_removed != 13:
+            _xcheck_fail = (f"offered({n_offered}) + removed({n_removed}) "
+                            f"!= 13 total")
+        elif _unmapped:
+            _xcheck_fail = f"unmapped live entries: {_unmapped}"
+    if _xcheck_fail:
+        _blocked_ev = (f"worldle classification BLOCKED: {_xcheck_fail}; "
+                       f"live raw={live_ev.get('raw')}")
+        _dbg(gid, _blocked_ev)
+        return False, _blocked_ev
     evidence = (f"worldle all-modes: {day.get('name')} ({day.get('code')}); "
                 f"{len(solved_modes)}/{n_offered} offered modes solved; "
                 f"chapters={_s_worldle_chapter_plan()}")
@@ -9677,7 +10580,7 @@ def _attr_post_submit_probe(page):
           const headerLabels = new Set(['#', 'team', 'div.', 'div',
             'born', 'age', 'pos.', 'pos', 'name', 'player']);
           const fbRe = /exact|correct|green|yellow|match|present|absent/i;
-          let populated = 0, feedback = 0;
+          let populated = 0, feedback = 0, exactCells = 0;
           for (const r of rowsEls) {
             const descs = Array.from(r.querySelectorAll('*'));
             const filled = descs.filter(x => x.children.length === 0 &&
@@ -9688,20 +10591,52 @@ def _attr_post_submit_probe(page):
             const isHeader = filled.length > 0 && filled.every(x =>
               headerLabels.has(
                 (x.innerText || '').trim().toLowerCase()));
-            if ((filled.length >= 2 || tiles.length >= 1) && !isHeader)
+            if ((filled.length >= 2 || tiles.length >= 1) && !isHeader) {
               populated++;
+              // Visible exact/green cells INSIDE populated rows only:
+              // the old page-wide [class] count swept hidden templates
+              // and static page chrome into exact_n.
+              exactCells += tiles.length;
+            }
           }
           const drop = Array.from(document.querySelectorAll(
             '[role=listbox], [class*=suggest i], [class*=autocomplete i], ' +
             '[class*=dropdown i]')).filter(vis).length > 0;
           return {rows: rows, dropdown_open: drop,
                   populated: populated > 0, populated_rows: populated,
-                  feedback_tiles: feedback};
+                  feedback_tiles: feedback,
+                  visible_exact_cells: exactCells};
         }""") or {"rows": [], "dropdown_open": False, "populated": False,
-                  "populated_rows": 0, "feedback_tiles": 0}
+                  "populated_rows": 0, "feedback_tiles": 0,
+                  "visible_exact_cells": 0}
     except Exception:
         return {"rows": [], "dropdown_open": False, "populated": False,
-                "populated_rows": 0, "feedback_tiles": 0}
+                "populated_rows": 0, "feedback_tiles": 0,
+                "visible_exact_cells": 0}
+
+
+def _attr_dismiss_dropdown_soft(page):
+    """Close the suggestion dropdown WITHOUT clearing the input, for use
+    BETWEEN pick and submit (fix-loop iter 11): Enter sent while the
+    autocomplete is open is consumed by the dropdown (select/close)
+    instead of submitting, which is how batterup's rerun-#9 guess sat
+    in the input with empty rows. Escape closes the suggestion list
+    while keeping the picked name in the input; blur finishes it.
+    Unlike _attr_dismiss_suggestion (post-submit, clears the input),
+    this must NOT clear — clearing would destroy the picked guess.
+    Never raises. The submit-verification gate below arbitrates: if
+    the soft dismiss ever lost the pick, verification fails and the
+    retry re-picks."""
+    try:
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(400)
+    except Exception:
+        pass
+    try:
+        page.evaluate("() => { try { if (document.activeElement) "
+                      "document.activeElement.blur(); } catch (e) {} }")
+    except Exception:
+        pass
 
 
 def _attr_dismiss_suggestion(page):
@@ -9868,7 +10803,12 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
         return False, "empty answer"
     pool = [n for n in _attr_pool(gid) if n and n.lower() != answer_name.lower()]
     probes = [str(p) for p in (list(api_probes or [])[:2]) if p]
-    for cand in (pool[0] if pool else None, pool[len(pool) // 2] if pool else None):
+    # Date-seeded sample, same seed as _plan_for (fix-loop iter 11):
+    # the old pool[0] / pool[mid] picks opened every video with the
+    # same two probes. Never the answer (excluded from pool above).
+    import random as _r4
+    for cand in (_r4.Random(_day_seed(gid)).sample(
+            pool, min(2, len(pool))) if pool else []):
         if len(probes) >= 2:
             break
         if cand and cand not in probes:
@@ -9908,12 +10848,18 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
         # only after _attr_verify_submitted sees populated rows grow.
         _verified = False
         for _attempt in range(3):
+            # Dismiss the suggestion dropdown FIRST (soft: no clearing):
+            # Enter sent while the autocomplete is open is consumed by
+            # the dropdown instead of submitting (batterup rerun #9).
+            _attr_dismiss_dropdown_soft(page)
+            _submit_branch = "Enter key"
             try:
                 btn = page.query_selector(
                     "button:has-text('Guess'), button:has-text('Submit'), "
                     "button:has-text('Go')")
                 if btn and btn.is_visible():
                     btn.click(timeout=3000)
+                    _submit_branch = "Guess-button click"
                 else:
                     page.keyboard.press("Enter")
             except Exception:
@@ -9921,6 +10867,8 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
                     page.keyboard.press("Enter")
                 except Exception:
                     pass
+            _dbg(gid, f"guess {n + 1}/{len(seq)} {name!r}: submit "
+                      f"attempt {_attempt + 1}/3 via {_submit_branch}")
             _settle(page, base=3000)
             _verified, _pr = _attr_verify_submitted(
                 page, gid, _baseline_rows)
@@ -9959,28 +10907,22 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
         _REJECTED[gid] = list(_pick_failed)
         try:
             txt = (page.evaluate("() => document.body.innerText") or "")
-            cols = page.evaluate(
-                """() => { const all = Array.from(document.querySelectorAll(
-                  '[class]')); const hit = all.filter(e =>
-                  /exact|correct|green|match/i.test(e.className.baseVal !== undefined
-                    ? e.className.baseVal : (e.className || '')));
-                  return {n: hit.length,
-                    sample: hit.slice(0, 8).map(e =>
-                      (e.className.baseVal !== undefined ? e.className.baseVal
-                        : e.className)).join('|').slice(0, 200)}; }""")
+            # exact_n counts VISIBLE exact/green cells inside POPULATED
+            # guess rows only (probe). The old page-wide [class] count
+            # swept hidden templates/chrome into exact_n.
+            _pr0 = _attr_post_submit_probe(page)
+            exact_n = int(_pr0.get("visible_exact_cells") or 0)
             rows = _attr_guess_rows(page)
         except Exception:
-            txt, cols, rows = "", {}, []
+            txt, exact_n, rows = "", 0, []
         _dbg(gid, f"guess {n + 1} feedback chars={len(txt)} "
-                  f"hit-tiles={cols} rows={rows}")
+                  f"visible_exact_cells={exact_n} rows={rows}")
         if last and not rows:
             _dbg(gid, "WARN: guess rows show no words on screen")
         if last:
             okw, ev = _strict_win(page, answer_name)
-            try:
-                exact_n = int((cols or {}).get("n") or 0)
-            except Exception:
-                exact_n = 0
+            # exact_n was read above from the visible-populated-rows
+            # probe (never recomputed page-wide).
             # A win requires ALL THREE: visible win text (via _strict_win,
             # which reads rendered text only) AND populated guess rows
             # AND feedback tiles on the board. The submission gate above
@@ -10003,8 +10945,8 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
                 # can come from hidden templates / static page chrome).
                 if _board_rows >= 1 and _board_fb >= 1:
                     okw, ev = True, (f"all-attribute win ({exact_n} "
-                                     f"exact/green tiles; "
-                                     f"{(cols or {}).get('sample', '')}; "
+                                     f"visible exact/green cells in "
+                                     f"populated rows; "
                                      f"board rows={_board_rows} "
                                      f"feedback={_board_fb})")
                 else:
@@ -10600,6 +11542,8 @@ def run_framed_all(gid, g, tgt, date_key, today, short):
             answers[mid] = a
             print(f"[framed] {mname} answer = {a}")
     if not answers:
+        _write_preliminary_result(gid, date_key, False,
+                                  "no framed answers available")
         return {"game": gid, "solved": False, "video": None,
                 "evidence": "no framed answers available"}
 
@@ -10686,6 +11630,14 @@ def run_framed_all(gid, g, tgt, date_key, today, short):
     playable = [d for d in per_mode if d.get("answer")]
     solved = bool(playable) and all(d.get("solved") for d in playable)
     print(f"[{gid}] solved={solved} ({len(solved_modes)}/{len(per_mode)} modes) {evidence}")
+    # Preliminary result.json for the framed path too (run_framed_all
+    # bypasses run_one's post-solve write; _assemble_framed writes the
+    # final record only after polish + QC).
+    _CURRENT_RUN.update({"gid": gid, "date_key": date_key,
+                         "solved": bool(solved),
+                         "evidence": str(evidence)[:500],
+                         "stage": "polish"})
+    _write_preliminary_result(gid, date_key, solved, evidence)
     return _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
                             solved, evidence, vpath)
 
@@ -10705,6 +11657,14 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
         # that presents an unplayed mode as solved.
         _dbg(gid, "skipping final assembly: not solved "
                   "(no publishable video)")
+        # Fast-copy the raw recording for diagnosis (no re-encode,
+        # no autocrop) — same unsolved-tail rule as run_one.
+        try:
+            if vpath:
+                _dbg(gid, "unsolved: fast-copy gameplay (no re-encode)")
+                _fast_copy_gameplay(str(vpath), vdir / "gameplay_1080.mp4")
+        except Exception:
+            pass
         vpath = None
     vdir = HERE / "videos" / gid
     solved_modes = [d["mode"] for d in per_mode if d.get("solved")]
@@ -10731,17 +11691,23 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
             DP.generate_reveal(str(reveal_p), g["name"], today,
                                ", ".join(f"{m}: {answers.get(k, '?')}"
                                          for k, m, _u in FRAMED_MODES),
-                               allsteps)
+                               allsteps, scoring=False)
             DP.generate_facts(str(facts_p), g["name"], today,
                               f"{len(solved_modes)}/{len(FRAMED_MODES)} modes won",
-                              allsteps)
+                              allsteps, scoring=False)
             DP.generate_teaser(str(teaser_p), g["name"], today, g["slug"])
 
             def _still(p, secs):
                 return (ImageClip(str(p)).set_duration(secs).set_fps(24)
                         .resize(width=1920, height=1080))
 
-            play_src = _polish_gameplay(str(final), vdir / "gameplay_1080.mp4", gid=gid)
+            # Autocrop OFF for Framed: t_start marks are
+            # recording-relative and autocrop's non-uniform cuts
+            # (leading + static) would shift every mode boundary
+            # (the misplaced-cards root cause). Polished timeline ==
+            # recording timeline, so marks map 1:1 after rebasing.
+            play_src = _polish_gameplay(str(final), vdir / "gameplay_1080.mp4",
+                                        gid=gid, autocrop=False)
             gameplay = VideoFileClip(play_src)
             gd = float(gameplay.duration or 0)
 
@@ -10755,22 +11721,36 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
                 key=lambda d: d["t_start"])
             seg_clips, seg_meta = [], []
             if len(marks) >= 2 and gd > 0:
-                # The recording starts a moment before we begin playing, so the
-                # marks are rebased onto the clip's own timeline.
+                # Card-anchored marks: t_start is recorded AFTER the
+                # board is ready, just before the first guess, so the
+                # card still goes at t_start and footage follows it.
+                # Clean bounds: [start_i, start_{i+1}) + [start_last,
+                # gd) — the old builder emitted a duplicate boundary
+                # (bounds.append(prev) then bounds.append(gd)) and
+                # indexed marks[] by segment position, misaligning
+                # mode ids whenever a mark was dropped.
                 lead = float(marks[0].get("t_start") or 0.0)
-                bounds, prev = [], 0.0
+                kept, starts = [], []
                 for d in marks:
                     st = min(max(float(d["t_start"]) - lead, 0.0), gd)
-                    if st - prev > 2.0:
-                        bounds.append(prev)
-                        prev = st
-                bounds.append(prev)          # last mode runs to the end
-                bounds.append(gd)
-                for i in range(len(bounds) - 1):
-                    a, b = bounds[i], bounds[i + 1]
+                    if not starts or st - starts[-1] > 2.0:
+                        starts.append(st)
+                        kept.append(d)
+                bounds = [(starts[i],
+                           starts[i + 1] if i + 1 < len(starts) else gd)
+                          for i in range(len(starts))]
+                # Assembly-time assertion: bounds strictly increasing,
+                # one segment per kept mark, every segment >= 2s.
+                assert all(bounds[i][1] > bounds[i][0] >= 0
+                           for i in range(len(bounds))), \
+                    f"framed bounds not increasing: {bounds}"
+                assert len(bounds) == len(kept), \
+                    f"framed bounds/marks mismatch: {len(bounds)} vs {len(kept)}"
+                _dbg(gid, f"framed bounds (card-anchored): {bounds}")
+                for i, (a, b) in enumerate(bounds):
                     if b - a < 2.0:
                         continue
-                    d = marks[min(i, len(marks) - 1)]
+                    d = kept[i]
                     mid = d.get("mode", str(i))
                     # per_mode stores the mode ID; the display name lives in
                     # FRAMED_MODES as (id, display name, url).
@@ -10831,19 +11811,10 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
                         break
                     except Exception:
                         continue
-            # Brand intro LAST so the bg song never covers its own audio.
-            _fintro = HERE / "intro" / "wordsolverx-intro-20s.mp4"
-            if _fintro.exists():
-                try:
-                    _fic = VideoFileClip(str(_fintro)).resize(width=1920, height=1080)
-                    clip = concatenate_videoclips([_fic, clip], method="compose")
-                    chapters = [(0, "Intro")] + [(s + float(_fic.duration or 0), t)
-                                                for s, t in chapters]
-                    cur += float(_fic.duration or 0)
-                    total = cur
-                    _dbg(gid, f"intro prepended ({_fic.duration:.1f}s, own audio)")
-                except Exception as e:
-                    _dbg(gid, f"intro skipped: {str(e)[:120]}")
+            # NO shared brand intro: wordsolverx-intro-20s.mp4
+            # opens EVERY video with a wrong-game, 12-day-stale Wordle
+            # answer (MOCHA, Oct 5). The per-game dated recap card
+            # opens the video instead (fix-loop iter 11).
             out = str(vdir / f"{gid}_final_{date_key}.mp4")
             clip.write_videofile(out, codec="libx264", audio_codec="aac",
                                  fps=24, verbose=False, logger=None)
@@ -10863,6 +11834,8 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
     _upload_framed(gid, g, today, short, answers, chapters, final)
     _fpr = _probe_video(final) if final else {}
     # Visible-content QC (shared helper): never QC PASS a blank video.
+    _dbg(gid, "QC start")
+    _CURRENT_RUN.update({"stage": "qc"})
     _fvis_ok, _fvis_detail = _qc_visible_content(
         gid, vdir, gameplay_path=(vdir / "gameplay_1080.mp4")
         if (vdir / "gameplay_1080.mp4").exists() else None)
@@ -10894,6 +11867,7 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
          "video": str(final) if final else None, "modes": per_mode,
          "answers": answers,
          "chapters": chapters, "qc": _fqc}, indent=1))
+    _dbg(gid, "result.json written (final)")
     _db_save(date_key, gid, {"game": gid, "date": date_key, "solved": solved,
                              "evidence": evidence,
                              "video": str(final) if final else None})
@@ -10947,6 +11921,8 @@ def run_one(gid):
     g = GAMES[gid]
     tgt = A.target_date()
     date_key = tgt.isoformat()
+    _CURRENT_RUN.update({"gid": gid, "date_key": date_key, "solved": False,
+                         "evidence": "", "stage": "answer"})
     today = tgt.strftime("%B %d, %Y")
     short = tgt.strftime("%b %d")
     print(f"[{gid}] {g['name']} target {date_key}")
@@ -10957,6 +11933,7 @@ def run_one(gid):
     _REC_T0.pop(gid, None)
     _SOLVE_SPAN.pop(gid, None)
     _BATTERUP_CDN.pop(gid, None)
+    _TYPE_WINDOWS.pop(gid, None)
     _PLAYED.pop(gid, None)
     _REJECTED.pop(gid, None)
     _dbg(gid, f"START env tz={os.environ.get('BROWSER_TZ')} "
@@ -10985,6 +11962,8 @@ def run_one(gid):
         # day's puzzle, so browser-solve played yesterday's game. Defer
         # immediately like every other game instead.
         _dbg(gid, f"QC FAIL: answer unavailable: {e}")
+        _write_preliminary_result(gid, date_key, False,
+                                  f"answer unavailable: {e}")
         _db_save(date_key, gid, {"game": gid, "date": date_key,
                                  "solved": False,
                                  "evidence": f"answer unavailable: {e}",
@@ -11366,21 +12345,33 @@ def run_one(gid):
             json.dumps(QP.ev_all(), indent=1), encoding="utf-8")
     except Exception:
         pass
+    # Preliminary result.json IMMEDIATELY after the solver returns
+    # (fix-loop iter 11): polish + QC + assembly must never be a
+    # precondition for an auditable result. Overwritten by the final
+    # record below; the SIGTERM handler reuses this state.
+    _CURRENT_RUN.update({"solved": bool(solved),
+                         "evidence": str(evidence)[:500],
+                         "stage": "polish"})
+    _write_preliminary_result(gid, date_key, solved, evidence)
     if _defer_stale:
         _report_game(gid, date_key, answer=str(aval), guesses=[],
                      verify=evidence, video=None, upload="deferred-dawn")
         return {"game": gid, "solved": False, "video": None,
                 "evidence": evidence}
     print(f"[{gid}] solved={solved} evidence={evidence}")
+    _CURRENT_RUN.update({"stage": "polish"})
     final = vpath
     if not solved:
         # Iteration 2: do not assemble a publishable final for an unsolved
         # game (the marveldle/waffle class built 100-200s videos for
-        # failures, with "Full solve" chapter titles). Keep the polished
-        # gameplay intermediate for diagnosis, report video=None.
+        # failures, with "Full solve" chapter titles). Keep a FAST
+        # remux/copy of the raw recording for diagnosis (no re-encode,
+        # no autocrop) — the old full-polish re-encode is where the
+        # SIGTERM tail stall lives. Report video=None.
         _dbg(gid, "skipping final assembly: not solved (no publishable video)")
         try:
-            _polish_gameplay(str(final), vdir / "gameplay_1080.mp4", gid=gid)
+            _dbg(gid, "unsolved: fast-copy gameplay (no re-encode)")
+            _fast_copy_gameplay(str(final), vdir / "gameplay_1080.mp4")
         except Exception:
             pass
         final = None
@@ -11458,9 +12449,11 @@ def run_one(gid):
                 _dbg(gid, f"reveal slide uses board screenshot {_LAST_BOARD_SHOT}")
             else:
                 DP.generate_reveal(str(reveal_p), g["name"], today, str(aval),
-                                   steps, kind=_kind, palette=_pal)
+                                   steps, kind=_kind, palette=_pal,
+                                   scoring=gid not in _NO_LETTER_SCORING)
             DP.generate_facts(str(facts_p), g["name"], today, str(aval),
-                                steps, kind=_kind, palette=_pal)
+                                steps, kind=_kind, palette=_pal,
+                                scoring=gid not in _NO_LETTER_SCORING)
             DP.generate_teaser(str(teaser_p), g["name"], today, g["slug"])
 
             def _still(p, secs):
@@ -11502,21 +12495,11 @@ def run_one(gid):
                         break
                     except Exception:
                         continue
-            # Brand intro LAST so the bg song never covers its own audio.
-            _intro = HERE / "intro" / "wordsolverx-intro-20s.mp4"
+            # NO shared brand intro: wordsolverx-intro-20s.mp4
+            # opens EVERY video with a wrong-game, 12-day-stale Wordle
+            # answer (MOCHA, Oct 5). The per-game dated recap card
+            # opens the video instead (fix-loop iter 11).
             _intro_dur = 0.0
-            if _intro.exists():
-                try:
-                    _ic = VideoFileClip(str(_intro)).resize(width=1920, height=1080)
-                    _intro_dur = float(_ic.duration or 0)
-                    clip = concatenate_videoclips([_ic, clip], method="compose")
-                    chapters = [(0, "Intro")] + [(s + _intro_dur, t)
-                                                for s, t in chapters]
-                    cur += _intro_dur
-                    total = cur
-                    _dbg(gid, f"intro prepended ({_intro_dur:.1f}s, own audio)")
-                except Exception as e:
-                    _dbg(gid, f"intro skipped: {str(e)[:120]}")
             # Worldle all-modes: replace generic chapters with one chapter
             # per played mode (gameplay-relative segments recorded by the
             # solver) + Summary. Generic chapters would hide the modes.
@@ -11576,6 +12559,8 @@ def run_one(gid):
             vid = None
     # Visible-content QC (fix-loop iter 3): a blank video must NEVER QC
     # PASS, even when metadata (solved/res/duration) is fine (phoodle).
+    _dbg(gid, "QC start")
+    _CURRENT_RUN.update({"stage": "qc"})
     _vis_ok, _vis_detail = _qc_visible_content(
         gid, vdir, gameplay_path=(vdir / "gameplay_1080.mp4")
         if (vdir / "gameplay_1080.mp4").exists() else None,
@@ -11618,6 +12603,8 @@ def run_one(gid):
          "steps": _result_steps(gid, aval), "chapters": chapters, "qc": _qc,
          "modes": ([dict(r) for r in _WORLDLE_MODES]
                    if gid == "worldle" else [])}, indent=1))
+    _dbg(gid, "result.json written (final)")
+    _CURRENT_RUN.update({"stage": "report"})
     _db_save(date_key, gid, {"game": gid, "date": date_key, "solved": solved,
                              "evidence": evidence,
                              "video": str(final) if final else None,
@@ -11633,6 +12620,7 @@ def run_one(gid):
                  upload=(vid if 'vid' in dir() and vid else
                          "skipped-no-creds"),
                  extra={"slides": "recap+hints+reveal+facts+teaser+intro"})
+    _dbg(gid, "report done")
     return {"game": gid, "solved": solved, "video": str(final) if final else None,
             "evidence": evidence, "guesses": nguess}
 
@@ -11642,6 +12630,7 @@ def main():
     ap.add_argument("--game", default=None)
     ap.add_argument("--all", action="store_true")
     a = ap.parse_args()
+    _install_signal_handlers()
     gids = list(GAMES) if a.all else [a.game]
     results = []
     for gid in gids:
@@ -11654,6 +12643,7 @@ def main():
     for r in results:
         print(f"{r['game']}: solved={r['solved']} evidence={r['evidence']} video={r['video']}")
         ok = ok and r["solved"]
+    _close_dbg_handles()
     sys.exit(0 if ok else 1)
 
 

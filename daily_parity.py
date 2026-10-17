@@ -321,8 +321,15 @@ def generate_hints(out_path, game, date_str, hints, answer,
 
 
 def generate_reveal(out_path, game, date_str, answer, steps, pattern=None,
-                    kind=None, palette=None):
-    """The answer + a plain-language account of how each guess landed."""
+                    kind=None, palette=None, scoring=True):
+    """The answer + a plain-language account of how each guess landed.
+
+    scoring=False for games with NO per-letter feedback (Betweenle,
+    Framed, Semantle, Contexto): the card shows only the answer and
+    the played words, never fabricated Wordle-style letter scoring
+    ("2 in the word, wrong spot") — Betweenle gives only bound rows,
+    so a pattern-derived clue line would teach a false mechanic.
+    """
     img, d, f = _base(f"{game} answer", date_str)
     a = str(answer or "").upper()
     pat = pattern or ("G" * len(a))
@@ -341,7 +348,8 @@ def generate_reveal(out_path, game, date_str, answer, steps, pattern=None,
         _glow_band(img, 250, 120)
         d = ImageDraw.Draw(img)
         _tile_row(d, f, a, pat, 254, size=112, gap=18)
-    d.text((70, 430), "HOW EACH GUESS SCORED", fill=GREEN, font=f["m"])
+    d.text((70, 430), "HOW EACH GUESS SCORED" if scoring else
+           "GUESSES PLAYED", fill=GREEN, font=f["m"])
     rows = list(steps or [])
     word_f, clue_f = f["m"], f["s"]
     word_h = _text_h(d, "X", word_f)
@@ -369,7 +377,8 @@ def generate_reveal(out_path, game, date_str, answer, steps, pattern=None,
                     else None
                 _swatch(d, gx, top + pad, 46, hx, label=ii)
                 gx += 56
-            clue = _clue_line(s.get("pattern", ""), kind=kind)[:64]
+            clue = (_clue_line(s.get("pattern", ""), kind=kind)[:64]
+                    if scoring else "")
             cx = gx + 26
             cw_max = (W - right_pad) - cx
             if cw_max > 90:
@@ -385,7 +394,7 @@ def generate_reveal(out_path, game, date_str, answer, steps, pattern=None,
             gw = d.textlength(g, font=wf)
         except Exception:
             gw = 120
-        clue = _clue_line(s.get("pattern", ""))[:64]
+        clue = (_clue_line(s.get("pattern", ""))[:64] if scoring else "")
         if clue:
             cx = x + gw + 26
             cw_max = (W - right_pad) - cx
@@ -420,17 +429,24 @@ def generate_mode_card(out_path, game, mode_name, subtitle=""):
 
 
 def generate_facts(out_path, game, date_str, answer, steps,
-                 kind=None, palette=None):
-    """Solve breakdown: stat cards instead of a wall of text."""
+                 kind=None, palette=None, scoring=True):
+    """Solve breakdown: stat cards instead of a wall of text.
+
+    scoring=False for games with NO per-letter feedback (Betweenle,
+    Framed, Semantle, Contexto): no "green rows" stat and no
+    pattern-derived clue lines — only true facts (submitted guesses,
+    guess count, final answer).
+    """
     img, d, f = _base(f"{game} breakdown", date_str)
     d.text((70, 165), "SOLVE BREAKDOWN", fill=TEXT, font=f["t"])
     rows = list(steps or [])
     ng = len(rows) or 1
-    stats = [(str(ng), "guesses played"),
-             (str(sum(1 for s in rows
-                      if "G" in str(s.get("pattern", "")).upper())),
-              "green rows"),
-             ("1", "final answer")]
+    stats = [(str(ng), "guesses played")]
+    if scoring:
+        stats.append((str(sum(1 for s in rows
+                         if "G" in str(s.get("pattern", "")).upper())),
+                 "green rows"))
+    stats.append(("1", "final answer"))
     x = 70
     for val, lab in stats:
         box = [x, 300, x + 540, 470]
@@ -445,7 +461,8 @@ def generate_facts(out_path, game, date_str, answer, steps,
         _card(img, d, box, radius=18)
         d = ImageDraw.Draw(img)
         g = str(s.get("guess", "")).upper()[:24]
-        clue = _clue_line(s.get("pattern", ""), kind=kind)[:70]
+        clue = (_clue_line(s.get("pattern", ""), kind=kind)[:70]
+                if scoring else "")
         d.text((110, y + 26), f"{s.get('turn', '?')}.", fill=GREEN, font=f["b"])
         gi = _parse_ints(g) if kind == "colors" else None
         if gi:
