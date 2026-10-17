@@ -352,6 +352,9 @@ class TestBundleFilter(unittest.TestCase):
 
     def test_bundle_filter_logic(self):
         # Replicate the workflow's filter predicate on a fixture tree.
+        # Iter-19 (ANALYSIS16 §5): unsolved gameplay ALSO ships out
+        # of the pack now — the old assertion that unsolved
+        # gameplay_1080.mp4 survives encoded the leak.
         import json as _json
         import tempfile
         with tempfile.TemporaryDirectory() as td:
@@ -365,14 +368,16 @@ class TestBundleFilter(unittest.TestCase):
                 (d / "gameplay_1080.mp4").write_text("fake")
             for res in sorted(root.glob("video-*/result.json")):
                 if _json.loads(res.read_text()).get("solved") is False:
-                    for mp4 in res.parent.glob("*_final_*.mp4"):
+                    for mp4 in res.parent.glob("*.mp4"):
                         mp4.unlink()
             self.assertFalse(
                 (root / "video-nerdle/nerdle_final_2026-10-17.mp4").exists())
-            self.assertTrue(
+            self.assertFalse(
                 (root / "video-nerdle/gameplay_1080.mp4").exists())
             self.assertTrue(
                 (root / "video-waffle/waffle_final_2026-10-17.mp4").exists())
+            self.assertTrue(
+                (root / "video-waffle/gameplay_1080.mp4").exists())
 
 
 if __name__ == "__main__":

@@ -138,7 +138,12 @@ def _text_h(d, txt, font):
 
 
 def _fit_font(d, txt, font, max_w):
+    # Iter-19: the old fall-through returned the ORIGINAL (oversize)
+    # font when nothing fit, so callers drew overflowing text. Return
+    # the smallest font actually tried instead — a too-small full
+    # string beats a truncated/overflowing one.
     size = getattr(font, "size", 32)
+    best = font
     try:
         if d.textlength(str(txt), font=font) <= max_w:
             return font
@@ -149,13 +154,96 @@ def _fit_font(d, txt, font, max_w):
         try:
             nf = _clone_font(font, size)
         except Exception:
-            return font
+            return best
+        best = nf
         try:
             if d.textlength(str(txt), font=nf) <= max_w:
                 return nf
         except Exception:
-            return font
-    return font
+            return best
+    return best
+
+
+def _wrap_text(d, txt, font, max_w):
+    """Word-wrap `txt` to lines fitting `max_w` — NEVER drops text.
+
+    Iter-19 (ANALYSIS16 §6 item 12): the card renderer sliced guess
+    rows to a fixed character count (``[:20]``), so "SAINT KITTS AND
+    NEVIS" rendered as "SAINT KITTS AND NEVI" and "LIVING ON BORROWED
+    TIME" as "LIVING ON BORROWED T". Wrapping (and, where a single
+    line is required, _fit_font shrinking) keeps the full text.
+    Over-long single words are hard-split by characters so they
+    cannot overflow either.
+    """
+    txt = str(txt)
+    if not txt:
+        return [txt]
+    try:
+        if d.textlength(txt, font=font) <= max_w:
+            return [txt]
+    except Exception:
+        return [txt]
+    lines, cur = [], ""
+    for word in txt.split(" "):
+        cand = (cur + " " + word).strip()
+        try:
+            fits = d.textlength(cand, font=font) <= max_w
+        except Exception:
+            fits = len(cand) < 40
+        if fits:
+            cur = cand
+            continue
+        if cur:
+            lines.append(cur)
+            cur = ""
+        # Hard-split one over-long word so it cannot overflow.
+        rest = word
+        while rest:
+            try:
+                if d.textlength(rest, font=font) <= max_w:
+                    break
+            except Exception:
+                break
+            cut = len(rest)
+            while cut > 1:
+                try:
+                    if d.textlength(rest[:cut], font=font) <= max_w:
+                        break
+                except Exception:
+                    break
+                cut -= 1
+            if cut <= 1:
+                break
+            lines.append(rest[:cut])
+            rest = rest[cut:]
+        cur = rest
+    if cur:
+        lines.append(cur)
+    return lines or [txt]
+
+
+def _fit_wrap(d, txt, font, max_w, max_h, min_size=14):
+    """Shrink + wrap `txt` until its lines fit max_w x max_h.
+
+    Returns (lines, font). Text is never dropped: at min_size the
+    lines are returned even if they exceed max_h.
+    """
+    cur_font = font
+    while True:
+        lines = _wrap_text(d, txt, cur_font, max_w)
+        try:
+            total_h = sum(_text_h(d, ln, cur_font) + 4
+                          for ln in lines)
+        except Exception:
+            total_h = 0
+        size = getattr(cur_font, "size", 32)
+        if total_h <= max_h or size <= min_size:
+            return lines, cur_font
+        try:
+            cur_font = _clone_font(cur_font, max(min_size,
+                                                 int(size * 0.9)))
+        except Exception:
+            return lines, cur_font
 
 
 def _clone_font(font, size):
@@ -177,8 +265,24 @@ def _center(d, txt, font, cx, cy):
 
 
 def _tile_row(d, f, word, pattern, y, size=96, gap=14):
+    # Iter-19: long answers (e.g. Phrazle "LIVING ON BORROWED TIME",
+    # 22 tiles) overflowed the 1920px frame at size=112 because the
+    # row width was never fitted. Shrink tile size/gap/font to fit
+    # the frame instead of drawing tiles off-screen.
     n = len(word)
     total = n * size + (n - 1) * gap
+    tile_font = f["tile"]
+    if n and total > W - 140:
+        scale = (W - 140) / total
+        size = max(28, int(size * scale))
+        gap = max(4, int(gap * scale))
+        try:
+            tile_font = _clone_font(
+                f["tile"],
+                max(18, int(getattr(f["tile"], "size", 62) * scale)))
+        except Exception:
+            pass
+        total = n * size + (n - 1) * gap
     x = (W - total) // 2
     for i, ch in enumerate(word.upper()):
         p = pattern[i] if i < len(pattern) else "X"
@@ -189,11 +293,12 @@ def _tile_row(d, f, word, pattern, y, size=96, gap=14):
         fg = (12, 18, 30) if p in ("G", "Y") else (222, 228, 238)
         t = str(ch)
         try:
-            tw = d.textlength(t, font=f["tile"])
+            tw = d.textlength(t, font=tile_font)
         except Exception:
             tw = 0
-        d.text((x + (size - tw) / 2, y + size / 2 - 38), t, fill=fg,
-               font=f["tile"])
+        d.text((x + (size - tw) / 2,
+                y + size / 2 - int(getattr(tile_font, "size", 62) * 0.61)),
+               t, fill=fg, font=tile_font)
         x += size + gap
 
 
@@ -311,8 +416,13 @@ def generate_hints(out_path, game, date_str, hints, answer,
         _card(img, d, box)
         d.ellipse([110, y + 25, 160, y + 75], fill=GREEN)
         _center(d, str(i), f["b"], 135, y + 50)
-        hf = _fit_font(d, str(h), f["b"], W - 320)
-        d.text((200, y + 34), str(h)[:60], fill=TEXT, font=hf)
+        # Iter-19: no [:60] slice — wrap + shrink so the full hint
+        # is drawn, however long it is.
+        hlines, hf = _fit_wrap(d, str(h), f["b"], W - 320, 110 - 40)
+        ly = y + 34
+        for hline in hlines:
+            d.text((200, ly), hline, fill=TEXT, font=hf)
+            ly += _text_h(d, hline, hf) + 4
         y += 132
     d.text((70, H - 150), "Pause & guess before the solve!", fill=YELLOW,
            font=f["s"])
@@ -363,7 +473,11 @@ def generate_reveal(out_path, game, date_str, answer, steps, pattern=None,
         box = [70, top, W - 70, top + card_h]
         _card(img, d, box, radius=18)
         d = ImageDraw.Draw(img)
-        g = str(s.get("guess", "")).upper()[:20]
+        # Iter-19: NO [:20] slice — that slice is the truncation
+        # root cause ("SAINT KITTS AND NEVI", "LIVING ON BORROWED T").
+        # The full guess is drawn, auto-shrunk via _fit_font to the
+        # available width. Same for the clue (no [:64] slice).
+        g = str(s.get("guess", "")).upper()
         d.ellipse([100, top + card_h // 2 - 25, 150, top + card_h // 2 + 25],
                   fill=(16, 40, 30, 255), outline=GREEN + (200,), width=2)
         _center(d, str(s.get("turn", "?")), f["s"], 125, top + card_h // 2)
@@ -377,7 +491,7 @@ def generate_reveal(out_path, game, date_str, answer, steps, pattern=None,
                     else None
                 _swatch(d, gx, top + pad, 46, hx, label=ii)
                 gx += 56
-            clue = (_clue_line(s.get("pattern", ""), kind=kind)[:64]
+            clue = (_clue_line(s.get("pattern", ""), kind=kind)
                     if scoring else "")
             cx = gx + 26
             cw_max = (W - right_pad) - cx
@@ -394,7 +508,7 @@ def generate_reveal(out_path, game, date_str, answer, steps, pattern=None,
             gw = d.textlength(g, font=wf)
         except Exception:
             gw = 120
-        clue = (_clue_line(s.get("pattern", ""))[:64] if scoring else "")
+        clue = (_clue_line(s.get("pattern", "")) if scoring else "")
         if clue:
             cx = x + gw + 26
             cw_max = (W - right_pad) - cx
@@ -470,8 +584,10 @@ def generate_facts(out_path, game, date_str, answer, steps,
         box = [70, y, W - 70, y + 88]
         _card(img, d, box, radius=18)
         d = ImageDraw.Draw(img)
-        g = str(s.get("guess", "")).upper()[:24]
-        clue = (_clue_line(s.get("pattern", ""), kind=kind)[:70]
+        # Iter-19: NO [:24] / [:70] slices — same truncation class
+        # as generate_reveal; full text, auto-shrunk via _fit_font.
+        g = str(s.get("guess", "")).upper()
+        clue = (_clue_line(s.get("pattern", ""), kind=kind)
                 if scoring else "")
         d.text((110, y + 26), f"{s.get('turn', '?')}.", fill=GREEN, font=f["b"])
         gi = _parse_ints(g) if kind == "colors" else None

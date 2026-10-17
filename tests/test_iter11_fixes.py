@@ -35,6 +35,13 @@ class _FakePage:
 
     def evaluate(self, script, arg=None):
         self._calls.append(script)
+        # Iter-19: the G4 scan JS takes (labels) as its arg, so a
+        # bare "labels" substring match would return the toggle's
+        # bool for the scan too — dispatch the scan marker first.
+        if "G4-LIVE-ROUNDS-SCAN" in script and \
+                "const out" in self._scripted:
+            val = self._scripted["const out"]
+            return val() if callable(val) else val
         for key, val in self._scripted.items():
             if key in script:
                 return val() if callable(val) else val

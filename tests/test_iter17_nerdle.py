@@ -283,7 +283,13 @@ class TestTypeEquationLadder(unittest.TestCase):
     def test_ladder_methods_present_in_source(self):
         src = _fn_src(SRC_NERDLE, "async def type_equation",
                       "async def type_guess")
-        self.assertIn("POWER_BTN_BOX_JS", src)
+        # Iter-19: the coordinate-click method now runs through
+        # _power_button_box (fresh re-query + retry), which is where
+        # POWER_BTN_BOX_JS is referenced — the ladder still uses it.
+        self.assertIn("_power_button_box(page, part)", src)
+        helper = _fn_src(SRC_NERDLE, "async def _power_button_box",
+                         "def _last_evaluated_text")
+        self.assertIn("POWER_BTN_BOX_JS", helper)
         self.assertIn("mouse.click", src)
         self.assertIn("clipboard.writeText", src)
         self.assertIn("insert_text(part)", src)

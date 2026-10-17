@@ -415,6 +415,92 @@ def _fonts():
     return {"t": d, "b": d, "s": d}
 
 
+def _wrap_text_r(d, txt, font, max_w):
+    """Word-wrap `txt` to lines fitting `max_w` — never drops text.
+
+    Iter-19: same truncation class as daily_parity's [:20] slices.
+    Over-long single words are hard-split so they cannot overflow.
+    """
+    txt = str(txt)
+    if not txt:
+        return [txt]
+    try:
+        if d.textlength(txt, font=font) <= max_w:
+            return [txt]
+    except Exception:
+        return [txt]
+    lines, cur = [], ""
+    for word in txt.split(" "):
+        cand = (cur + " " + word).strip()
+        try:
+            fits = d.textlength(cand, font=font) <= max_w
+        except Exception:
+            fits = len(cand) < 40
+        if fits:
+            cur = cand
+            continue
+        if cur:
+            lines.append(cur)
+            cur = ""
+        rest = word
+        while rest:
+            try:
+                if d.textlength(rest, font=font) <= max_w:
+                    break
+            except Exception:
+                break
+            cut = len(rest)
+            while cut > 1:
+                try:
+                    if d.textlength(rest[:cut], font=font) <= max_w:
+                        break
+                except Exception:
+                    break
+                cut -= 1
+            if cut <= 1:
+                break
+            lines.append(rest[:cut])
+            rest = rest[cut:]
+        cur = rest
+    if cur:
+        lines.append(cur)
+    return lines or [txt]
+
+
+def _shrink_font(font, size):
+    """Return `font` at `size` when it has a path, else `font`."""
+    try:
+        path = getattr(font, "path", None)
+        if path:
+            return ImageFont.truetype(path, size)
+    except Exception:
+        pass
+    return font
+
+
+def _fit_font_r(d, txt, font, max_w, min_size=14):
+    """Shrink `font` until `txt` fits `max_w`; never truncates text."""
+    size = getattr(font, "size", 32)
+    best = font
+    try:
+        if d.textlength(str(txt), font=font) <= max_w:
+            return font
+    except Exception:
+        return font
+    while size > min_size:
+        size = max(min_size, int(size * 0.92))
+        nf = _shrink_font(font, size)
+        if nf is font:
+            return best
+        best = nf
+        try:
+            if d.textlength(str(txt), font=nf) <= max_w:
+                return nf
+        except Exception:
+            return best
+    return best
+
+
 def card(out, kicker, title, lines, date_str):
     if not HAS_PIL:
         return None
@@ -427,10 +513,17 @@ def card(out, kicker, title, lines, date_str):
     d.text((70, 150), title, fill=(255, 255, 255), font=f["t"])
     d.text((70, 260), date_str, fill=(168, 180, 200), font=f["s"])
     y = 380
+    # Iter-19: no ln[:80] slice — wrap each row (row grows for a
+    # second line) so the full text is drawn.
     for ln in lines[:8]:
-        d.rounded_rectangle([70, y, W - 70, y + 76], radius=14, fill=(23, 34, 58))
-        d.text((100, y + 14), ln[:80], fill=(255, 255, 255), font=f["b"])
-        y += 96
+        parts = _wrap_text_r(d, ln, f["b"], W - 70 - 100)
+        row_h = 76 + 34 * (len(parts) - 1)
+        if y + row_h > H - 20:
+            break
+        d.rounded_rectangle([70, y, W - 70, y + row_h], radius=14, fill=(23, 34, 58))
+        for j, part in enumerate(parts):
+            d.text((100, y + 14 + j * 34), part, fill=(255, 255, 255), font=f["b"])
+        y += row_h + 20
     img.save(out, "PNG", optimize=True)
     return out
 
@@ -449,7 +542,11 @@ def thumb(out, game, date_str, answer_txt):
     d.text((46, 340), "SOLVED STEP BY STEP", fill=(255, 205, 0), font=f["b"])
     d.rounded_rectangle([46, 440, 700, 520], radius=12, fill=(15, 23, 42),
                         outline=(46, 204, 113), width=3)
-    d.text((70, 455), (answer_txt or "?")[:34], fill=(255, 255, 255), font=f["b"])
+    # Iter-19: no [:34] slice — shrink the font so the full answer
+    # fits the thumbnail box instead of truncating it.
+    _ans = str(answer_txt or "?")
+    _af = _fit_font_r(d, _ans, f["b"], 700 - 70 - 24)
+    d.text((70, 455), _ans, fill=(255, 255, 255), font=_af)
     d.text((46, 560), date_str.upper(), fill=(255, 205, 0), font=f["b"])
     img.save(out, "PNG", optimize=True)
     return out
@@ -1217,13 +1314,82 @@ def _dismiss_teuteuf_banner(page):
     "not found at call time after a re-scan", never "proven not
     on the page". The banner is non-blocking; this never blocks
     anything — a lying 'absent' is worse than no claim, so the
-    probe would rather return 'present-*-no-element' than lie."""
+    probe would rather return 'present-*-no-element' than lie.
+
+    Iter-19 (ANALYSIS16 §6 item 15): this is a WORLDLE-only probe
+    (the banner lives on teuteuf.fr), but _close_modals calls it for
+    EVERY game, so every game's log got a "teuteuf edu banner:
+    absent" line — e.g. the stray line in the waffle log, a
+    wrong-game probe label. The probe now runs ONLY when the page
+    is Worldle (or its game is unknown, e.g. a direct call / test):
+    when page._qp_gid names a KNOWN non-Worldle game, or the page
+    URL names a non-Teuteuf host, return silently — no probe, no
+    log line, no label.
+
+    Iter-19 (ANALYSIS16 §2f): the iter-18 probe STILL returned
+    'absent' ~30x while the banner sat in every frame. Its text
+    match (norm(textContent) vs 'teuteuf edu') is blind to three
+    real banner renderings: (a) a title split across sibling
+    spans with no whitespace text node between them
+    (textContent 'TeuteufEdu', no space), (b) a brand mark whose
+    text lives in alt/aria-label/title, not textContent, and
+    (c) a CROSS-ORIGIN iframe, whose text no same-origin probe
+    can ever read. The probe now matches the space-stripped
+    signature ('teuteufedu') too, folds descendant
+    alt/aria-label/title into the signature, and — when no
+    element matches — reports a banner-shaped unreadable iframe
+    as 'present-iframe-unreadable' (with its rect) instead of a
+    lying 'absent'; Python dismisses it with a real click on the
+    frame's top-right corner (the X), and hides the iframe
+    element itself only if the click did not dismiss it. The
+    close-button search also matches icon-only controls whose
+    class/id names them close/dismiss."""
+    try:
+        _gid = getattr(page, "_qp_gid", None)
+        if _gid in GAMES and _gid != "worldle":
+            return
+        _url = str(getattr(page, "url", "") or "")
+        if _url and "teuteuf" not in _url:
+            return
+    except Exception:
+        pass
     _JS = """/* TEUTEUF-BANNER-DISMISS */
           () => {
           const norm = s => (s || '').toLowerCase()
             .replace(/\\s+/g, ' ').trim();
+          // Iter-19: the iter-18 probe STILL lied ('absent' x30
+          // while the banner sat in every frame). Its hasSig
+          // matched ONLY norm(textContent) against 'teuteuf edu' —
+          // which misses the banner when (a) its title is split
+          // across sibling spans with NO whitespace text node
+          // between them, so textContent reads 'TeuteufEdu'
+          // (no space), (b) the brand mark is an <img> whose
+          // text lives in alt/aria-label/title, not textContent,
+          // or (c) the banner lives in a CROSS-ORIGIN iframe
+          // (contentDocument null/inaccessible), so its text is
+          // invisible to every same-origin probe. hasSig now
+          // matches the space-stripped form too ('teuteufedu')
+          // and folds descendant alt/aria-label/title into the
+          // signature; the no-element fallback below reports a
+          // banner-shaped unreadable iframe instead of 'absent'.
+          const nospace = s => (s || '').toLowerCase()
+            .replace(/\\s+/g, '');
+          const sigOf = el => {
+            const parts = [el.textContent || ''];
+            try {
+              for (const d of el.querySelectorAll(
+                  '[alt], [aria-label], [title]')) {
+                parts.push(d.getAttribute('alt') || '');
+                parts.push(d.getAttribute('aria-label') || '');
+                parts.push(d.getAttribute('title') || '');
+              }
+            } catch (err) {}
+            return parts.join(' ');
+          };
           const hasSig = el => { try {
-            return norm(el.textContent).includes('teuteuf edu');
+            const s = sigOf(el);
+            return norm(s).includes('teuteuf edu') ||
+              nospace(s).includes('teuteufedu');
             } catch (err) { return false; } };
           // Rect-based visibility (iter-16): a FIXED-position
           // banner has a null offset parent, so the old
@@ -1294,12 +1460,42 @@ def _dismiss_teuteuf_banner(page):
                   ? (document.body ? document.body.textContent : '')
                   : (root.body ? root.body.textContent
                                : (root.textContent || ''));
-                if (norm(t).includes('teuteuf edu is here')) {
+                if (norm(t).includes('teuteuf edu is here') ||
+                    nospace(t).includes('teuteufeduishere')) {
                   sigInText = true; break;
                 }
               } catch (err) {}
             }
             if (sigInText) return 'present-body-text-no-element';
+            // Iter-19: CROSS-ORIGIN iframes. A same-origin probe
+            // can never read their text (contentDocument is null
+            // or throws), so a banner living in one is invisible
+            // to every check above — yet it is frame-visible.
+            // A banner-shaped UNREADABLE iframe at the top of the
+            // page is the banner until proven otherwise: report
+            // it (with its rect, so Python can click its X) and
+            // NEVER return a lying 'absent' for it. Shape guards
+            // (short, top-of-page, <50% viewport height) keep the
+            // game itself / a tall embed from ever matching.
+            for (const fr of Array.from(
+                document.querySelectorAll('iframe'))) {
+              let readable = false;
+              try { readable = !!fr.contentDocument; }
+              catch (err) { readable = false; }
+              if (readable) continue;
+              let r;
+              try { r = fr.getBoundingClientRect(); }
+              catch (err) { continue; }
+              if (!r || r.width <= 0 || r.height <= 0) continue;
+              const vh = window.innerHeight || 0;
+              if (r.height >= 20 && r.height <= 220 &&
+                  r.width >= 200 && r.width <= 1300 &&
+                  r.top >= -20 && r.top <= 260 &&
+                  r.height < vh * 0.5) {
+                return 'iframe-banner:' + JSON.stringify(
+                  {x: r.x, y: r.y, w: r.width, h: r.height});
+              }
+            }
             return 'absent';
           }
           cands.sort((a, b) =>
@@ -1319,9 +1515,15 @@ def _dismiss_teuteuf_banner(page):
               const t = (((b.getAttribute('aria-label') || '') + ' ' +
                 (b.getAttribute('title') || '') + ' ' +
                 (b.textContent || '')).trim().toLowerCase());
+              // Iter-19: also match an icon-only close control
+              // (empty text, SVG child) whose class/id names it
+              // close/dismiss — the banner's X may carry no text.
+              const clsId = (((b.getAttribute('class') || '') + ' ' +
+                (b.getAttribute('id') || '')).toLowerCase());
               return t === 'x' || t === '✕' || t === '×' ||
                 t === 'close' || t.includes('dismiss') ||
-                t.includes('close');
+                t.includes('close') || clsId.includes('close') ||
+                clsId.includes('dismiss');
             });
             if (close && vis(close)) {
               close.click();
@@ -1359,10 +1561,59 @@ def _dismiss_teuteuf_banner(page):
           }
           return 'found-no-close' + suffix;
         }"""
+    _HIDE_IFRAME_JS = """/* TEUTEUF-BANNER-HIDE-IFRAME */
+          (rect) => {
+          for (const fr of document.querySelectorAll('iframe')) {
+            const r = fr.getBoundingClientRect();
+            if (Math.abs(r.x - rect.x) < 2 &&
+                Math.abs(r.y - rect.y) < 2 &&
+                Math.abs(r.width - rect.w) < 2 &&
+                Math.abs(r.height - rect.h) < 2) {
+              fr.style.setProperty('display', 'none', 'important');
+              return true;
+            }
+          }
+          return false;
+        }"""
     try:
         res = page.evaluate(_JS)
     except Exception:
         return
+    if isinstance(res, str) and res.startswith("iframe-banner:"):
+        # Iter-19: cross-origin banner iframe — the probe can see
+        # the frame but not its text. Dismiss via a REAL click on
+        # the frame's top-right corner (the X position), then
+        # re-probe: gone -> closed; still there -> hide the iframe
+        # element itself (banner-shaped by the JS guards, so
+        # hiding it cannot hide the game) and log exactly that.
+        import json as _json
+        try:
+            _rect = _json.loads(res[len("iframe-banner:"):])
+        except Exception:
+            _rect = {}
+        try:
+            _dbg(getattr(page, "_qp_gid", "banner"),
+                 "teuteuf edu banner: present-iframe-unreadable "
+                 f"rect={_rect}")
+        except Exception:
+            pass
+        try:
+            page.mouse.click(
+                float(_rect.get("x", 0)) + float(_rect.get("w", 0)) - 16,
+                float(_rect.get("y", 0)) + 16)
+            page.wait_for_timeout(500)
+            res = page.evaluate(_JS)
+        except Exception:
+            res = "iframe-corner-click-failed"
+        if res == "absent":
+            res = "closed-iframe-via-corner-click"
+        elif isinstance(res, str) and res.startswith("iframe-banner:"):
+            try:
+                _hidden = page.evaluate(_HIDE_IFRAME_JS, _rect)
+            except Exception:
+                _hidden = False
+            res = ("hidden-iframe-banner" if _hidden
+                   else "iframe-corner-click-did-not-dismiss")
     if res == "absent":
         # Iter-18 late-render re-scan: the probe can run before
         # the banner renders, so a single instant 'absent' is
@@ -5323,6 +5574,30 @@ def _live_day_displayed_puzzle_number(page):
         return None
 
 
+# Semantle's day key: puzzle #N is served on 2022-01-30 + N days.
+# answers.semantle() uses the same epoch (idx = days since
+# 2022-01-30, puzzle == idx), and the site's own header prints
+# "Game #1722" for 2026-10-18 — verified: 2022-01-30 + 1722 days
+# == 2026-10-18. The displayed number is therefore a REAL live-day
+# signal from the game host's own page state (not a URL, not an ad).
+_SEMANTLE_EPOCH = date(2022, 1, 30)
+
+
+def _semantle_date_from_puzzle_number(n):
+    """Game #N -> the date Semantle serves it, or None if unreadable.
+
+    Pure + unit-testable. The mapping is the site's own: puzzle #N
+    is the (2022-01-30 + N)-th day's puzzle.
+    """
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return None
+    if n < 0:
+        return None
+    return _SEMANTLE_EPOCH + timedelta(days=n)
+
+
 def _align_answer_to_live_day(gid, ans, page=None):
     """Re-resolve the answer for the day the board is REALLY serving.
 
@@ -5367,16 +5642,55 @@ def _align_answer_to_live_day(gid, ans, page=None):
     except Exception:
         iso, _host, _url = None, None, None
     if not iso:
-        # Iter-16 (P1, ANALYSIS12 §1): log the decision EVEN when the
-        # probe captures nothing — iter-15 returned silently here, so
-        # the artifact had zero live-day lines and the ±1 bound was
-        # never exercised on paper. The bound behaviour is unchanged.
-        # Iter-17: via _dbg, not print — print() never reaches the
-        # artifact debug log (see docstring).
-        _dbg(gid, f"live-day decision: probe captured no date "
-              f"(no live-day signal), keeping target answer; "
-              f"host={_host} url={_url}")
-        return ans, None
+        # Iter-19 (P1, ANALYSIS16 §6 item 9 / §2(i)): the URL probe
+        # captures NOTHING on semantle.com — Semantle's own responses
+        # carry no date-bearing URL — so this branch logged "no
+        # live-day signal" and the solve rested on the target answer
+        # alone. But Semantle DOES carry a real live-day signal: the
+        # site's own displayed header "Game #N", which maps to a date
+        # via the game's own epoch (see _semantle_date_from_puzzle_
+        # number). It is page state from the game host, never an ad
+        # URL, so the ad-host filter cannot pollute it. When the URL
+        # probe is empty, consult the displayed number and let the
+        # SAME ±1 bound + re-key logic below judge it. When neither
+        # source yields a date, say so honestly — do NOT fake one.
+        if gid == "semantle" and page is not None:
+            _shown = None
+            try:
+                _shown = _live_day_displayed_puzzle_number(page)
+            except Exception:
+                _shown = None
+            if _shown is not None:
+                _served = _semantle_date_from_puzzle_number(_shown)
+                if _served is not None:
+                    _dbg(gid, f"live-day decision: no URL date; using "
+                          f"displayed Game #{_shown} -> served={_served} "
+                          f"(page state, game host=semantle.com)")
+                    iso = _served.isoformat()
+                    _host, _url = "semantle.com", None
+                else:
+                    _dbg(gid, f"live-day decision: probe captured no "
+                          f"date (no live-day signal: no URL date and "
+                          f"displayed Game #{_shown} maps to no date), "
+                          f"keeping target answer; host={_host} url={_url}")
+                    return ans, None
+            else:
+                _dbg(gid, f"live-day decision: probe captured no date "
+                      f"(no live-day signal: no URL date and no "
+                      f"displayed Game #), keeping target answer; "
+                      f"host={_host} url={_url}")
+                return ans, None
+        else:
+            # Iter-16 (P1, ANALYSIS12 §1): log the decision EVEN when
+            # the probe captures nothing — iter-15 returned silently
+            # here, so the artifact had zero live-day lines and the ±1
+            # bound was never exercised on paper. The bound behaviour
+            # is unchanged. Iter-17: via _dbg, not print — print()
+            # never reaches the artifact debug log (see docstring).
+            _dbg(gid, f"live-day decision: probe captured no date "
+                  f"(no live-day signal), keeping target answer; "
+                  f"host={_host} url={_url}")
+            return ans, None
     try:
         want = date(*(int(x) for x in iso.split("-")))
         have = A.target_date()
@@ -5996,8 +6310,14 @@ def _s_worldle_win_check(page, mode, day, day_string, extra=None):
     if mode == "area":
         gs = _s_worldle_day_guesses(page, "size-guesses", day_string)
         win = bool(gs) and (gs[0] or {}).get("correct") == (gs[0] or {}).get("answer")
+        # Iter-19 (ANALYSIS16 §6.10): the old wording ("first guess
+        # correct==answer") was arbitrate-logic phrasing, not a real
+        # guess count — the Area widget is a shape COMPARISON
+        # (Kuwait vs Qatar cards), and the recorded store entry is
+        # the comparison pick. Word the check as the pick it is.
         return win, [str((g or {}).get("answer") or "?") for g in gs], \
-            f"first guess correct==answer: {win}; completed={done}"
+            f"area comparison pick recorded: size-guesses[0] " \
+            f"correct==answer: {win}; completed={done}"
     return False, [], f"unknown mode {mode}"
 
 
@@ -6926,45 +7246,108 @@ def _s_worldle_live_round_modes(page, gid):
     click CLOSED it, so the scan must run after a re-open, not
     after a close. If the live list genuinely cannot be read,
     the reader still returns None (unreadable) — never a faked
-    live read; the caller keeps the reconstruction fallback."""
+    live read; the caller keeps the reconstruction fallback.
+
+    Fix-loop iter 19 (ANALYSIS16 §2g): the reader STILL returns
+    None, and frame gp_0355 proves the dropdown IS open with all
+    13 entries + checkmarks. Three root causes, all in this
+    function: (1) visibility is offsetParent-based — a
+    position:fixed dropdown portal (or a toggle inside a fixed
+    header) has offsetParent null and is filtered out of the
+    toggle search, the container search AND the leaf search
+    (the banner probe fixed exactly this in iter-16 by switching
+    to rect-based visibility; this reader never got the fix).
+    Visibility is now rect-based everywhere. (2) the container
+    search EXCLUDED anything inside nav/header/footer — but the
+    round switcher lives inside the page header/nav, so the real
+    dropdown was discarded. Containers are now identified by
+    CONTENT (how many leaves map to known round labels, >=3
+    required), not by ancestry; a leaf-count cap (<=60) keeps a
+    page-wide wrapper from winning. (3) the reader ran ONCE
+    (during the Country round) and its only retry assumed the
+    first click had closed an open dropdown. The reader now
+    scans FIRST (already-open dropdown, no click, no risk of
+    clicking a round entry), then toggle-click + scan, then
+    Escape-reset + toggle-click + scan — three attempts, each
+    logged. The toggle search is tiered (explicit aria toggle
+    first) and skips elements inside an already-open menu, which
+    are round ENTRIES — clicking one would SWITCH rounds."""
     try:
         labels = list(_WORLDLE_MODE_LABELS.values())
-        opened = page.evaluate("""(labels) => {
-          const vis = e => e && e.offsetParent !== null;
+        # Toggle click (tiered). Returns True iff a toggle was
+        # clicked. Tier 1: an explicit toggle affordance
+        # (aria-expanded / aria-haspopup) whose text holds a mode
+        # label. Tier 2: a visible button-like element whose text
+        # holds a mode label — SKIPPING elements inside an
+        # already-open menu, which are round ENTRIES: clicking one
+        # would SWITCH rounds, not open the menu. The JS returns a
+        # dict (opened/via) so the log can name which tier fired;
+        # a plain bool is accepted for back-compat with
+        # unit-test fakes.
+        _TOGGLE_JS = """/* G4-LIVE-ROUNDS-TOGGLE */ (labels) => {
+          const vis = e => { try { const r = e.getBoundingClientRect();
+            return r.width > 0 && r.height > 0; }
+            catch (err) { return false; } };
           const norm = s => (s||'').toLowerCase().replace(/\\s+/g,' ').trim();
+          const inOpenMenu = el => !!el.closest(
+            '[role=menu], [role=listbox]');
+          const hasLabel = el => labels.some(l =>
+            norm(el.innerText || el.textContent || '')
+              .includes(norm(l)));
           const cands = Array.from(document.querySelectorAll(
             'button, [role=button], [aria-expanded], [aria-haspopup]'))
             .filter(vis);
-          for (const el of cands) {
-            const t = norm(el.innerText);
-            if (labels.some(l => t.includes(norm(l))) &&
-                (el.querySelector('svg') ||
-                 el.getAttribute('aria-expanded') !== null ||
-                 el.getAttribute('aria-haspopup'))) {
-              el.click(); return true;
-            }
-          }
-          return false;
-        }""", labels)
-        if not opened:
-            # Fix-loop iter 13 (G4 proof): every None return logs
-            # EXPLICITLY. Iter-12 had ZERO 'live rounds' log lines
-            # because the reader returned None on silent paths and the
-            # cross-check was skipped without a trace.
-            _dbg(gid, "worldle G4 live rounds reader: dropdown toggle NOT "
-                      "opened (no mode-label toggle matched) -> None "
-                      "(unreadable)")
-            return None
-        page.wait_for_timeout(700)
+          const tier1 = cands.find(el => hasLabel(el) &&
+            (el.getAttribute('aria-expanded') !== null ||
+             el.getAttribute('aria-haspopup') !== null));
+          const hit = tier1 || cands.find(el => hasLabel(el) &&
+            !inOpenMenu(el) && (el.querySelector('svg') ||
+            el.tagName === 'BUTTON' ||
+            el.getAttribute('role') === 'button'));
+          if (!hit) return {opened: false, via: 'none'};
+          try { hit.click(); } catch (err) {
+            return {opened: false, via: 'click-failed'}; }
+          return {opened: true, via: tier1 ? 'aria-toggle' : 'label-button',
+                  tag: hit.tagName,
+                  cls: String(hit.getAttribute('class') || '').slice(0, 60)};
+        }"""
+
+        def _toggle():
+            try:
+                _res = page.evaluate(_TOGGLE_JS, labels)
+            except Exception:
+                return False
+            if isinstance(_res, dict):
+                return bool(_res.get("opened"))
+            return bool(_res)
         # RAW, OPEN-DROPDOWN-ONLY: every visible leaf entry inside an
         # identified open menu/listbox/dropdown container — NO label
         # filter in JS, NO whole-page fallback. Mapping to known labels
         # happens in Python so an unknown/renamed label survives as
         # `unmapped`. A list return is accepted for back-compat with
         # the iter-11 unit-test FakePage (which scripts a plain list).
-        _SCAN_JS = """/* G4-LIVE-ROUNDS-SCAN */ () => {
-          const vis = e => e && e.offsetParent !== null;
+        # Iter-19: visibility is RECT-based (a fixed-position
+        # dropdown portal has a null offsetParent, so the old
+        # offsetParent check filtered the real dropdown out), and
+        # the container is picked by CONTENT SCORE (leaves mapping
+        # to known round labels), not by ancestry or first-match —
+        # the old nav/header/footer exclusion discarded the real
+        # dropdown, which lives inside the page header/nav. The
+        # leaf-count cap (<=60) keeps a page-wide wrapper from
+        # winning; the precise mapping still happens in Python.
+        _SCAN_JS = """/* G4-LIVE-ROUNDS-SCAN */ (labels) => {
+          const vis = e => { try { const r = e.getBoundingClientRect();
+            return r.width > 0 && r.height > 0; }
+            catch (err) { return false; } };
           const norm = s => (s||'').replace(/\\s+/g,' ').trim();
+          // Leaf-normalized label form for CONTENT scoring only:
+          // lowercase, collapse spaces, strip leading/trailing
+          // emoji/symbols ('📍 Capital' -> 'capital',
+          // 'Country ✓' -> 'country').
+          const keyOf = s => norm(s).toLowerCase()
+            .replace(/^[^a-z0-9&]+/, '')
+            .replace(/[^a-z0-9&]+$/, '');
+          const labelKeys = new Set(labels.map(l => keyOf(l)));
           const out = [];
           const seen = new Set();
           const push = t => { const n = norm(t);
@@ -6972,78 +7355,96 @@ def _s_worldle_live_round_modes(page, gid):
               seen.add(n.toLowerCase()); out.push(n); } };
           // OPEN-dropdown containers only: role menu/listbox, a
           // dropdown/menu/popover/popper class wrapper, or the
-          // listbox/menu inside an aria-expanded=true toggle.
-          // Never the whole page; never nav/header/footer; never
-          // BODY/HTML (a wrapper that big is the page, not the
-          // dropdown). No arbitrary siblings: a sibling without a
-          // menu marker is not a container, and misidentifying one
-          // would mark offered rounds "verified absent".
-          const cands = Array.from(document.querySelectorAll(
-            '[role=menu], [role=listbox], [class*=dropdown i], ' +
-            '[class*=menu i], [class*=popover i], ' +
-            '[class*=popper i]')).filter(vis)
-            .filter(e => !e.closest('nav, header, footer'))
-            .filter(e => !/^(BODY|HTML)$/.test(e.tagName));
-          for (const e of Array.from(document.querySelectorAll(
-              '[aria-expanded="true"]')).filter(vis)) {
-            const inner = e.querySelector('[role=menu], [role=listbox]');
-            if (inner && !cands.includes(inner)) cands.push(inner);
+          // aria-controls target / inner menu of an expanded
+          // toggle. Never BODY/HTML. No ancestry exclusion: the
+          // round switcher lives inside the page header/nav.
+          const cands = [];
+          const addCand = e => {
+            if (e && !cands.includes(e) &&
+                !/^(BODY|HTML)$/.test(e.tagName)) cands.push(e); };
+          for (const e of document.querySelectorAll(
+              '[role=menu], [role=listbox], [class*=dropdown i], ' +
+              '[class*=menu i], [class*=popover i], ' +
+              '[class*=popper i]')) if (vis(e)) addCand(e);
+          for (const t of document.querySelectorAll(
+              '[aria-expanded="true"]')) {
+            if (!vis(t)) continue;
+            const id = t.getAttribute('aria-controls');
+            if (id) { const el = document.getElementById(id);
+              if (el) addCand(el); }
+            const inner = t.querySelector('[role=menu], [role=listbox]');
+            if (inner) addCand(inner);
           }
-          let scope = null;
+          const hasTextChild = e => Array.from(e.children || [])
+            .some(c => norm(c.innerText || c.textContent));
+          let best = null, bestScore = -1, bestLeaves = [];
           for (const m of cands) {
-            // Iter-18 leaf fix (ANALYSIS15 §11): entries are NOT
-            // bare leaves — each entry is a wrapper (button/li)
-            // holding an emoji span + a label span, so
-            // `children.length === 0` excluded EVERY entry and the
-            // reader always returned "leaves < 3". A leaf is now
-            // the INNERMOST text-bearing element: an element with
-            // no element child carrying non-empty text. The
-            // wrapper is excluded (its span child has text); the
-            // label span qualifies (its children are text-free
-            // icons). Decorative children (svg, empty spans) do
-            // not disqualify.
-            const hasTextChild = e => Array.from(e.children || [])
-              .some(c => norm(c.innerText || c.textContent));
+            // Iter-18 leaf rule, kept: entries are NOT bare
+            // leaves — each entry is a wrapper (button/li)
+            // holding an emoji span + a label span. A leaf is the
+            // INNERMOST text-bearing element: no element child
+            // carrying non-empty text.
             const leaves = Array.from(m.querySelectorAll(
               'button, [role=option], [role=menuitem], ' +
               '[role=menuitemradio], a, li, span, div'))
               .filter(vis).filter(e => !hasTextChild(e));
-            if (leaves.length >= 3) { scope = leaves; break; }
+            if (leaves.length < 3 || leaves.length > 60) continue;
+            let score = 0;
+            for (const lf of leaves)
+              if (labelKeys.has(keyOf(
+                  lf.innerText || lf.textContent || ''))) score++;
+            if (score > bestScore) {
+              bestScore = score; best = m; bestLeaves = leaves;
+            }
           }
-          if (!scope) return {entries: [], container: false};
-          for (const e of scope) push(e.innerText);
+          if (!best || bestScore < 3)
+            return {entries: [], container: false};
+          for (const e of bestLeaves) push(e.innerText);
           return {entries: out, container: true};
         }"""
-        raw_ev = page.evaluate(_SCAN_JS) or {}
-        if isinstance(raw_ev, dict) and not raw_ev.get("container"):
-            # Second chance (iter-18): if the dropdown was ALREADY
-            # open, the toggle click above CLOSED it, so this scan
-            # ran against a closed menu. Click once more to re-open
-            # and re-scan; if that still finds no container, the
-            # list is genuinely unreadable -> None below.
+
+        def _scan():
             try:
-                page.evaluate("""(labels) => {
-                  const vis = e => e && e.offsetParent !== null;
-                  const norm = s => (s||'').toLowerCase()
-                    .replace(/\\s+/g,' ').trim();
-                  const cands = Array.from(document.querySelectorAll(
-                    'button, [role=button], [aria-expanded], ' +
-                    '[aria-haspopup]')).filter(vis);
-                  for (const el of cands) {
-                    const t = norm(el.innerText);
-                    if (labels.some(l => t.includes(norm(l))) &&
-                        (el.querySelector('svg') ||
-                         el.getAttribute('aria-expanded') !== null ||
-                         el.getAttribute('aria-haspopup'))) {
-                      el.click(); return true;
-                    }
-                  }
-                  return false;
-                }""", labels)
-                page.wait_for_timeout(700)
-                raw_ev = page.evaluate(_SCAN_JS) or {}
+                return page.evaluate(_SCAN_JS, labels) or {}
             except Exception:
-                pass
+                return {}
+        # Iter-19 retry loop: attempt 1 scans FIRST (the dropdown
+        # may ALREADY be open — no click, so no risk of clicking a
+        # round entry and switching rounds). Attempt 2: toggle
+        # click -> scan. Attempt 3: Escape-reset -> toggle click
+        # -> scan. (The iter-18 Second chance re-open is subsumed
+        # by attempts 2-3.) Each attempt is logged; a genuinely
+        # unreadable list still returns None below — never a faked
+        # live read.
+        raw_ev = {}
+        for _attempt in (1, 2, 3):
+            if _attempt == 1:
+                raw_ev = _scan()
+            elif _attempt == 2:
+                if not _toggle():
+                    _dbg(gid, "worldle G4 live rounds reader: attempt 2 "
+                              "dropdown toggle NOT opened (no mode-label "
+                              "toggle matched)")
+                page.wait_for_timeout(700)
+                raw_ev = _scan()
+            else:
+                try:
+                    page.keyboard.press("Escape")
+                except Exception:
+                    pass
+                page.wait_for_timeout(300)
+                if not _toggle():
+                    _dbg(gid, "worldle G4 live rounds reader: attempt 3 "
+                              "dropdown toggle NOT opened (no mode-label "
+                              "toggle matched)")
+                page.wait_for_timeout(700)
+                raw_ev = _scan()
+            if (isinstance(raw_ev, dict) and raw_ev.get("container")) or \
+                    isinstance(raw_ev, list):
+                break
+            _dbg(gid, "worldle G4 live rounds reader: attempt "
+                      f"{_attempt} found no dropdown container; "
+                      "retrying")
         try:
             page.keyboard.press("Escape")
         except Exception:
@@ -7051,7 +7452,7 @@ def _s_worldle_live_round_modes(page, gid):
         if isinstance(raw_ev, dict):
             if not raw_ev.get("container"):
                 _dbg(gid, "worldle G4 live rounds reader: no open dropdown "
-                          "container found (leaves < 3) -> None "
+                          "container found after 3 attempts -> None "
                           "(unreadable)")
                 return None
             raw = list(raw_ev.get("entries") or [])
@@ -7771,6 +8172,26 @@ def _worldle_capital_pinpoint_probe(page, px, py):
           // dot-name could never match) but in a nearby <text>
           // label or the parent <g>. Each dot below records its
           // nearest label text + its parent group's text/attrs.
+          //
+          // Iter-19: TWO probe gaps closed, both from the iter-18
+          // evidence (picker ran, dots=4, method=bbox-fit-in-fill —
+          // dot-name never MATCHED, not never ran):
+          // (1) the old code let EVERY dot independently claim its
+          // nearest <text>, so two dots near one label both claimed
+          // it and the picker's ambiguity rule refused a real match
+          // (Kuwait's dots sit close together on a 450px map, so
+          // 60px radii overlap). Labels are now assigned GREEDILY
+          // by distance — one label to at most one dot, the closest
+          // one — so a shared-radius overlap no longer poisons a
+          // unique match.
+          // (2) more name sources: the parent <g>'s <title> child
+          // (group_title), the grandparent <g>'s data/title/text,
+          // sibling <text>/<title> elements sharing the parent
+          // group (sibling_text), and HTML overlay labels
+          // positioned over the map (overlay_label — a leaf element
+          // whose rect sits INSIDE the pinpoint SVG's rect with
+          // short text; the prompt heading above the map is OUTSIDE
+          // the SVG rect, so it can never match).
           const labelTexts = [];
           for (const t of svg.querySelectorAll('text')) {
             let tr;
@@ -7781,6 +8202,32 @@ def _worldle_capital_pinpoint_probe(page, px, py):
             if (txt) labelTexts.push(
               {x: tr.x + tr.width / 2, y: tr.y + tr.height / 2,
                t: txt});
+          }
+          const overlayTexts = [];
+          for (const el of document.querySelectorAll('body *')) {
+            // SVG-subtree elements are covered by labelTexts, not
+            // here; only HTML overlays count.
+            if (el.closest('svg')) continue;
+            let r;
+            try { r = el.getBoundingClientRect(); }
+            catch (e) { continue; }
+            if (!r || r.width <= 0 || r.height <= 0) continue;
+            if (r.height > 40) continue;
+            if (r.x < rect.x - 1 || r.y < rect.y - 1 ||
+                r.x + r.width > rect.x + rect.width + 1 ||
+                r.y + r.height > rect.y + rect.height + 1) continue;
+            const txt = (el.textContent || '')
+              .replace(/\s+/g, ' ').trim();
+            if (!txt || txt.length > 40) continue;
+            let hasTextChild = false;
+            for (const ch of el.children || []) {
+              if ((ch.textContent || '').trim()) {
+                hasTextChild = true; break;
+              }
+            }
+            if (hasTextChild) continue;
+            overlayTexts.push({x: r.x + r.width / 2,
+                               y: r.y + r.height / 2, t: txt});
           }
           for (const c of svg.querySelectorAll('circle, ellipse')) {
             let r;
@@ -7802,27 +8249,16 @@ def _worldle_capital_pinpoint_probe(page, px, py):
             if (!fill) {
               try { fill = getComputedStyle(c).fill || ''; }
               catch (e) {}
-            }
-            // Nearest <text> label within 60px of the dot centre
-            // (labels sit next to their dot; beyond 60px the text
-            // belongs to another dot / the map chrome, so it is
-            // NOT this dot's name).
-            let label = '', labelDist = null;
-            for (const lt of labelTexts) {
-              const d = Math.hypot(lt.x - cx, lt.y - cy);
-              if (labelDist === null || d < labelDist) {
-                label = lt.t; labelDist = d;
-              }
-            }
-            if (labelDist !== null && labelDist > 60) {
-              label = ''; labelDist = null;
-            }
             // Parent <g> text/attrs: the group often wraps the
             // dot + its label together (title / data-* / text).
             // When one <g> wraps ALL dots, every dot gets the same
-            // parent_text and the picker's ambiguity rule (-> None)
-            // keeps the click honest.
+            // parent_text and the picker's shared-source rule
+            // (iter-19) drops it as group evidence, not dot
+            // evidence — it can no longer poison a unique match.
             let parentText = '', parentData = {};
+            let groupTitle = '', siblingText = '';
+            let grandparentData = {}, grandparentText = '';
+            let grandparentTitle = '';
             try {
               const par = c.parentElement;
               if (par && par.tagName &&
@@ -7831,6 +8267,41 @@ def _worldle_capital_pinpoint_probe(page, px, py):
                   .replace(/\s+/g, ' ').trim().slice(0, 120);
                 for (const k of Object.keys(par.dataset || {}))
                   parentData[k] = par.dataset[k];
+                // <title> child of the parent group (group_title)
+                // + sibling <text>/<title> elements sharing the
+                // group (sibling_text).
+                const sibParts = [];
+                for (const sib of par.children || []) {
+                  if (sib === c) continue;
+                  const stag = (sib.tagName || '').toLowerCase();
+                  if (stag === 'title') {
+                    const tt = (sib.textContent || '')
+                      .replace(/\s+/g, ' ').trim();
+                    if (tt) { groupTitle = tt; sibParts.push(tt); }
+                  } else if (stag === 'text') {
+                    const tt = (sib.textContent || '')
+                      .replace(/\s+/g, ' ').trim();
+                    if (tt) sibParts.push(tt);
+                  }
+                }
+                siblingText = sibParts.join(' ').slice(0, 120);
+                // Grandparent <g> (the group above the dot's own
+                // group): its data/title/text.
+                const gp = par.parentElement;
+                if (gp && gp.tagName &&
+                    gp.tagName.toLowerCase() === 'g') {
+                  grandparentText = (gp.textContent || '')
+                    .replace(/\s+/g, ' ').trim().slice(0, 120);
+                  for (const k of Object.keys(gp.dataset || {}))
+                    grandparentData[k] = gp.dataset[k];
+                  for (const sib of gp.children || []) {
+                    if ((sib.tagName || '').toLowerCase() === 'title') {
+                      grandparentTitle = (sib.textContent || '')
+                        .replace(/\s+/g, ' ').trim();
+                      break;
+                    }
+                  }
+                }
               }
             } catch (e) {}
             dots.push({x: cx, y: cy, r: r.width / 2,
@@ -7842,10 +8313,43 @@ def _worldle_capital_pinpoint_probe(page, px, py):
                        top_cls: top ? String(
                          top.getAttribute('class') || '')
                          .slice(0, 60) : '',
-                       label: label, label_dist: labelDist,
+                       label: '', label_dist: null,
+                       overlay_label: '', overlay_label_dist: null,
+                       group_title: groupTitle,
+                       sibling_text: siblingText,
+                       grandparent_title: grandparentTitle,
+                       grandparent_text: grandparentText,
+                       grandparent_data: grandparentData,
                        parent_text: parentText,
                        parent_data: parentData});
           }
+          // Greedy mutual-nearest assignment (iter-19): sort every
+          // (dot, label) pair by distance and assign each label to
+          // at most one dot (the closest one still unlabelled).
+          // A label BETWEEN two dots no longer makes both dots
+          // claim it (old behaviour) and trip the ambiguity rule.
+          const assignNearest = (items, maxDist, key, distKey) => {
+            const pairs = [];
+            dots.forEach((d, di) => {
+              items.forEach((it, ii) => {
+                const dist = Math.hypot(it.x - d.x, it.y - d.y);
+                if (dist <= maxDist) pairs.push({dist, di, ii});
+              });
+            });
+            pairs.sort((a, b) => a.dist - b.dist);
+            const used = new Set();
+            for (const p of pairs) {
+              const d = dots[p.di];
+              if (d[key]) continue;
+              if (used.has(p.ii)) continue;
+              used.add(p.ii);
+              d[key] = items[p.ii].t;
+              if (distKey) d[distKey] = p.dist;
+            }
+          };
+          assignNearest(labelTexts, 60, 'label', 'label_dist');
+          assignNearest(overlayTexts, 80, 'overlay_label',
+                        'overlay_label_dist');
           const paths = Array.from(svg.querySelectorAll('path'));
           let inFill = false;
           const toUser = (x, y) => {
@@ -7915,11 +8419,21 @@ def _worldle_capital_pick_pin_target(probe, fit_px, cap_name):
     1. dot-name: EXACTLY ONE dot carries identifying text
        (data-* / title / aria-label / id — iter-18 also the
        nearest <text> label within 60px, the parent <g>'s text /
-       data-*, and the dot's class) naming the capital
-       (e.g. data-city="Kuwait City"). A named dot is the
-       strongest evidence the dots are candidate cities, and
-       clicking it is the game's own candidate, not a
-       projection. Two or more name matches = ambiguous -> None.
+       data-*, and the dot's class; iter-19 also the parent
+       <g>'s <title> child, sibling <text>/<title> in the same
+       group, grandparent <g> data/title/text, and HTML overlay
+       labels). Iter-19 shared-source rule: a (source, value)
+       pair appearing on 2+ dots is GROUP evidence, not dot
+       evidence, and is dropped before matching — one <g>
+       wrapping all dots + labels used to make every dot
+       "match" via the shared parent_text and trip the ambiguity
+       rule, poisoning a unique per-dot label match (the likely
+       iter-18 dot-name failure: the picker ran, dots=4, but
+       fell through to bbox-fit-in-fill). The probe also assigns
+       each <text> label to at most one dot (greedy by distance),
+       so a label between two dots no longer makes both claim it.
+       Two or more DISTINCT values naming the capital still mean
+       ambiguous -> None.
     2. bbox-fit-in-fill: the bbox-fit point is inside a country
        path's fill, so pointerdown there lands on land and can
        set pendingClickRegion. Click the fit point.
@@ -7944,7 +8458,8 @@ def _worldle_capital_pick_pin_target(probe, fit_px, cap_name):
             if isinstance(d, dict)]
     if want:
         exact, contained = [], []
-        for d in dots:
+
+        def _pairs_for(d):
             # (source, text) pairs so the log names WHERE the name
             # came from (data-attr vs label vs parent group).
             pairs = []
@@ -7952,14 +8467,47 @@ def _worldle_capital_pick_pin_target(probe, fit_px, cap_name):
                 pairs.append((f"data-{k}", str(v or "")))
             for k, v in (d.get("parent_data") or {}).items():
                 pairs.append((f"parent-data-{k}", str(v or "")))
+            for k, v in (d.get("grandparent_data") or {}).items():
+                pairs.append((f"grandparent-data-{k}", str(v or "")))
             pairs += [("title", str(d.get("title") or "")),
                       ("aria", str(d.get("aria") or "")),
                       ("id", str(d.get("id") or "")),
                       ("label", str(d.get("label") or "")),
+                      ("group_title", str(d.get("group_title") or "")),
+                      ("sibling_text",
+                       str(d.get("sibling_text") or "")),
+                      ("overlay_label",
+                       str(d.get("overlay_label") or "")),
+                      ("grandparent_title",
+                       str(d.get("grandparent_title") or "")),
+                      ("grandparent_text",
+                       str(d.get("grandparent_text") or "")),
                       ("parent_text", str(d.get("parent_text") or "")),
                       ("cls", str(d.get("cls") or ""))]
-            norms = [(_s_worldle_norm(t), src) for src, t in pairs
-                     if str(t or "").strip()]
+            return [(src, txt) for src, txt in pairs
+                    if str(txt or "").strip()]
+        # Iter-19: a name source whose normalized value is shared
+        # by 2+ dots identifies the GROUP, not the dot — e.g. one
+        # <g> wrapping all dots + labels gives every dot the same
+        # parent_text, which used to make ALL dots "match" and trip
+        # the ambiguity rule, poisoning a unique per-dot label
+        # match (the likely iter-18 dot-name failure: the picker
+        # ran, dots=4, but returned bbox-fit-in-fill). Shared
+        # (source, value) pairs are dropped BEFORE matching, so
+        # only a value unique to one dot can name that dot.
+        # Distinct values that both name the capital still hit the
+        # ambiguity rule below (-> None), never a coin-flip click.
+        _all_pairs = [_pairs_for(d) for d in dots]
+        _counts = {}
+        for _pairs in _all_pairs:
+            for _src, _txt in _pairs:
+                _key = (_src, _s_worldle_norm(_txt))
+                _counts[_key] = _counts.get(_key, 0) + 1
+        _kept = [[(src, txt) for src, txt in pairs
+                   if _counts.get((src, _s_worldle_norm(txt)), 0) == 1]
+                  for pairs in _all_pairs]
+        for d, pairs in zip(dots, _kept):
+            norms = [(_s_worldle_norm(t), src) for src, t in pairs]
             if any(n == want for n, _src in norms):
                 exact.append(d)
             elif any(want in n for n, _src in norms if n):
@@ -7967,20 +8515,11 @@ def _worldle_capital_pick_pin_target(probe, fit_px, cap_name):
         named = exact if exact else contained
         if len(named) == 1:
             d = named[0]
-            # Recompute the winning source for the log line.
+            # Recompute the winning source for the log line from
+            # the same shared-source-filtered pairs.
             _via = "?"
-            _pairs = []
-            for k, v in (d.get("data") or {}).items():
-                _pairs.append((f"data-{k}", str(v or "")))
-            for k, v in (d.get("parent_data") or {}).items():
-                _pairs.append((f"parent-data-{k}", str(v or "")))
-            _pairs += [("title", str(d.get("title") or "")),
-                       ("aria", str(d.get("aria") or "")),
-                       ("id", str(d.get("id") or "")),
-                       ("label", str(d.get("label") or "")),
-                       ("parent_text", str(d.get("parent_text") or "")),
-                       ("cls", str(d.get("cls") or ""))]
-            for _src, _t in _pairs:
+            _kept_d = _kept[dots.index(d)] if d in dots else []
+            for _src, _t in _kept_d:
                 _n = _s_worldle_norm(_t)
                 if _n == want or (want and want in _n):
                     _via = _src
@@ -8006,6 +8545,51 @@ def _worldle_capital_pick_pin_target(probe, fit_px, cap_name):
                            f"nearest in-fill point "
                            f"{float(corr.get('dist') or 0):.1f}px away")}
     return None
+
+
+def _worldle_capital_dot_attempt_summary(probe, cap_name, target):
+    """Pure: one-line evidence summary of the dot-name attempt
+    (fix-loop iter-19). Lists EVERY dot's name evidence, so a
+    future run shows WHY dot-name matched or not instead of
+    another "never attempted / zero log lines" mystery. The
+    iter-18 run proved the picker RAN (log: method=bbox-fit-in-fill,
+    dots=4) but dot-name never MATCHED — this line makes that
+    distinction visible on every run."""
+    probe = probe if isinstance(probe, dict) else {}
+    dots = [d for d in (probe.get("dots") or [])
+            if isinstance(d, dict)]
+    method = (target or {}).get("method") \
+        if isinstance(target, dict) else None
+    parts = []
+    for i, d in enumerate(dots):
+        bits = []
+        for key in ("label", "group_title", "sibling_text",
+                    "overlay_label", "title", "aria", "id", "cls"):
+            v = d.get(key)
+            if str(v or "").strip():
+                bits.append(f"{key}={str(v)[:40]!r}")
+        for k, v in (d.get("data") or {}).items():
+            if str(v or "").strip():
+                bits.append(f"data-{k}={str(v)[:40]!r}")
+        for k, v in (d.get("parent_data") or {}).items():
+            if str(v or "").strip():
+                bits.append(f"parent-data-{k}={str(v)[:40]!r}")
+        for k, v in (d.get("grandparent_data") or {}).items():
+            if str(v or "").strip():
+                bits.append(f"grandparent-data-{k}={str(v)[:40]!r}")
+        for key in ("parent_text", "grandparent_text",
+                    "grandparent_title"):
+            v = d.get(key)
+            if str(v or "").strip():
+                bits.append(f"{key}={str(v)[:40]!r}")
+        try:
+            xy = f"({float(d.get('x')):.0f},{float(d.get('y')):.0f})"
+        except (TypeError, ValueError):
+            xy = "(?,?)"
+        parts.append(f"dot{i}@{xy}: "
+                     + ("; ".join(bits) if bits else "no name evidence"))
+    return (f"capital={cap_name!r} dots={len(dots)} "
+            f"method={method} | " + " | ".join(parts))
 
 
 def _s_worldle_play_capital(page, gid, day):
@@ -8254,6 +8838,14 @@ def _s_worldle_play_capital(page, gid, day):
         _dots_before = len((_pin_probe or {}).get("dots") or [])
         _target = _worldle_capital_pick_pin_target(
             _pin_probe, (px, py), c.get("name") or "")
+        # Iter-19: the dot-name attempt is logged UNCONDITIONALLY
+        # with every dot's name evidence — attempted / dot found /
+        # method chosen — so a future "dot-name never attempted"
+        # claim is checkable in one grep. (Iter-18: the picker ran
+        # but dot-name never matched; the old log showed only
+        # "pinpoint dots=4", not WHY no dot matched.)
+        _dbg(gid, "worldle capital dot-name attempt: "
+                  f"{_worldle_capital_dot_attempt_summary(_pin_probe, c.get('name') or '', _target)}")
         if _target is not None:
             _dbg(gid, "worldle capital pin target: "
                       f"method={_target.get('method')} "
@@ -12045,7 +12637,21 @@ def _s_worldle_play_area(page, gid, day):
     sub-question is still open — play it (input / stepper), then (3)
     run the comparison branch again. The stepper probe NEVER runs
     while the comparison widget is showing. Win check:
-    guesses[0].correct == guesses[0].answer (caller arbitrates)."""
+    guesses[0].correct == guesses[0].answer (caller arbitrates).
+
+    Fix-loop iter 19 (ANALYSIS16 §6.10): the iter-18 run proved the
+    iter-12 ordering did NOT hold in the number path — after the
+    comparison's store-verify failed and the view re-switched to
+    Area, the number path ran the stepper probe ON the comparison
+    widget (its two image buttons were the "stepper candidates",
+    log line 250) and reported "stepper failed". The number path
+    now re-attempts the DELIBERATE comparison branch first; the
+    stepper probe runs only when no comparison widget is showing.
+    The win-check wording is the comparison pick, not "first
+    guess correct==answer". Outcome logic unchanged: the
+    comparison is still answered deliberately, the stepper still
+    serves a genuine numeric widget, submit-and-arbitrate still
+    arbitrates when a path cannot verify itself."""
     ds = day.get("date") or ""
     size = day.get("size")
     if size is None:
@@ -12117,7 +12723,9 @@ def _s_worldle_play_area(page, gid, day):
                 det + f"; win_check={_win_now[2]}"
         _dbg(gid, "worldle area: comparison answered but win check not "
                   "yet passing; playing the number sub-question too")
-    # (2) Number path: input/slider, else stepper, else
+    # (2) Number path: input/slider, else (comparison re-attempt
+    # first when the comparison widget is showing — iter-19, never
+    # a stepper probe on it — else stepper), else
     # submit-and-arbitrate (iter 11) when the display is unreadable.
     if not _s_worldle_pick_input(page, ["size", "area", "km", "surface"],
                                  include_range=True):
@@ -12126,30 +12734,67 @@ def _s_worldle_play_area(page, gid, day):
         _settle(page, base=2500)
     if not _s_worldle_pick_input(page, ["size", "area", "km", "surface"],
                                  include_range=True):
-        # No text/range input exists: the area widget is stepper
-        # controls + a displayed value (DOM dump n=8, no input).
-        # Drive the steppers toward the target, verifying the display.
-        ok, detail = _s_worldle_play_area_stepper(page, gid, size)
-        if not ok:
-            # Submit-and-arbitrate fallback (fix-loop iter 11): the
-            # display may be unreadable while the widget still holds
-            # a value — submit once and let the game's own win check
-            # arbitrate, instead of failing on the unreadable display.
-            _dbg(gid, f"worldle area stepper failed ({detail}); "
-                      f"submit-and-arbitrate fallback")
+        # No text/range input exists. Iter-19 (ANALYSIS16 §6.10):
+        # the widget showing here is the COMPARISON widget (two
+        # silhouette image buttons), NOT a stepper — the old code
+        # ran the stepper probe on the comparison buttons, whose
+        # probe-click accidentally answered the comparison, then
+        # reported "stepper failed". Answer the comparison
+        # DELIBERATELY via the comparison branch; the stepper probe
+        # runs ONLY when no comparison widget is showing (a genuine
+        # numeric stepper widget, or the game declined the
+        # comparison so the number is the whole round).
+        _st_c, _pick_c, _det_c = _comparison()
+        if _st_c == "attempted":
+            return "attempted", [str(size)] + picked + [_pick_c], \
+                f"area {size} km2 + {_det_c}"
+        if _st_c in ("not-present", "skipped"):
+            # No comparison widget: genuine numeric widget —
+            # stepper probe (DOM dump n=8, no input). Drive the
+            # steppers toward the target, verifying the display.
+            ok, detail = _s_worldle_play_area_stepper(page, gid, size)
+            if not ok:
+                # Submit-and-arbitrate fallback (fix-loop iter 11):
+                # the display may be unreadable while the widget
+                # still holds a value — submit once and let the
+                # game's own win check arbitrate, instead of
+                # failing on the unreadable display.
+                _dbg(gid, f"worldle area stepper failed ({detail}); "
+                          f"submit-and-arbitrate fallback")
+                _s_worldle_submit_guarded(page, gid, "area", ds)
+                _settle(page, base=2000)
+                _worldle_area_log_state(page, gid,
+                                        "after-stepper-fallback")
+                _win = _s_worldle_win_check(page, "area", day, ds)
+                if _win[0]:
+                    return "attempted", [str(size)] + picked, \
+                        f"area {size} km2 via submit-arbitrate " \
+                        f"({_win[2]}; stepper path failed: {detail})"
+                dump = _s_worldle_dom_dump(page, gid, "area")
+                return "failed", [], \
+                    f"area stepper: {detail}; submit-arbitrate " \
+                    f"win_check={_win[2]}; DOM dump logged"
+            _dbg(gid, f"worldle area stepper played: {detail}")
+        else:
+            # Comparison showing but unanswered (partial): do NOT
+            # probe-click its buttons as steppers. Submit-and-
+            # arbitrate once and let the win check arbitrate.
+            _dbg(gid, "worldle area comparison unanswered "
+                      f"({_det_c}); submit-and-arbitrate fallback "
+                      "(no stepper probe on the comparison widget)")
             _s_worldle_submit_guarded(page, gid, "area", ds)
             _settle(page, base=2000)
-            _worldle_area_log_state(page, gid, "after-stepper-fallback")
+            _worldle_area_log_state(page, gid,
+                                    "after-comparison-fallback")
             _win = _s_worldle_win_check(page, "area", day, ds)
             if _win[0]:
                 return "attempted", [str(size)] + picked, \
-                    f"area {size} km2 via submit-arbitrate ({_win[2]}; " \
-                    f"stepper path failed: {detail})"
+                    f"area {size} km2 via submit-arbitrate " \
+                    f"({_win[2]}; comparison path: {_det_c})"
             dump = _s_worldle_dom_dump(page, gid, "area")
             return "failed", [], \
-                f"area stepper: {detail}; submit-arbitrate win_check=" \
-                f"{_win[2]}; DOM dump logged"
-        _dbg(gid, f"worldle area stepper played: {detail}")
+                f"area comparison unanswered ({_det_c}); " \
+                f"submit-arbitrate win_check={_win[2]}; DOM dump logged"
     else:
         ok, detail = _s_worldle_set_picked_value(page, gid, str(int(size)),
                                                  "area")
@@ -14911,14 +15556,30 @@ def _nerdle_effective_date(now_utc=None):
     return datetime(eff.year, eff.month, eff.day)
 
 
-def _nerdle_number_gate(served, api_numbers):
+def _nerdle_site_solutions_match(site_solutions, official_eqs):
+    """Runner-side mirror of nerdle_solver._nerdle_site_solutions_match
+    (iter-19, P0): exact set equality of site solutions vs official
+    answers for site-solutions-gated modes."""
+    site = [str(e) for e in (site_solutions or [])]
+    official = [str(e) for e in (official_eqs or [])]
+    return bool(site) and bool(official) and set(site) == set(official)
+
+
+def _nerdle_number_gate(served, api_numbers, official=None):
     """Runner-side mirror of nerdle_solver._nerdle_number_gate (iter 14
-    rework): hard-check served == API ONLY for the 4 proven modes
-    (classic, mini, midi, maxi); micro/minibi/quad/instant/speed are
-    site-rules — an API mismatch there NEVER blocks shipping, and the
-    API is never cited as proof for those modes. Returns
-    (blocked, detail, per_mode). See the solver for the full rule +
-    the per-mode trust table.
+    rework; iter-19 mini fix): hard-check served == API ONLY for the
+    4 proven modes (classic, mini, midi, maxi); micro/minibi/quad/
+    instant/speed are site-rules — an API mismatch there NEVER blocks
+    shipping, and the API is never cited as proof for those modes.
+    Returns (blocked, detail, per_mode). See the solver for the full
+    rule + the per-mode trust table.
+
+    Iter-19: when mini's header EQUALS classic's header it IS the
+    global daily number, not a mode-specific sequence — the header
+    is ignored and mini gates on site_solutions == official answers
+    (exact set equality when `official` is passed). Any other mini
+    header falls through to the header-vs-API check. Keep this
+    mirror in agreement with the solver; test_iter13/14 assert it.
     """
     per_mode = {}
     blocked_reasons = []
@@ -14926,6 +15587,7 @@ def _nerdle_number_gate(served, api_numbers):
         return True, "no API puzzle numbers (API row missing)", per_mode
     served = served if isinstance(served, dict) else {}
     _proven = ("classic", "mini", "midi", "maxi")
+    _site_solutions_gated = ("mini",)
     for mode, nums in api_numbers.items():
         if mode == "classicPuzzleNumber":
             continue
@@ -14953,6 +15615,36 @@ def _nerdle_number_gate(served, api_numbers):
                     "classic served solution != API classic answer")
                 per_mode[mode]["answer"] = "mismatch"
             continue
+        if mode in _site_solutions_gated:
+            _classic_hn = (served.get("classic") or {}).get(
+                "header_number")
+            _is_global = (isinstance(hn, int)
+                          and isinstance(_classic_hn, int)
+                          and hn == _classic_hn)
+            if _is_global:
+                _site = ev.get("site_solutions") or []
+                if official is not None:
+                    _ok = _nerdle_site_solutions_match(
+                        _site, (official or {}).get(mode) or [])
+                else:
+                    _ok = ev.get("matches_target_official") is True
+                if _ok:
+                    per_mode[mode] = {
+                        "api": want, "served": hn,
+                        "status": "match (site-solutions == official; "
+                        "header is the global number, not compared)",
+                        "trust": "api-proven (site-solutions)"}
+                else:
+                    blocked_reasons.append(
+                        f"{mode} site solutions != official answers "
+                        f"(header #{hn} is the global number, not a "
+                        f"mode-specific sequence; "
+                        f"site_solutions={_site})")
+                    per_mode[mode] = {
+                        "api": want, "served": hn,
+                        "status": "blocked: site-solutions mismatch",
+                        "trust": "api-proven (site-solutions)"}
+                continue
         if mode in _proven:
             if not isinstance(hn, int):
                 per_mode[mode] = {"api": want, "served": None,
@@ -15091,8 +15783,11 @@ def run_nerdle_external(g, tgt, date_key, today, short):
             # exists for a number-mismatched board, never ship it.
             # Re-check from the solver's own record (API numbers +
             # served numbers), not from the pipeline date.
+            # Iter-19: pass the solver's official answer lists so
+            # the mini site-solutions gate checks exact set equality.
             _wd_blocked, _wd_detail, _wd_per_mode = _nerdle_number_gate(
-                rec.get("served"), rec.get("api_puzzle_numbers"))
+                rec.get("served"), rec.get("api_puzzle_numbers"),
+                official=rec.get("equations_official"))
             if _wd_blocked:
                 _dbg("nerdle", f"NUMBER GATE BLOCKED: {_wd_detail} "
                                f"— refusing to ship final")
@@ -15123,9 +15818,12 @@ def run_nerdle_external(g, tgt, date_key, today, short):
             # Iteration 2: use the REAL chapters the solver recorded (it
             # computes them from per-mode starts + card offsets). The old
             # code invented (0, mode) entries, which are not chapter times.
+            # Iter-19 (ANALYSIS16 §6 item 15): when the solver recorded
+            # NO chapters (unsolved run: no assembly, chapters=[]), emit
+            # NO chapters — the all-[0, ...] placeholders claimed nine
+            # chapters all starting at 0s. Omit, never invent.
             _ch2 = [(float(s), str(t)) for s, t in (rec.get("chapters") or [])
-                     if isinstance(s, (int, float))] or \
-                [(0, str(m.get("id"))) for m in _modes2 if isinstance(m, dict)]
+                     if isinstance(s, (int, float))]
             # Embed chapters into the MP4 (iteration 2): the nerdle path
             # never ran _embed_chapters, so rerun #1 had 0 embedded chapters.
             try:
@@ -15556,7 +16254,10 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
             print(f"[{gid}] assembly fallback raw: {str(e)[:200]}")
             chapters = [(0, "The solve")]
     else:
-        chapters = [(0, "The solve")]
+        # Iter-19: unsolved Framed has no final (vpath=None above),
+        # so no chapters — a [(0, 'The solve')] placeholder would
+        # claim a chapter for a video that does not exist.
+        chapters = [] if not solved else [(0, "The solve")]
     _upload_framed(gid, g, today, short, answers, chapters, final)
     _fpr = _probe_video(final) if final else {}
     # Visible-content QC (shared helper): never QC PASS a blank video.
@@ -16113,7 +16814,11 @@ def run_one(gid):
         except Exception:
             pass
         final = None
-        chapters = [(0, "The solve")]
+        # Iter-19 (ANALYSIS16 §6 item 15): no publishable video, so
+        # no chapters — [[0, 'The solve']] claimed a chapter for a
+        # final that does not exist (Worldle unsolved). Omit, never
+        # invent placeholder chapters for unsolved games.
+        chapters = []
     # Quordle-parity assembly:
     #   recap(5s) + hints(10s) + gameplay + reveal(8s) + facts(8s) + teaser(5s)
     #   + uniform music + SRT captions + real chapter list

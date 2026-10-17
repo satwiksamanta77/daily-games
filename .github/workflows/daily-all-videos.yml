@@ -1797,11 +1797,23 @@ jobs:
           pattern: video-*
           path: all-artifacts
           merge-multiple: false
-      - name: Exclude unsolved games' finals from the pack
+      - name: Exclude unsolved games' finals and gameplay from the pack
         # Fix-loop iter 6: the pack zips this run's artifacts, so an
         # unsolved game's assembled final (nerdle rerun #5: a 33 s final
         # for solved=False) would ship as if solved. Delete *_final_*.mp4
         # in any per-game dir whose result.json says solved=False.
+        # Fix-loop iter 19 (ANALYSIS16 §5): the finals gate held, but
+        # the pack still shipped UNSOLVED raw gameplay —
+        # video-nerdle/gameplay_1080.mp4 (339 s, maxi unwon) and
+        # video-worldle/gameplay_1080.mp4 (366 s, Capital partial) —
+        # because the filter only deleted finals. Root cause: the pack
+        # zipped per-game dirs wholesale instead of finals-only. Now
+        # EVERY mp4 in a solved=False dir is dropped from the staging
+        # copy (finals, gameplay, quarantined files alike), so the pack
+        # is finals (+ solved gameplay) ONLY. The per-game artifacts
+        # themselves are untouched — this deletes from the downloaded
+        # staging copy only. A follow-up verification step fails the
+        # job if any mp4 survives in an unsolved dir (fail-closed).
         run: |
           python - <<'PYEOF'
           import json, pathlib
@@ -1812,9 +1824,32 @@ jobs:
               except Exception:
                   continue
               if solved is False:
-                  for mp4 in res.parent.glob("*_final_*.mp4"):
-                      print(f"bundle filter: dropping unsolved final {mp4}")
+                  for mp4 in sorted(res.parent.glob("*.mp4")):
+                      print(f"bundle filter: dropping unsolved video {mp4}")
                       mp4.unlink()
+          PYEOF
+      - name: Verify no unsolved video survived the bundle filter
+        # Fail-closed: if the filter above ever stops deleting (glob
+        # change, new filename), the job fails instead of shipping
+        # unsolved footage as if it were a solved video.
+        run: |
+          python - <<'PYEOF'
+          import json, pathlib, sys
+          root = pathlib.Path("all-artifacts")
+          leaked = []
+          for res in sorted(root.glob("video-*/result.json")):
+              try:
+                  solved = json.loads(res.read_text()).get("solved")
+              except Exception:
+                  continue
+              if solved is False:
+                  leaked.extend(sorted(res.parent.glob("*.mp4")))
+          if leaked:
+              print("bundle filter LEAK: unsolved videos remain:")
+              for mp4 in leaked:
+                  print(f"  {mp4}")
+              sys.exit(1)
+          print("bundle filter verified: no mp4 in any solved=False dir")
           PYEOF
       - name: Zip into one pack
         run: |

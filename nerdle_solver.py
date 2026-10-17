@@ -166,21 +166,64 @@ def _target_date():
 # 1/2 equations matched), so for those modes the SITE's served
 # answers rule: an API mismatch NEVER blocks shipping, and the API
 # is never cited as proof for those modes. Gate stays FAIL-CLOSED.
+# Iter-19 exception (ANALYSIS16 §2a): mini's ANSWERS are still
+# API-proven (site_solutions must equal the official answers), but
+# its HEADER is not API-compared — the site shows the global daily
+# number on the mini page. See NERDLE_SITE_SOLUTIONS_GATED_MODES.
 NERDLE_API_PROVEN_MODES = ("classic", "mini", "midi", "maxi")
 NERDLE_API_UNPROVEN_MODES = ("micro", "minibi", "quad", "instant", "speed")
 
 
-def _nerdle_number_gate(served, api_numbers):
-    """Hard gate (iter 14 rework): hard-check served == API ONLY for
-    the 4 PROVEN modes (classic, mini, midi, maxi). Returns
-    (blocked, detail, per_mode dict).
+# Modes whose site header carries the site's GLOBAL daily number while
+# the API numbers the mode on a SEPARATE sequence (iter-19, ANALYSIS16
+# §2a/§6.1, P0): mini's own nav header reads 'mini nerdle . #1733'
+# (the global number) but the API's mini numbers are [497]. Comparing
+# mini's header against the API mini index is apples-to-oranges and
+# false-blocked iter-18. These modes gate on
+# site_solutions == official answers, NEVER on header-vs-API.
+# NOT in this set: midi — midi's header ALSO reads the global #1733,
+# but the API's midi numbers ARE the global sequence ([1733] in the
+# iter-13/14 fixtures and in the iter-18 run, where midi did not
+# block), so header-vs-API is apples-to-apples for midi and stays.
+# Maxi's header is mode-specific (#1368 vs global #1733). Classic's
+# header IS the global sequence by definition.
+NERDLE_SITE_SOLUTIONS_GATED_MODES = ("mini",)
+
+
+def _nerdle_site_solutions_match(site_solutions, official_eqs):
+    """Exact day-proof for site-solutions-gated modes (iter-19, P0).
+
+    True iff the site exposed solutions AND, as sets, they equal the
+    official answers for the mode. Set equality (not any-overlap):
+    a partial overlap is NOT a match. Pure (unit-tested).
+    """
+    site = [str(e) for e in (site_solutions or [])]
+    official = [str(e) for e in (official_eqs or [])]
+    return bool(site) and bool(official) and set(site) == set(official)
+
+
+def _nerdle_number_gate(served, api_numbers, official=None):
+    """Hard gate (iter 14 rework; iter-19 mini fix): hard-check served
+    == API ONLY for the 4 PROVEN modes (classic, mini, midi, maxi).
+    Returns (blocked, detail, per_mode dict).
 
     - proven modes: an exposed header_number must be a MEMBER of the
       API's puzzleNumbers for that mode; a served-answer mismatch
       (matches_target_official is False) BLOCKS. Classic additionally
       REQUIRES a header number (missing blocks) — classic is the day
-      proof. For mini/midi/maxi a missing header is a warning (the
-      site may not expose it), but the answer check still gates.
+      proof. For midi/maxi a missing header is a warning (the site
+      may not expose it), but the answer check still gates.
+    - mini (iter-19, P0): the header comparison applies ONLY when
+      mini's header is NOT the global number. When mini's header
+      EQUALS classic's header, it IS the global daily number (the
+      site's nav shows the global number on the mini page), not a
+      mode-specific sequence — the header is ignored and mini gates
+      on site_solutions == official answers (exact set equality
+      when `official` is passed; the matches_target_official flag
+      otherwise). With the global header and no site-solutions
+      proof, mini BLOCKS (fail-closed: no day-proof). The gate stays
+      FAIL-CLOSED — only the comparison is fixed, never the
+      fail-closed behaviour.
     - unproven modes (micro/minibi/quad/instant/speed): the SITE's
       served answers rule. Header mismatch, missing header, and
       answer mismatch are WARNINGS only — never blocking. Do NOT
@@ -219,6 +262,47 @@ def _nerdle_number_gate(served, api_numbers):
                     "classic served solution != API classic answer")
                 per_mode[mode]["answer"] = "mismatch"
             continue
+        if mode in NERDLE_SITE_SOLUTIONS_GATED_MODES:
+            # Iter-19 (P0): mini's header is the GLOBAL number iff it
+            # equals classic's header (classic IS the global
+            # sequence). Only then is header-vs-API apples-to-oranges:
+            # ignore the header, gate on site_solutions == official.
+            # Any other mini header (a mode-specific claim, or
+            # classic's header unknown) falls through to the
+            # header-vs-API check below — the pre-iter-19 behaviour.
+            _classic_hn = (served.get("classic") or {}).get(
+                "header_number")
+            _is_global = (isinstance(hn, int)
+                          and isinstance(_classic_hn, int)
+                          and hn == _classic_hn)
+            if _is_global:
+                _site = ev.get("site_solutions") or []
+                if official is not None:
+                    _ok = _nerdle_site_solutions_match(
+                        _site, (official or {}).get(mode) or [])
+                else:
+                    # Legacy callers (no official list): the
+                    # matches_target_official flag is the only
+                    # day-proof available — True passes, anything
+                    # else blocks (fail-closed: no proof).
+                    _ok = ev.get("matches_target_official") is True
+                if _ok:
+                    per_mode[mode] = {
+                        "api": want, "served": hn,
+                        "status": "match (site-solutions == official; "
+                        "header is the global number, not compared)",
+                        "trust": "api-proven (site-solutions)"}
+                else:
+                    blocked_reasons.append(
+                        f"{mode} site solutions != official answers "
+                        f"(header #{hn} is the global number, not a "
+                        f"mode-specific sequence; "
+                        f"site_solutions={_site})")
+                    per_mode[mode] = {
+                        "api": want, "served": hn,
+                        "status": "blocked: site-solutions mismatch",
+                        "trust": "api-proven (site-solutions)"}
+                continue
         if proven:
             if not isinstance(hn, int):
                 per_mode[mode] = {"api": want, "served": None,
@@ -316,6 +400,18 @@ def _nerdle_own_header_from_probe(probe, mode_id=None):
         if not isinstance(ent, dict):
             continue
         text = str(ent.get("text") or "")
+        # Iter-19 (P2, minibi header scope): the site spells the
+        # mode "mini-bi" (its About popup reads 'About mini-bi
+        # nerdle'), so a minibi header line reads 'mini-bi nerdle .
+        # #<n>'. The prefix matcher below only knows "minibi" — an
+        # un-normalized line yields prefix "bi", which matches
+        # nothing, so minibi's own header was rejected as chrome
+        # and the probe fell back to popup/about text. Normalize
+        # the hyphenated (and spaced) spelling before matching.
+        text = _re.sub(r"mini\s*-\s*bi", "minibi", text,
+                       flags=_re.IGNORECASE)
+        text = _re.sub(r"mini\s+bi(?=\s+nerdle)", "minibi", text,
+                       flags=_re.IGNORECASE)
         # finditer, not search: one container entry can hold SEVERAL
         # mode logo lines (nav listing every variant); the mode's own
         # line may not be the first match in that entry.
@@ -754,10 +850,22 @@ SERVED_JS = """
   // strategies (header-element, hash-element, data-attribute, url,
   // json-blob-or-body) — first plausible number wins — and
   // logs which strategy matched + the raw header text.
+  // Iter-19 (P2, minibi header scope): the header probe must read
+  // the GAME header element, not popup/about text — the minibi
+  // probe returned header_text 'About mini-bi nerdle … | You won!'
+  // because an About/win-popup title element matched the loose
+  // header/title selectors. Exclude any element inside a
+  // dialog/modal/popup/about/overlay container (closest() covers
+  // the element itself), and include the site's own nav bar
+  // (.main-nav) explicitly.
+  const _inPopup = (el) => { try {
+    return !!el.closest('[role="dialog"], [class*="modal" i], ' +
+      '[class*="popup" i], [class*="about" i], [class*="overlay" i], ' +
+      '[aria-hidden="true"]'); } catch (e) { return false; } };
   const headerEls = Array.from(document.querySelectorAll(
     'header, h1, h2, [class*=header i], [id*=header i], ' +
-    '[class*=title i], [id*=title i]'))
-    .filter(e => e && e.offsetParent !== null);
+    '[class*=title i], [id*=title i], [class*=main-nav i]'))
+    .filter(e => e && e.offsetParent !== null && !_inPopup(e));
   const header_text = headerEls
     .map(e => (e.innerText || '').trim()).filter(Boolean).join(' | ')
     .slice(0, 2000);
@@ -813,6 +921,12 @@ SERVED_JS = """
            text: t.split('\\n').join(' ').replace(/  +/g, ' ').trim().slice(0, 120)});
       }
     }
+    // Iter-19 (P2, minibi header scope): skip popup/about
+    // elements for the OWN-HEADER collection (the diagnostics
+    // above stay unfiltered, so a future empty capture is still
+    // diagnosable). The game header is never inside a dialog /
+    // modal / popup / about container; the About/win popup is.
+    if (_inPopup(e)) continue;
     if (!t || t.length > 300) continue;
     // Iter-18 (ANALYSIS15 §1): the logo spans split `nerdle .` and
     // `#1733` onto SEPARATE innerText lines, so the per-line test
@@ -844,6 +958,9 @@ SERVED_JS = """
     try { const _r = e.getBoundingClientRect();
       visRect = _r.width > 0 && _r.height > 0; } catch (_err) {}
     if (!visRect) continue;
+    // Iter-19 (P2): same popup/about scoping as the header probe —
+    // a win-popup '#<digits>' must never feed the legacy strategies.
+    if (_inPopup(e)) continue;
     const t = (e.innerText || e.textContent || '').trim();
     if (t && /#\\s*\\d/.test(t) && t.length <= 200) hash_texts.push(t);
   }
@@ -874,10 +991,68 @@ SERVED_JS = """
 } catch (e) { return { error: String(e) }; } }
 """
 
+def _solutions_played_cover(played, solutions):
+    """True when every solution in `solutions` was played (iter-19,
+    P2, ANALYSIS16 §6.13). Pure. A played row counts via
+    _row_matches_equation, so the DOM-normalized plain-2 form of a
+    superscript equation (row "12+67+8=76" for "1²+67+8=76") still
+    counts. Empty `solutions` (unknown) counts as covered — the
+    caller falls back to the per-board grid check alone.
+    """
+    played = [str(p) for p in (played or [])]
+    for s in (solutions or []):
+        if not any(_row_matches_equation(p, s) for p in played):
+            return False
+    return True
+
+
+async def _check_win_verified(page, cols, boards_n, state, played,
+                              solutions):
+    """Page-win check with multi-board verification (iter-19, P2,
+    ANALYSIS16 §6.13: speed typed only 1 of 2 site solutions yet
+    signal='won' rested on the page wonText).
+
+    Single-board modes: WIN_JS as-is (page wonText or a fully-green
+    row). Multi-board modes (speed/quad/minibi): the page wonText
+    must NEVER win on its own — it can appear while only ONE board
+    is solved. A multi-board win additionally requires EVERY grid
+    solved AND every known site solution played. Returns False
+    (never raises) on probe failure. `solutions` is the SITE
+    solution pool (answer files + gameState), NOT the merged
+    solver pool — padded worker guesses are not solutions and must
+    never gate a win.
+    """
+    try:
+        won = bool(await page.evaluate(
+            WIN_JS, {"cols": cols, "boards": boards_n}))
+    except Exception:
+        return False
+    if not won:
+        return False
+    if boards_n <= 1:
+        return True
+    if not (isinstance(state, list) and len(state) >= boards_n
+            and all(grid_solved(g) for g in state)):
+        print(f"[nerdle] multi-board win UNVERIFIED: page reports "
+              f"won but not all {boards_n} grids solved — continuing")
+        return False
+    if solutions and not _solutions_played_cover(played, solutions):
+        print(f"[nerdle] multi-board win UNVERIFIED: all grids solved "
+              f"but not all site solutions played "
+              f"(played={played} solutions={solutions}) — continuing")
+        return False
+    return True
+
+
 WIN_JS = """
 ({cols, boards}) => {
   const t = document.body.innerText || '';
-  if (/you won|won in \\d|great job/i.test(t)) return true;
+  // Iter-19 (P2, ANALYSIS16 §6.13): for multi-board modes (speed:
+  // 2 boards) the page wonText can appear while only ONE board is
+  // solved — it must NOT count as a win. The text branch applies
+  // to single-board modes only; multi-board modes must show
+  // `boards` fully-green rows (the count below).
+  if (boards <= 1 && /you won|won in \\d|great job/i.test(t)) return true;
   const green = (c) => (c.className || '').includes('398874')
                         || (c.className || '').includes('66FF66');
   let full = 0;
@@ -1152,6 +1327,9 @@ async def accept_cookies(page, quiet=False):
 
 
 async def dismiss_modals(page, has_grid):
+    """Dismiss splash/hint modals. Returns True iff something was
+    dismissed (iter-19: the pre-guess stage uses this to decide
+    whether a second accept_cookies scan is worth running)."""
     sels = ["button:has-text('play now')", "button:has-text('Play Now')",
             "button:has-text('Accept')", "button:has-text('Got it')",
             "button:has-text('X Disable Hints')", "button:has-text('Disable Hints')",
@@ -1168,9 +1346,10 @@ async def dismiss_modals(page, has_grid):
                     # pointer events, JS click bypasses hit-testing).
                     await el.evaluate("(e) => e.click()")
                 await page.wait_for_timeout(600)
-                return
+                return True
         except Exception:
             continue
+    return False
 
 
 SPLASH_JS = """
@@ -1219,10 +1398,39 @@ async def sweep_popups(page, tag=""):
     return acted
 
 
+# Shared power-key matcher (iter-19, P0): the ²/³ on-screen key is
+# matched by SEVERAL selectors, not just an exact aria-label.
+# Iter-18's exact aria-label match returned clicked=False on the
+# SECOND ² in the same session while the X² button was visibly
+# present (frame gp_0190) — a single-selector, single-attempt click
+# is too brittle against a keyboard that re-renders between
+# guesses (transient absence / label variance such as 'x²').
+# Candidates, in order: aria-label exact, aria-label 'x²'/'X²',
+# short aria-label/text containing the char, button text exact /
+# 'x²', data-key/data-char. The short-length guard on the
+# contains-matches keeps a '10²'-style label from matching.
+_POWER_BTN_MATCH_JS = """
+  const norm = (s) => (s || '').trim();
+  const isPowerBtn = (b) => {
+    if (!b) return false;
+    const aria = norm(b.getAttribute('aria-label'));
+    if (aria === ch) return true;
+    if (aria === 'x' + ch || aria === 'X' + ch) return true;
+    if (aria.length <= 3 && aria.includes(ch)) return true;
+    const txt = norm(b.textContent);
+    if (txt === ch || txt === 'x' + ch || txt === 'X' + ch) return true;
+    if (txt.length <= 3 && txt.includes(ch)) return true;
+    if (b.dataset && (b.dataset.key === ch || b.dataset.char === ch))
+      return true;
+    return false;
+  };
+  const b = Array.from(document.querySelectorAll('button'))
+    .find(isPowerBtn);
+"""
+
 CLICK_POWER_JS = """
 (ch) => {
-  const b = Array.from(document.querySelectorAll('button'))
-    .find(x => (x.getAttribute('aria-label') || '').trim() === ch);
+""" + _POWER_BTN_MATCH_JS + """
   if (!b) return false;
   // Iter-17: NO offsetParent filter — a position:fixed keyboard bar
   // has offsetParent === null in Chrome, so the old filter could
@@ -1239,8 +1447,7 @@ CLICK_POWER_JS = """
 
 POWER_BTN_BOX_JS = """
 (ch) => {
-  const b = Array.from(document.querySelectorAll('button'))
-    .find(x => (x.getAttribute('aria-label') || '').trim() === ch);
+""" + _POWER_BTN_MATCH_JS + """
   if (!b) return null;
   try { b.scrollIntoView({block: 'center'}); } catch (e) {}
   const r = b.getBoundingClientRect();
@@ -1249,6 +1456,56 @@ POWER_BTN_BOX_JS = """
           w: r.width, h: r.height};
 }
 """
+
+
+async def _click_power_key(page, ch, attempts=4, wait_ms=200):
+    """Click the on-screen power key `ch` (²/³), re-querying FRESH on
+    every attempt (iter-19, P0, ANALYSIS16 §2b).
+
+    Iter-18's ladder called CLICK_POWER_JS once per method: the
+    second ² in a session returned clicked=False while the X²
+    button was visibly present, and the ladder fell through to
+    coordinate / clipboard / insert_text — which failed the same
+    way. The failure is a single-attempt click against a keyboard
+    that re-renders between guesses (transient absence / label
+    variance), NOT a missing button. So: fresh query per attempt
+    (the JS re-queries document on every call — no handle is ever
+    reused across guesses), up to `attempts` attempts with a short
+    settle wait between them. Returns True on the first reported
+    click. Verification still happens in type_equation (tile/sup
+    delta); this helper only delivers the click.
+    """
+    for _ in range(max(1, attempts)):
+        try:
+            if await page.evaluate(CLICK_POWER_JS, ch):
+                return True
+        except Exception:
+            pass
+        try:
+            await page.wait_for_timeout(wait_ms)
+        except Exception:
+            pass
+    return False
+
+
+async def _power_button_box(page, ch, attempts=4, wait_ms=200):
+    """Bounding-box centre of the on-screen power key `ch`,
+    re-queried fresh per attempt (iter-19, P0 — same
+    transient-absence cause as _click_power_key). Returns the box
+    dict or None.
+    """
+    for _ in range(max(1, attempts)):
+        try:
+            box = await page.evaluate(POWER_BTN_BOX_JS, ch)
+            if box and box.get("x") is not None:
+                return box
+        except Exception:
+            pass
+        try:
+            await page.wait_for_timeout(wait_ms)
+        except Exception:
+            pass
+    return None
 
 
 def _last_evaluated_text(state):
@@ -1568,6 +1825,18 @@ async def type_equation(page, eq, delay=200):
          events; verified, never assumed).
     Typing speed / pacing is UNCHANGED: `delay` still applies to
     plain-text typing; only the superscript entry ladder changed.
+
+    Iter-19 (P0, ANALYSIS16 §2b): the iter-17/18 ladder made ² entry
+    work ONCE — maxi guess 3 js-click clicked=True, guess 4
+    clicked=False with the X² button visibly present (frame
+    gp_0190), 3x ~21s stalls. The click path was a SINGLE attempt
+    against a keyboard that re-renders between guesses. Now the
+    js-click (and the coordinate box) re-query the X² button FRESH
+    before every ² entry — up to 4 attempts with a short settle
+    between, never a reused handle/selector across guesses — and
+    match by several selectors (aria-label exact / 'x²', button
+    text, data-key). Verification is unchanged: tile/sup count
+    (sup 0->1), never U+00B2 text count; max one entry per ².
     """
     if not any(c in eq for c in "²³"):
         await page.keyboard.type(eq, delay=delay)
@@ -1609,16 +1878,25 @@ async def type_equation(page, eq, delay=200):
                             "clipboard paste", "insert_text"):
                 _delivered = False
                 if _method == "js-click":
-                    # Method 1: JS click on the re-found button.
+                    # Method 1: JS click via _click_power_key —
+                    # iter-19 (P0): the button is re-queried FRESH
+                    # on every attempt (up to 4, short settle
+                    # between), never a single-attempt click and
+                    # never a reused handle/selector across guesses.
+                    # Iter-18's single attempt returned
+                    # clicked=False on the 2nd ² while the X² button
+                    # was visibly present.
                     _delivered = bool(
-                        await page.evaluate(CLICK_POWER_JS, part))
+                        await _click_power_key(page, part))
                     print(f"[type] stage superscript {part!r} js-click "
                           f"clicked={_delivered} "
                           f"+{time.time() - _t_part:.1f}s")
                 elif _method == "coordinate click":
-                    # Method 2: coordinate click on the button's centre.
+                    # Method 2: coordinate click on the button's
+                    # centre (iter-19: box also re-queried fresh
+                    # per attempt via _power_button_box).
                     try:
-                        _box = await page.evaluate(POWER_BTN_BOX_JS, part)
+                        _box = await _power_button_box(page, part)
                         if _box and _box.get("x") is not None:
                             await page.mouse.click(_box["x"], _box["y"])
                             try:
@@ -2036,7 +2314,14 @@ async def _nerdle_fresh_board(page, mode):
         try:
             await page.goto(mode["url"], wait_until="domcontentloaded",
                             timeout=45000)
-            await page.wait_for_timeout(1500)
+            # Iter-19 (P2, leading-wait trim): the fixed 1500ms
+            # post-reload wait was pure idle whenever the grid was
+            # already present. Wait for the grid (same 1500ms cap)
+            # and proceed the moment it appears.
+            try:
+                await page.wait_for_selector("div.pb-grid", timeout=1500)
+            except Exception:
+                await page.wait_for_timeout(400)
         except Exception as _e:
             _nlog(f"[{mode['id']}] fresh-board reload failed: {str(_e)[:100]}")
     try:
@@ -2155,9 +2440,15 @@ async def play_mode(page, mode, script_dir, official=None):
                 pass
             await page.wait_for_timeout(400)
         _stage("escape")
-        await accept_cookies(page)
-        await dismiss_modals(page, has_grid=True)
-        await accept_cookies(page)
+        # Iter-19 (P2, leading-wait trim): the second accept_cookies
+        # scan is pure redundancy when the first found nothing to
+        # dismiss and no modal was dismissed — each scan walks every
+        # frame x every consent selector. Re-run only if something
+        # was dismissed (a dismissal can reveal a second banner).
+        _cookies_acted = await accept_cookies(page)
+        _modals_acted = await dismiss_modals(page, has_grid=True)
+        if _cookies_acted or _modals_acted:
+            await accept_cookies(page)
         _stage("cookies/modals")
         state = await read_state(page, cols, tries=6)
         _stage(f"read_state state={'found' if state else 'empty'}")
@@ -2192,8 +2483,14 @@ async def play_mode(page, mode, script_dir, official=None):
             except Exception:
                 return False
 
-        await sweep_popups(page, tag=f":{mode['id']}")
-        _stage("pre-loop sweep")
+        # Iter-19 (P2, leading-wait trim): the standalone
+        # "pre-loop sweep" is REMOVED — the main loop sweeps at the
+        # top of every iteration (including the first), and the
+        # instant/legacy branches sweep before typing (below), so
+        # this sweep ran back-to-back with the next one with no
+        # navigation or time between. Dropping it removes one full
+        # sweep from the leading wait. Typing speed / pacing
+        # unchanged.
 
         if mode["id"] == "instant":
             # hint row is the pre-given starter; exactly one guess allowed.
@@ -2209,6 +2506,10 @@ async def play_mode(page, mode, script_dir, official=None):
                     _st, _ct, _ok = await type_guess(page, eqs[0], cols, prev)
                     _submitted = bool(_ok)
                 else:
+                    # Iter-19: this path bypasses type_guess (so no
+                    # priming sweep) — sweep here, since the
+                    # pre-loop sweep was removed.
+                    await sweep_popups(page, tag=f":{mode['id']}")
                     _prev0 = [eval_count(g) for g in (state or [])]
                     await page.keyboard.type(eqs[0], delay=200)
                     await page.keyboard.press("Enter")
@@ -2242,6 +2543,9 @@ async def play_mode(page, mode, script_dir, official=None):
                     PLAYED[mode["id"]] = []
         elif not state:
             print(f"[{mode['id']}] no pb-grid found, legacy direct typing")
+            # Iter-19: this path never enters the loop (so no loop
+            # sweep) — sweep here, since the pre-loop sweep was removed.
+            await sweep_popups(page, tag=f":{mode['id']}")
             await focus_grid(page)
             PLAYED[mode["id"]] = []
             for eq in eqs:
@@ -2300,7 +2604,15 @@ async def play_mode(page, mode, script_dir, official=None):
                 if len(state) >= boards_n and all(grid_solved(g) for g in state):
                     signal = "won"
                     break
-                if await check_win():
+                # Iter-19 (P2): wonText alone never wins a
+                # multi-board mode — _check_win_verified requires
+                # every grid solved + every site solution played.
+                # `pool` is the SITE solution pool (not the merged
+                # solver pool); `typed_guesses + played_here` is
+                # everything submitted so far.
+                if await _check_win_verified(
+                        page, cols, boards_n, state,
+                        list(typed_guesses) + list(played_here), pool):
                     signal = "won"
                     break
                 await sweep_popups(page, tag=f":{mode['id']}")
@@ -2466,7 +2778,11 @@ async def play_mode(page, mode, script_dir, official=None):
                 if fresh and len(fresh) >= boards_n and all(
                         grid_solved(g) for g in fresh):
                     signal = "won"
-                elif not signal and await check_win():
+                # Iter-19 (P2): same multi-board verification as
+                # the loop — wonText alone never wins speed/quad/
+                # minibi. played_here holds the read-back rows.
+                elif await _check_win_verified(
+                        page, cols, boards_n, fresh, played_here, pool):
                     signal = "won"
 
         if not signal:
@@ -2584,8 +2900,15 @@ async def play_mode(page, mode, script_dir, official=None):
             _nlog(f"[{mode['id']}] shot failed: {str(_e)[:120]}")
         if not signal:
             try:
-                won = await page.evaluate(WIN_JS, {"cols": cols, "boards": boards_n})
-                if won:
+                # Iter-19 (P2): final win check goes through the
+                # same multi-board verification — a bare WIN_JS
+                # wonText never wins speed/quad/minibi. Fresh state
+                # + PLAYED read-back rows are the evidence.
+                _fresh_final = await read_state(page, cols, tries=2)
+                _played_final = list(PLAYED.get(mode["id"]) or [])
+                if await _check_win_verified(
+                        page, cols, boards_n, _fresh_final,
+                        _played_final, pool):
                     signal = "won"
             except Exception as e:
                 print(f"[{mode['id']}] win check failed: {e}")
@@ -2889,8 +3212,11 @@ async def main():
     # upload, exit 1). Gate stays FAIL-CLOSED.
     # Target date + API numbers + served numbers are ALL logged per
     # mode below, so the rerun artifact proves the gate's inputs.
+    # Iter-19: pass the official answer lists so the mini
+    # site-solutions gate can check exact set equality (see
+    # _nerdle_number_gate).
     _wd_blocked, _wd_detail, _wd_per_mode = _nerdle_number_gate(
-        SERVED, api_numbers)
+        SERVED, api_numbers, official=official)
     _nlog(f"[nerdle] number gate: target={date_key} "
           f"api_classic=#{api_numbers.get('classicPuzzleNumber')} "
           f"blocked={_wd_blocked} detail={_wd_detail}")

@@ -342,8 +342,10 @@ class TestBannerProbeTruthful(unittest.TestCase):
         self.assertIn("shadowRoot", src)
         self.assertIn("contentDocument", src)
         self.assertIn("textContent", src)
-        # The JS is evaluated twice (initial + re-scan on absent).
-        self.assertEqual(src.count("page.evaluate(_JS)"), 2)
+        # The JS is evaluated at least twice (initial + re-scan on
+        # absent; iter-19 adds a third call site: the re-probe
+        # after an iframe-banner corner click).
+        self.assertGreaterEqual(src.count("page.evaluate(_JS)"), 2)
         # Rect-based visibility (iter-16 constraint, kept).
         self.assertIn("getBoundingClientRect", src)
         self.assertNotIn("e.offsetParent", src)
@@ -385,15 +387,16 @@ class TestLiveRoundsReaderLeaves(unittest.TestCase):
         self.assertEqual(got["unmapped"], ["Mystery Round"])
 
     def test_no_container_retries_toggle_then_returns_none(self):
-        # First scan: no container (dropdown was already open, so
-        # the first click CLOSED it). Second scan after the re-open
-        # click: still no container -> None, never a faked read.
+        # Iter-19: three attempts (scan-first, toggle+scan,
+        # Escape+toggle+scan) before concluding None, never a
+        # faked read. (Iter-18: two scans — the scan-first attempt
+        # is new.)
         page = self._page([{"entries": [], "container": False},
                            {"entries": [], "container": False}])
         self.assertIsNone(R._s_worldle_live_round_modes(page, "worldle"))
-        self.assertEqual(page._scan_calls(), 2,
-                         "the reader must re-scan after the re-open "
-                         "click before concluding unreadable")
+        self.assertEqual(page._scan_calls(), 3,
+                         "the reader must run all three attempts "
+                         "before concluding unreadable")
 
     def test_second_scan_success_is_used(self):
         # Already-open dropdown: first scan misses (closed by the
