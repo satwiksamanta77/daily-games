@@ -238,15 +238,33 @@ const CHIP_MONTREAL = mkEl('Montreal', 900, 300, 160, 44, []);
 const CHIP_OTTAWA = mkEl('Ottawa', 900, 360, 160, 44, []);
 const CHIP_TORONTO = mkEl('Toronto', 900, 420, 160, 44, []);
 const CHIP_CALGARY = mkEl('Calgary', 900, 480, 160, 44, []);
-const SLOT1 = mkEl('1. 3M', 300, 300, 200, 60, []);
-const SLOT2 = mkEl('2. 2M', 300, 380, 200, 60, []);
-const SLOT3 = mkEl('3. 1M', 300, 460, 200, 60, []);
-const SLOT4 = mkEl('4. 1M', 300, 540, 200, 60, []);
+// Iter-36 true shape (35b/ANALYSIS34 f_345): rank numeral leaf
+// + bucket leaf side by side ("1." + "3M"), NO single leaf
+// carrying "1. 3M". Pills sit directly below each pair.
+const RANK1 = mkEl('1.', 300, 300, 20, 24, []);
+const RANK2 = mkEl('2.', 300, 390, 20, 24, []);
+const RANK3 = mkEl('3.', 300, 480, 20, 24, []);
+const RANK4 = mkEl('4.', 300, 570, 20, 24, []);
+const BUCKET1 = mkEl('3M', 325, 300, 40, 24, []);
+const BUCKET2 = mkEl('2M', 325, 390, 40, 24, []);
+const BUCKET3 = mkEl('1M', 325, 480, 40, 24, []);
+const BUCKET4 = mkEl('1M', 325, 570, 40, 24, []);
+const ICON1 = mkEl('', 368, 355, 24, 24, []);
+const ICON2 = mkEl('', 368, 445, 24, 24, []);
+const ICON3 = mkEl('', 368, 535, 24, 24, []);
+const ICON4 = mkEl('', 368, 625, 24, 24, []);
+const PILL1 = mkEl('', 280, 340, 200, 60, [ICON1]);
+const PILL2 = mkEl('', 280, 430, 200, 60, [ICON2]);
+const PILL3 = mkEl('', 280, 520, 200, 60, [ICON3]);
+const PILL4 = mkEl('', 280, 610, 200, 60, [ICON4]);
 const CONTAINER = mkEl('Toronto\\ncontainer', 100, 100, 300, 200,
   [CHIP_TORONTO]);
 const CHROME = mkEl('Guess', 500, 700, 120, 44, []);
 const ALL = [NAV_TORONTO, CHIP_MONTREAL, CHIP_OTTAWA, CHIP_TORONTO,
-  CHIP_CALGARY, SLOT1, SLOT2, SLOT3, SLOT4, CONTAINER, CHROME];
+  CHIP_CALGARY, RANK1, RANK2, RANK3, RANK4,
+  BUCKET1, BUCKET2, BUCKET3, BUCKET4,
+  ICON1, ICON2, ICON3, ICON4, PILL1, PILL2, PILL3, PILL4,
+  CONTAINER, CHROME];
 global.document = { querySelectorAll: (sel) => ALL };
 """
 
@@ -271,9 +289,113 @@ class TestPopulousProbeIter35(unittest.TestCase):
         self.assertEqual([s["rank"] for s in slots], [1, 2, 3, 4])
         self.assertEqual([s["label"] for s in slots],
                          ["1. 3M", "2. 2M", "3. 1M", "4. 1M"])
+        # Drop targets are the PILL centres below each pair, not
+        # the label centres (labels sit just above the pills;
+        # pill centres are (380, 370/460/550/640)).
+        self.assertEqual([(s["x"], s["y"]) for s in slots],
+                         [(380.0, 370.0), (380.0, 460.0),
+                          (380.0, 550.0), (380.0, 640.0)])
+        self.assertTrue(all(s["pill"] for s in slots))
         # Nav-contained 'Toronto' must NOT double-count; the
         # container DIV (has children) is not a leaf.
         self.assertEqual(len(res["chips"]), 4)
+
+    def test_probe_single_leaf_full_text_yields_no_slots(self):
+        # 35b's pinned root cause: NO single leaf carries "1. 3M"
+        # — rank and bucket are separate leaves. A DOM with only
+        # merged single leaves ("1. 3M") must yield NO slots:
+        # the probe must pair leaves, never match a full-text leaf.
+        prelude = _POPULOUS_PRELUDE.replace(
+            "const RANK1 = mkEl('1.', 300, 300, 20, 24, []);",
+            "const RANK1 = mkEl('', 0, 0, 0, 0, []);").replace(
+            "const RANK2 = mkEl('2.', 300, 390, 20, 24, []);",
+            "const RANK2 = mkEl('', 0, 0, 0, 0, []);").replace(
+            "const RANK3 = mkEl('3.', 300, 480, 20, 24, []);",
+            "const RANK3 = mkEl('', 0, 0, 0, 0, []);").replace(
+            "const RANK4 = mkEl('4.', 300, 570, 20, 24, []);",
+            "const RANK4 = mkEl('', 0, 0, 0, 0, []);").replace(
+            "const BUCKET1 = mkEl('3M', 325, 300, 40, 24, []);",
+            "const BUCKET1 = mkEl('1. 3M', 300, 300, 65, 24, []);").replace(
+            "const BUCKET2 = mkEl('2M', 325, 390, 40, 24, []);",
+            "const BUCKET2 = mkEl('2. 2M', 300, 390, 65, 24, []);").replace(
+            "const BUCKET3 = mkEl('1M', 325, 480, 40, 24, []);",
+            "const BUCKET3 = mkEl('3. 1M', 300, 480, 65, 24, []);").replace(
+            "const BUCKET4 = mkEl('1M', 325, 570, 40, 24, []);",
+            "const BUCKET4 = mkEl('4. 1M', 300, 570, 65, 24, []);")
+        want = ["Toronto", "Montreal", "Calgary", "Ottawa"]
+        js_calls = _capture_js(R._worldle_populous_probe, want)
+        res = _run_node(js_calls[0], prelude,
+                        "fn(" + json.dumps({"want": want, "n": 4}) + ")")
+        self.assertEqual(res["slots"], [])
+
+    def test_probe_pairs_rank_with_bucket_on_its_row(self):
+        # Swap two BUCKET leaves' rows: rank 1 must pair with the
+        # bucket on ITS row ("2M"), not with the "3M" value that
+        # "belongs" to rank 1. Pairing is by row proximity.
+        prelude = _POPULOUS_PRELUDE.replace(
+            "const BUCKET1 = mkEl('3M', 325, 300, 40, 24, []);",
+            "const BUCKET1 = mkEl('3M', 325, 390, 40, 24, []);").replace(
+            "const BUCKET2 = mkEl('2M', 325, 390, 40, 24, []);",
+            "const BUCKET2 = mkEl('2M', 325, 300, 40, 24, []);")
+        want = ["Toronto", "Montreal", "Calgary", "Ottawa"]
+        js_calls = _capture_js(R._worldle_populous_probe, want)
+        res = _run_node(js_calls[0], prelude,
+                        "fn(" + json.dumps({"want": want, "n": 4}) + ")")
+        self.assertEqual([s["label"] for s in res["slots"]],
+                         ["1. 2M", "2. 3M", "3. 1M", "4. 1M"])
+        self.assertEqual([s["rank"] for s in res["slots"]], [1, 2, 3, 4])
+
+    def test_probe_lone_bucket_without_rank_yields_no_slots(self):
+        # Bucket-only (the single-leaf assumption) must NOT form
+        # a slot: a bucket leaf with no rank leaf on its row is
+        # unpaired and ignored.
+        prelude = _POPULOUS_PRELUDE.replace(
+            "RANK1, RANK2, RANK3, RANK4,", "")
+        want = ["Toronto", "Montreal", "Calgary", "Ottawa"]
+        js_calls = _capture_js(R._worldle_populous_probe, want)
+        res = _run_node(js_calls[0], prelude,
+                        "fn(" + json.dumps({"want": want, "n": 4}) + ")")
+        self.assertEqual(res["slots"], [])
+
+    def test_probe_lone_rank_without_bucket_yields_no_slots(self):
+        prelude = _POPULOUS_PRELUDE.replace(
+            "BUCKET1, BUCKET2, BUCKET3, BUCKET4,", "")
+        want = ["Toronto", "Montreal", "Calgary", "Ottawa"]
+        js_calls = _capture_js(R._worldle_populous_probe, want)
+        res = _run_node(js_calls[0], prelude,
+                        "fn(" + json.dumps({"want": want, "n": 4}) + ")")
+        self.assertEqual(res["slots"], [])
+
+    def test_probe_ranks_come_from_numerals_not_dom_order(self):
+        # Buckets listed before ranks in DOM order: pairing and
+        # rank assignment must be unchanged (ranks from numerals).
+        prelude = _POPULOUS_PRELUDE.replace(
+            "RANK1, RANK2, RANK3, RANK4,\n  BUCKET1, BUCKET2, BUCKET3, BUCKET4,",
+            "BUCKET1, BUCKET2, BUCKET3, BUCKET4,\n  RANK1, RANK2, RANK3, RANK4,")
+        want = ["Toronto", "Montreal", "Calgary", "Ottawa"]
+        js_calls = _capture_js(R._worldle_populous_probe, want)
+        res = _run_node(js_calls[0], prelude,
+                        "fn(" + json.dumps({"want": want, "n": 4}) + ")")
+        self.assertEqual([s["label"] for s in res["slots"]],
+                         ["1. 3M", "2. 2M", "3. 1M", "4. 1M"])
+        self.assertEqual([s["rank"] for s in res["slots"]], [1, 2, 3, 4])
+
+    def test_probe_pill_missing_falls_back_to_label_centre(self):
+        # No pills in the DOM: slots still returned, centred on
+        # the rank+bucket pair anchor, with pill=False (degraded
+        # but diagnosable).
+        prelude = _POPULOUS_PRELUDE.replace(
+            "ICON1, ICON2, ICON3, ICON4, PILL1, PILL2, PILL3, PILL4,",
+            "")
+        want = ["Toronto", "Montreal", "Calgary", "Ottawa"]
+        js_calls = _capture_js(R._worldle_populous_probe, want)
+        res = _run_node(js_calls[0], prelude,
+                        "fn(" + json.dumps({"want": want, "n": 4}) + ")")
+        self.assertEqual([s["rank"] for s in res["slots"]], [1, 2, 3, 4])
+        self.assertEqual([(s["x"], s["y"]) for s in res["slots"]],
+                         [(332.5, 312.0), (332.5, 402.0),
+                          (332.5, 492.0), (332.5, 582.0)])
+        self.assertTrue(all(not s["pill"] for s in res["slots"]))
 
     def test_probe_missing_chip(self):
         # No Ottawa chip in the DOM -> chips lack Ottawa.

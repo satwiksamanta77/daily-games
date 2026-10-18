@@ -4069,8 +4069,13 @@ def _framed_live_answer(page, mode, fallback):
     # different mode's number: on the Daily page it was reading "ONE FRAME #664"
     # and comparing it with the daily counter (1661), so every lookup "failed to
     # map" and the answer was wrong. Match THIS mode's own label only.
-    label = {"classic": "CLASSIC", "one-frame": "ONE FRAME",
-             "titleshot": "TITLESHOT", "poster": "POSTER"}.get(mode, "CLASSIC")
+    # Iter-36: the CLASSIC board's header is "FRAMED #N" (frame-proven
+    # in the iter-34 run: "FRAMED #1683"; the only "CLASSIC" text is
+    # the menu/nav tab, which carries no number). The menu TILE click
+    # in _framed_open_board_with_unlock still uses "CLASSIC" — that
+    # is the tab label, not the board header.
+    label = {"classic": "FRAMED", "one-frame": "ONE FRAME",
+             "titleshot": "TITLESHOT", "poster": "POSTER"}.get(mode, "FRAMED")
     shown = None
     for _try in range(5):          # header number renders async after board
         try:
@@ -14494,19 +14499,31 @@ def _s_worldle_play_currency(page, gid, day):
 
 
 def _worldle_populous_probe(page, want):
-    """Probe populous chips + slots (iter-35).
+    """Probe populous chips + slots (iter-35, slot shape fixed iter-36).
 
     The chips/slots are plain DIVs (no button/li/role/
     draggable), so the old button-selector probe saw only
     chrome and the mode skipped with 0 guesses. Chips are
-    found by leaf-text equality with the wanted city names;
-    slots by the rank-label pattern `N. <bucket>M`
-    (e.g. '1. 3M'), restricted to ranks 1..N and ordered by
-    rank. Pairing is BY RANK (want[i] -> slot i), never by
-    bucket label — slots 3 and 4 can both read '1M'.
-    Returns {chips: [{name, x, y}], slots: [{rank, label, x, y}]}
-    with x, y = centres (slot centre = rank-label centre =
-    drop target)."""
+    found by leaf-text equality with the wanted city names.
+
+    Slots (iter-36 — pinned by 35b/ANALYSIS34 frame f_345):
+    each slot label is TWO separate leaves side by side — a
+    rank-numeral leaf ("1.") + a bucket leaf ("3M") — reading
+    "1. 3M" but with NO single leaf carrying the full text.
+    That is why BOTH the iter-35 probe (single-leaf regex
+    /^(\\d+)\\.\\s*(\\d+)\\s*M$/) and a bucket-only probe fail
+    in production: the first matches no leaf at all, the
+    second cannot tell which bucket belongs to which rank.
+    The probe therefore PAIRS rank leaf + bucket leaf by row
+    proximity (same row, bucket just right of the rank) and
+    takes the RANK FROM THE NUMERAL. Directly below each
+    pair (~20px gap in 1080p) sits its drop-target pill (grey
+    rounded box with a building icon); the drop target is
+    the PILL centre, NOT the label centre. Pairing is BY RANK
+    (want[i] -> slot with rank i+1), never by bucket label —
+    slots 3 and 4 can both read '1M'.
+    Returns {chips: [{name, x, y}], slots: [{rank, label,
+    x, y, pill}]} with x, y = drop-target (pill) centres."""
     try:
         return page.evaluate("""(args) => {
           const vis = e => e && e.offsetParent !== null;
@@ -14525,20 +14542,95 @@ def _worldle_populous_probe(page, want):
             }
           }
           const slots = [];
-          for (const e of Array.from(document.querySelectorAll('body *'))
-               .filter(vis)
-               .filter(e => !e.closest('nav, header, footer'))
-               .filter(e => e.children.length === 0)) {
+          // Iter-36 (35b/ANALYSIS34 f_345): rank numeral and
+          // bucket are SEPARATE leaves ("1." + "3M"). Pair them
+          // by row proximity; rank comes from the numeral.
+          const leaves = Array.from(document.querySelectorAll('body *'))
+            .filter(vis)
+            .filter(e => !e.closest('nav, header, footer'))
+            .filter(e => e.children.length === 0);
+          const ranks = [];
+          const buckets = [];
+          for (const e of leaves) {
             const t = (e.innerText || '').trim();
-            const m = t.match(/^(\\d+)\\.\\s*(\\d+)\\s*M$/);
-            if (!m) continue;
-            const rank = parseInt(m[1], 10);
-            if (rank < 1 || rank > args.n) continue;
             const r = e.getBoundingClientRect();
-            slots.push({rank: rank, label: t,
-                        x: r.x + r.width / 2, y: r.y + r.height / 2});
+            const rec = {text: t, x: r.x + r.width / 2,
+                         y: r.y + r.height / 2, left: r.x,
+                         right: r.x + r.width, top: r.y,
+                         bottom: r.y + r.height};
+            const rm = t.match(/^(\\d+)\\.$/);
+            if (rm) {
+              ranks.push({rank: parseInt(rm[1], 10), ...rec});
+              continue;
+            }
+            const bm = t.match(/^(\\d+(?:\\.\\d+)?)\\s*M$/);
+            if (bm) buckets.push({bucket: bm[1], ...rec});
           }
-          slots.sort((a, b) => a.rank - b.rank);
+          // Pair each rank leaf with the bucket leaf on its row:
+          // bucket centre within ~30px vertically, bucket just
+          // right of the rank (left edge within 100px right of
+          // the rank's right edge). Nearest horizontal gap wins;
+          // each bucket pairs at most once.
+          const pairs = [];
+          const usedBuckets = new Set();
+          for (const rk of ranks) {
+            let best = null, bestGap = 1e9;
+            for (let bi = 0; bi < buckets.length; bi++) {
+              if (usedBuckets.has(bi)) continue;
+              const bk = buckets[bi];
+              if (Math.abs(bk.y - rk.y) > 30) continue;
+              const hgap = bk.left - rk.right;
+              if (hgap < -10 || hgap > 100) continue;
+              if (hgap < bestGap) { bestGap = hgap; best = bi; }
+            }
+            if (best !== null) {
+              usedBuckets.add(best);
+              const bk = buckets[best];
+              pairs.push({rank: rk.rank, bucket: bk.bucket,
+                          left: Math.min(rk.left, bk.left),
+                          right: Math.max(rk.right, bk.right),
+                          bottom: Math.max(rk.bottom, bk.bottom),
+                          cx: (Math.min(rk.left, bk.left) +
+                               Math.max(rk.right, bk.right)) / 2,
+                          cy: (Math.max(rk.bottom, bk.bottom) +
+                               Math.min(rk.top, bk.top)) / 2});
+            }
+          }
+          pairs.sort((a, b) => a.rank - b.rank);
+          // Drop target = the pill directly BELOW each pair:
+          // nearest near-empty box (icon-only) below the pair,
+          // horizontally overlapping it, within 120px. The next
+          // slot's label row is ~190px below and its leaves
+          // carry rank/bucket text, so they can never qualify
+          // as a pill.
+          const allEls = Array.from(document.querySelectorAll('body *'))
+            .filter(vis)
+            .filter(e => !e.closest('nav, header, footer'));
+          for (const pr of pairs) {
+            let best = null, bestGap = 1e9;
+            for (const e of allEls) {
+              const r = e.getBoundingClientRect();
+              if (r.width < 60 || r.height < 20 || r.height > 100)
+                continue;
+              const cx = r.x + r.width / 2;
+              if (cx < pr.left - 60 || cx > pr.right + 60) continue;
+              const gap = r.y - pr.bottom;
+              if (gap < -2 || gap > 120) continue;
+              const t = (e.innerText || '').trim();
+              if (t.length > 2) continue;
+              if (/^\\d+(\\.\\d+)?\\s*M$/.test(t)) continue;
+              if (/^\\d+\\.$/.test(t)) continue;
+              if (gap < bestGap) {
+                bestGap = gap;
+                best = {x: cx, y: r.y + r.height / 2};
+              }
+            }
+            slots.push({rank: pr.rank,
+                        label: pr.rank + '. ' + pr.bucket + 'M',
+                        x: best ? best.x : pr.cx,
+                        y: best ? best.y : pr.cy,
+                        pill: !!best});
+          }
           return {chips: chips, slots: slots};
         }""", {"want": list(want), "n": len(want)}) or {}
     except Exception:
