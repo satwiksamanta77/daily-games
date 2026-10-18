@@ -2,7 +2,7 @@
  "game": "batterup",
  "date": "2026-10-18",
  "solved": false,
- "evidence": "answer 'Alec Burleson' NOT submitted after 3 attempts (board never showed a new populated row); submitted=[] attempted-pick-failed=['Wade Miley', 'Jhoan Duran'] attempted-submit-failed=['Vladimir Guerrero Jr', 'Vladimir Guerrero Jr', 'Alec Burleson'] [dates differ by known rollover: cdn_game_date=2026-10-18 site_header=#972 10/17/26 (2026-10-17); CDN keys by the UTC-day boundary (~01:04 UTC) while the site displays the US-local date \u2014 same puzzle, display rollover, NOT a previous-day board]",
+ "evidence": "answer pick failed (suggestion never selected (selection never landed after re-select attempts); pick ok=False); submitted=0 attempted-pick-failed=3 [dates differ by known rollover: cdn_game_date=2026-10-18 site_header=#972 10/17/26 (2026-10-17); CDN keys by the UTC-day boundary (~01:04 UTC) while the site displays the US-local date \u2014 same puzzle, display rollover, NOT a previous-day board]",
  "video": null,
  "youtube_url": null
 }
