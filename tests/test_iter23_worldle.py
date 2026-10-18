@@ -373,7 +373,13 @@ class TestCapitalPickerIter23Additions(unittest.TestCase):
         got = R._worldle_capital_pick_pin_target(
             probe, (1072.5, 422.7), "Kuwait City")
         self.assertIsNotNone(got)
-        self.assertEqual(got["method"], "nearest-dot")
+        # Iter-35: the fixture dots carry grading ids
+        # (right-811 / wrong-*), so dot-id-right fires BEFORE
+        # nearest-dot. Same target (1080,438), same dot_index —
+        # nearest-dot would also pick this dot, but the graded
+        # id is the correct mechanism (Canada proved nearest-dot
+        # picks a distractor when the projection is off).
+        self.assertEqual(got["method"], "dot-id-right")
         self.assertEqual((got["x"], got["y"]), (1080.0, 438.0))
         self.assertEqual(got["dot_index"], 0)
 

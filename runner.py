@@ -11126,7 +11126,18 @@ def _worldle_capital_pick_pin_target(probe, fit_px, cap_name):
     (Iter-22: the nearest-dot step above now fires first, so
     the 12px snap survives only for points whose nearest dot
     is >60px away yet coincides within 12px — unreachable in
-    practice, kept as defense in depth.)"""
+    practice, kept as defense in depth.)
+
+    Iter-35: DOT-ID GRADING runs BEFORE dot-name. The dots are
+    NOT unlabelled — they carry grading ids: 'right-<N>' is the
+    correct dot (N = the capital's global city index in
+    cities.json) and 'wrong-<k>' are distractors. The old
+    dot-name step treated id as a NAME source, so it could
+    never match ('right124' != 'ottawa'), and nearest-dot then
+    picked a distractor whenever the projection error exceeded
+    half the inter-dot gap (Canada: 24.5px error, wrong-2 only
+    5.9px from the fit point). A wrong-* dot is NEVER returned
+    when a right-* dot exists."""
     probe = probe if isinstance(probe, dict) else {}
     if not probe.get("found"):
         return None
@@ -11137,6 +11148,26 @@ def _worldle_capital_pick_pin_target(probe, fit_px, cap_name):
     want = _s_worldle_norm(cap_name or "")
     dots = [d for d in (probe.get("dots") or [])
             if isinstance(d, dict)]
+    # Iter-35 dot-id grading (see docstring): exactly one
+    # right-* dot -> it is the target. Zero right-* dots ->
+    # fall through to dot-name / nearest-dot (unlabelled
+    # widget). Two or more right-* dots -> ambiguous, no click.
+    import re as _re_dotid
+    _rights = [d for d in dots
+               if _re_dotid.match(
+                   r"^right-(\d+)$", str(d.get("id") or "").strip())]
+    if len(_rights) == 1:
+        d = _rights[0]
+        return {"x": float(d.get("x")), "y": float(d.get("y")),
+                "method": "dot-id-right",
+                "dot_index": dots.index(d),
+                "dot_tag": str(d.get("tag") or ""),
+                "detail": ("dot id "
+                           f"{str(d.get('id'))!r} is the graded "
+                           "correct dot (right-*); distractors are "
+                           "wrong-*")}
+    if len(_rights) > 1:
+        return None
 
     def _snap_to_dot(x, y, method, detail):
         # Iter-21, see docstring: snap ONLY on coincidence
@@ -11170,7 +11201,14 @@ def _worldle_capital_pick_pin_target(probe, fit_px, cap_name):
                 pairs.append((f"grandparent-data-{k}", str(v or "")))
             pairs += [("title", str(d.get("title") or "")),
                       ("aria", str(d.get("aria") or "")),
-                      ("id", str(d.get("id") or "")),
+                      # Iter-35: a grading id ('right-124',
+                      # 'wrong-2') is NOT a name — exclude it
+                      # from dot-name matching so it can never
+                      # false-match a city name.
+                      ("id", "" if _re_dotid.match(
+                          r"^(right|wrong)-(\d+)$",
+                          str(d.get("id") or "").strip())
+                          else str(d.get("id") or "")),
                       ("label", str(d.get("label") or "")),
                       ("group_title", str(d.get("group_title") or "")),
                       ("sibling_text",
@@ -11769,7 +11807,7 @@ def _s_worldle_play_capital(page, gid, day):
         # element-click applies to nearest-dot and *-dot-centre
         # targets (they are dot targets too — a coordinate
         # press at a dot centre is the shape that never
-        # registered). A successful element click REPLACES the
+        # registered). Iter-35: same for dot-id-right targets. A successful element click REPLACES the
         # coordinate press below (a second press at the same
         # point could move/double-place the pin); a failed
         # element click falls back to the coordinate press.
@@ -11778,7 +11816,8 @@ def _s_worldle_play_capital(page, gid, day):
         _landed = bool(before.get("inMap"))
         _dot_el_clicked = False
         if (_target is not None and (
-                _target.get("method") in ("dot-name", "nearest-dot")
+                _target.get("method") in ("dot-name", "nearest-dot",
+                                          "dot-id-right")
                 or str(_target.get("method") or "").endswith(
                     "-dot-centre"))):
             _el_click = _worldle_capital_click_dot_element(
@@ -11869,6 +11908,11 @@ def _s_worldle_play_capital(page, gid, day):
             # explicit `recolour: blue->green` line vanished even
             # though the dot had recoloured. Verdict unchanged:
             # marker OR recolour.
+            # Iter-35: the Next-round / confetti arms are
+            # LANDING evidence only — the game shows "Next
+            # round" after a WRONG pin too. Never read this
+            # function as correctness evidence; the arbitrate
+            # split (landed vs correct) is the authority.
             _ok_r, _det_r = _recolour_landed()
             return _worldle_capital_marker_or_recolour(
                 b, a, _ok_r, _det_r,
@@ -11960,7 +12004,16 @@ def _s_worldle_play_capital(page, gid, day):
         _s_worldle_submit_guarded(page, gid, "capital", ds)
         _settle(page, base=2000)
 
-        def _pin_ok():
+        def _pin_arbitrate():
+            # Iter-35: split LANDED from CORRECT. The old
+            # _pin_ok() OR-ed them into one flag, so a
+            # landed-but-WRONG pin logged pin_ok=True while the
+            # win check (correctness) said pin_ok=False. landed
+            # controls FLOW (attempted vs partial); correct is
+            # log-only evidence — the dispatcher win check
+            # remains the sole correctness authority. Note
+            # _right is NOT part of landed: a right pin always
+            # appends a store entry, so delta already covers it.
             _gs = _s_worldle_day_guesses(page, "city-guesses", ds)
             _delta = len(_gs) > len(gs_before)
             _nonq0 = [g for g in _gs
@@ -11969,12 +12022,15 @@ def _s_worldle_play_capital(page, gid, day):
                          .lower() for g in _nonq0)
             _mk = _marker_or_recolour(
                 before, _worldle_pin_probe(page, px, py))
-            return (_mk or _delta or _right), \
-                {"delta": _delta, "right": _right, "marker": _mk}
+            _landed = bool(_mk or _delta)
+            return _landed, _right, \
+                {"delta": _delta, "right": _right, "marker": _mk,
+                 "landed": _landed, "correct": _right}
 
-        _ok, _info = _pin_ok()
-        _dbg(gid, f"worldle capital pin arbitrate: pin_ok={_ok} {_info}")
-        if not _ok:
+        _landed, _correct, _info = _pin_arbitrate()
+        _dbg(gid, "worldle capital pin arbitrate: "
+                  f"landed={_landed} correct={_correct} {_info}")
+        if not _landed:
             try:
                 _body2 = (page.evaluate(
                     "() => document.body.innerText") or "")
@@ -11992,10 +12048,10 @@ def _s_worldle_play_capital(page, gid, day):
                 _settle(page, base=1200)
                 _s_worldle_submit_guarded(page, gid, "capital", ds)
                 _settle(page, base=2000)
-                _ok, _info = _pin_ok()
+                _landed, _correct, _info = _pin_arbitrate()
                 _dbg(gid, "worldle capital pin retry arbitrate: "
-                          f"pin_ok={_ok} {_info}")
-        if not _ok:
+                          f"landed={_landed} correct={_correct} {_info}")
+        if not _landed:
             _after2 = _worldle_pin_probe(page, px, py)
             _dbg(gid, "worldle capital pin FAILED probe-v2: "
                       f"{_after2}")
@@ -12003,14 +12059,14 @@ def _s_worldle_play_capital(page, gid, day):
                 "pin click produced no marker and no city-guesses " \
                 f"delta (markers {before_markers}->{after_markers}); " \
                 f"name played; probe-v2={_after2}"
-        # Iter-24 RC1: EXPLICIT return on the pin_ok=True path.
+        # Iter-24 RC1: EXPLICIT return on the landed=True path.
         # The function previously fell off the end here ->
         # implicit None -> dispatcher TypeError, aborting the
-        # 9 bonus modes after Capital. pin_ok=True means the
-        # store delta / right entry / marker-or-recolour signal
-        # confirmed the pin; the dispatcher win check (store
-        # name_ok + pin_ok) still decides solved vs failed, so
-        # this return can never upgrade a failed pin to solved.
+        # 9 bonus modes after Capital. landed=True means the
+        # store delta / marker-or-recolour signal confirmed the
+        # pin landed; the dispatcher win check (store name_ok +
+        # pin_ok) still decides solved vs failed, so this return
+        # can never upgrade a failed pin to solved.
         return "attempted", [name], \
             f"pin landed; arbitrate={_info} markers " \
             f"{before_markers}->{after_markers}"
@@ -14133,8 +14189,8 @@ def _s_worldle_gdp_bucket(page, number):
             if (t.startsWith('<')) {
               const hi = parse(t.slice(1));
               if (hi !== null && num < hi) { e.click(); return t; }
-            } else if (t.endsWith('+')) {
-              const lo = parse(t.slice(0, -1));
+            } else if (t.includes('+')) {
+              const lo = parse(t.split('+')[0]);
               if (lo !== null && num >= lo) { e.click(); return t; }
             } else if (t.includes('-')) {
               const parts = t.split('-');
@@ -14293,12 +14349,18 @@ def _s_worldle_population_bucket(page, pop):
     """Click the population bucket button containing `pop`.
 
     The Population & Currency q0 widget is BUCKET BUTTONS, not a
-    numeric input ('< 3 million', '3 - 5 million', '5 - 8 million',
-    '8+ million'). The old code searched for a numeric input that
-    does not exist and failed every round (iter-12). Parse each
-    button's bounds (million = 1_000_000) and click the bucket with
-    low <= pop < high ('< X' -> high=X; 'X+' -> low=X, no high).
-    Returns the clicked button text or None."""
+    numeric input. Parse each button's bounds (million =
+    1_000_000) and click the bucket with low <= pop < high
+    ('< X' -> high=X; 'X+ ...' -> low=X, no high). Thresholds
+    are DYNAMIC per country — parse the live button texts,
+    never hardcode them (Canada: '< 15 / 15-25 / 25-35 / 35+
+    million'; Kuwait: '< 3 / 3-5 / 5-8 / 8+ million').
+    Returns the clicked button text or None.
+    Iter-35: the open-ended branch used to test for a trailing
+    '+', but the live top bucket is '35+ million' (the '+' is
+    mid-string), so no top-bucket population ever matched and
+    the mode failed with 'population input not found'. The
+    branch now tests for '+' anywhere in the text."""
     try:
         hit = page.evaluate("""(num) => {
           const vis = e => e && e.offsetParent !== null;
@@ -14318,8 +14380,8 @@ def _s_worldle_population_bucket(page, pop):
             if (t.startsWith('<')) {
               const hi = parse(t.slice(1));
               if (hi !== null && num < hi) { e.click(); return t; }
-            } else if (t.endsWith('+')) {
-              const lo = parse(t.slice(0, -1));
+            } else if (t.includes('+')) {
+              const lo = parse(t.split('+')[0]);
               if (lo !== null && num >= lo) { e.click(); return t; }
             } else if (t.includes('-')) {
               const parts = t.split('-');
@@ -14347,20 +14409,39 @@ def _s_worldle_play_currency(page, gid, day):
     cur = day.get("currency") or {}
     if pop is None:
         return "skipped", [], "no population in day data"
-    # The q0 widget is BUCKET BUTTONS ('< 3 million', '3 - 5 million',
-    # '5 - 8 million', '8+ million'), not a numeric input (iter-12:
-    # 'population input not found' every run). Try buckets first; the
-    # input path below is only a fallback for a layout without buckets.
+    # The q0 widget is BUCKET BUTTONS, not a numeric input
+    # (iter-12: 'population input not found' every run). Try
+    # buckets first; the input path below is only a fallback
+    # for a layout without buckets. Thresholds are dynamic
+    # per country (Canada: 15/25/35M) — parsed live.
     _bucket = _s_worldle_population_bucket(page, pop)
     if _bucket:
         _dbg(gid, f"worldle population bucket {_bucket!r} clicked for {pop}")
         _s_worldle_submit_guarded(page, gid, "populationCurrency", ds)
         _settle(page, base=2000)
-    elif not _s_worldle_pick_input(page, ["population"], include_range=True):
-        dump = _s_worldle_dom_dump(page, gid, "populationCurrency")
-        return "failed", [], \
-            "population input not found; DOM dump logged"
-    else:
+    if not _bucket:
+        # Iter-35: a bucket miss used to fail silently — the
+        # log read "population input not found" although the
+        # real failure was "no bucket matched". Log the live
+        # million-button texts + pop before the input fallback.
+        try:
+            _million_btns = page.evaluate("""() => {
+              const vis = e => e && e.offsetParent !== null;
+              return Array.from(document.querySelectorAll('button'))
+                .filter(vis)
+                .filter(e => !e.closest('nav, header, footer'))
+                .map(e => (e.innerText || '').trim())
+                .filter(t => /million/i.test(t));
+            }""") or []
+        except Exception:
+            _million_btns = []
+        _dbg(gid, "worldle population bucket MISS: pop="
+                  f"{pop} million buttons={_million_btns}")
+        if not _s_worldle_pick_input(page, ["population"],
+                                     include_range=True):
+            dump = _s_worldle_dom_dump(page, gid, "populationCurrency")
+            return "failed", [], \
+                "population input not found; DOM dump logged"
         ok, detail = _s_worldle_set_picked_value(page, gid, str(int(pop)),
                                                  "population")
         if not ok:
@@ -14412,14 +14493,168 @@ def _s_worldle_play_currency(page, gid, day):
         "population + currency sub-questions played"
 
 
+def _worldle_populous_probe(page, want):
+    """Probe populous chips + slots (iter-35).
+
+    The chips/slots are plain DIVs (no button/li/role/
+    draggable), so the old button-selector probe saw only
+    chrome and the mode skipped with 0 guesses. Chips are
+    found by leaf-text equality with the wanted city names;
+    slots by the rank-label pattern `N. <bucket>M`
+    (e.g. '1. 3M'), restricted to ranks 1..N and ordered by
+    rank. Pairing is BY RANK (want[i] -> slot i), never by
+    bucket label — slots 3 and 4 can both read '1M'.
+    Returns {chips: [{name, x, y}], slots: [{rank, label, x, y}]}
+    with x, y = centres (slot centre = rank-label centre =
+    drop target)."""
+    try:
+        return page.evaluate("""(args) => {
+          const vis = e => e && e.offsetParent !== null;
+          const norm = s => (s||'').toLowerCase().replace(/\\s+/g,' ').trim();
+          const chips = [];
+          for (const name of (args.want || [])) {
+            const leaf = Array.from(document.querySelectorAll('body *'))
+              .filter(vis)
+              .filter(e => !e.closest('nav, header, footer'))
+              .filter(e => e.children.length === 0)
+              .find(e => norm(e.innerText) === norm(name));
+            if (leaf) {
+              const r = leaf.getBoundingClientRect();
+              chips.push({name: name, x: r.x + r.width / 2,
+                          y: r.y + r.height / 2});
+            }
+          }
+          const slots = [];
+          for (const e of Array.from(document.querySelectorAll('body *'))
+               .filter(vis)
+               .filter(e => !e.closest('nav, header, footer'))
+               .filter(e => e.children.length === 0)) {
+            const t = (e.innerText || '').trim();
+            const m = t.match(/^(\\d+)\\.\\s*(\\d+)\\s*M$/);
+            if (!m) continue;
+            const rank = parseInt(m[1], 10);
+            if (rank < 1 || rank > args.n) continue;
+            const r = e.getBoundingClientRect();
+            slots.push({rank: rank, label: t,
+                        x: r.x + r.width / 2, y: r.y + r.height / 2});
+          }
+          slots.sort((a, b) => a.rank - b.rank);
+          return {chips: chips, slots: slots};
+        }""", {"want": list(want), "n": len(want)}) or {}
+    except Exception:
+        return {}
+
+
+def _worldle_populous_slot_contains(page, slot, name):
+    """Position-anchored slot-fill check (iter-35, mirrors
+    _worldle_phrase_slot_at_contains): after a drag, a leaf
+    element near the slot centre must carry exactly the city
+    name. Equality (not substring) so a neighbouring slot's
+    chip can never false-positive."""
+    try:
+        sx, sy = slot.get("x"), slot.get("y")
+        if sx is None or sy is None:
+            return False
+        return bool(page.evaluate("""(args) => {
+          const vis = e => e && e.offsetParent !== null;
+          const norm = s => (s||'').toLowerCase().replace(/\\s+/g,' ').trim();
+          for (const e of Array.from(document.querySelectorAll('body *'))
+               .filter(vis)
+               .filter(e => !e.closest('nav, header, footer'))
+               .filter(e => e.children.length === 0)) {
+            const r = e.getBoundingClientRect();
+            const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+            if (Math.hypot(cx - args.sx, cy - args.sy) <= 60
+                && norm(e.innerText) === norm(args.name)) return true;
+          }
+          return false;
+        }""", {"sx": float(sx), "sy": float(sy), "name": name}))
+    except Exception:
+        return False
+
+
+def _worldle_populous_drag(page, gid, chip, slot, name):
+    """Drag one populous chip to its rank slot (iter-35).
+    Ladder mirrors the phrase drag: (1) Playwright mouse drag,
+    10 steps; (2) smooth mouse drag, 25 steps + hover; (3)
+    in-page DragEvent sequence with a real DataTransfer.
+    Verifies after each attempt via
+    _worldle_populous_slot_contains. Returns True if placed."""
+    cx, cy = chip.get("x"), chip.get("y")
+    sx, sy = slot.get("x"), slot.get("y")
+    if None in (cx, cy, sx, sy):
+        return False
+    try:
+        page.mouse.move(cx, cy)
+        page.mouse.down()
+        for _step in range(1, 11):
+            page.mouse.move(cx + (sx - cx) * _step / 10.0,
+                            cy + (sy - cy) * _step / 10.0, steps=1)
+            page.wait_for_timeout(60)
+        page.mouse.up()
+        page.wait_for_timeout(800)
+    except Exception as e:
+        _dbg(gid, f"worldle populous mouse drag failed for {name!r}: "
+                  f"{str(e)[:80]}")
+    if _worldle_populous_slot_contains(page, slot, name):
+        _dbg(gid, f"worldle populous drag mouse {name!r} -> slot "
+                  f"{slot.get('rank')} placed=True")
+        return True
+    try:
+        page.mouse.move(cx, cy)
+        page.mouse.down()
+        page.mouse.move(sx, sy, steps=25)
+        page.wait_for_timeout(400)
+        page.mouse.up()
+        page.wait_for_timeout(800)
+    except Exception as e:
+        _dbg(gid, "worldle populous smooth drag failed for "
+                  f"{name!r}: {str(e)[:80]}")
+    if _worldle_populous_slot_contains(page, slot, name):
+        _dbg(gid, f"worldle populous drag smooth {name!r} -> slot "
+                  f"{slot.get('rank')} placed=True")
+        return True
+    try:
+        page.evaluate("""(args) => {
+          const chip = document.elementFromPoint(args.cx, args.cy);
+          const slot = document.elementFromPoint(args.sx, args.sy);
+          if (!chip || !slot) return false;
+          const dt = new DataTransfer();
+          try { dt.setData('text/plain', args.name); } catch (e) {}
+          try { dt.effectAllowed = 'all'; } catch (e) {}
+          const mk = (t) => new DragEvent(t, {bubbles: true,
+            cancelable: true, dataTransfer: dt});
+          chip.dispatchEvent(mk('dragstart'));
+          slot.dispatchEvent(mk('dragenter'));
+          slot.dispatchEvent(mk('dragover'));
+          slot.dispatchEvent(mk('dragover'));
+          slot.dispatchEvent(mk('dragover'));
+          slot.dispatchEvent(mk('drop'));
+          chip.dispatchEvent(mk('dragend'));
+          return true;
+        }""", {"cx": cx, "cy": cy, "sx": sx, "sy": sy, "name": name})
+        page.wait_for_timeout(800)
+    except Exception as e:
+        _dbg(gid, "worldle populous DragEvent failed for "
+                  f"{name!r}: {str(e)[:80]}")
+    _placed = _worldle_populous_slot_contains(page, slot, name)
+    _dbg(gid, f"worldle populous drag DragEvent {name!r} -> slot "
+              f"{slot.get('rank')} placed={_placed}")
+    return _placed
+
+
 def _s_worldle_play_populous(page, gid, day):
     """Populous cities: order the N most populous cities by population
     desc. N is read from the live prompt ("organise the N most
     populated cities"); the order comes from cities.json. The SHOWN
     set must equal the top-N names or both sets are logged + the mode
-    is skipped. Interaction is detected from the DOM: click-to-order
-    (verify selected state per click) or drag-and-drop (drag each chip
-    to its target slot, verifying slots), then Guess once."""
+    is skipped. Chips/slots are plain DIVs (iter-35: the old
+    button-selector probe saw only chrome and skipped with 0
+    guesses), so they are probed by leaf text. Interaction is
+    ALWAYS drag-and-drop (clicks do not register on this widget —
+    the hint says drag and drop): drag each chip to its RANK slot
+    (want[i] -> slot i, never by bucket label), verify per slot,
+    then Guess once."""
     ds = day.get("date") or ""
     try:
         body = (page.evaluate("() => document.body.innerText") or "")
@@ -14444,122 +14679,58 @@ def _s_worldle_play_populous(page, gid, day):
     def _nm(s):
         return " ".join(str(s or "").lower().split())
 
-    try:
-        cands = page.evaluate("""() => {
-          const vis = e => e && e.offsetParent !== null;
-          return Array.from(document.querySelectorAll(
-            'button, [role=option], li, [draggable=true]'))
-            .filter(vis).filter(e => !e.closest('nav, header, footer'))
-            .map(e => (e.innerText || '').trim())
-            .filter(t => t && t.length < 120);
-        }""") or []
-    except Exception:
-        cands = []
     want_norm = {_nm(w) for w in want}
-    shown_cities = sorted({_nm(c) for c in cands} & want_norm)
-    if set(shown_cities) != want_norm:
-        _dbg(gid, "worldle populous shown-set MISMATCH: shown candidates="
-                  f"{cands} (matched={shown_cities}) vs top-N={want}")
+
+    # Iter-35: chips/slots are plain DIVs — probe by leaf text
+    # (see _worldle_populous_probe). The old button-selector
+    # probe saw only chrome buttons and skipped with 0 guesses.
+    _probe = _worldle_populous_probe(page, want)
+    _chips = _probe.get("chips") or []
+    _slots = _probe.get("slots") or []
+    _dbg(gid, f"worldle populous probe: chips={_chips} slots={_slots}")
+    _chip_names = {_nm(c.get("name")) for c in _chips if c.get("name")}
+    if _chip_names != want_norm:
+        _dbg(gid, "worldle populous shown-set MISMATCH: shown chips="
+                  f"{sorted(_chip_names)} vs top-N={sorted(want_norm)}")
         return "skipped", [], \
-            f"populous cities: shown set {shown_cities} != top-N " \
+            f"populous cities: shown set {sorted(_chip_names)} != top-N " \
             f"{sorted(want_norm)} (both sets logged)"
-    # Detect drag-and-drop (numbered slots + draggable chips) vs
-    # click-to-order.
+    if len(_slots) != n_exp or \
+            [s.get("rank") for s in _slots] != list(range(1, n_exp + 1)):
+        return "failed", [], \
+            f"populous drag: rank slots " \
+            f"{[s.get('rank') for s in _slots]}, need 1..{n_exp}"
+    # Always drag, paired BY RANK (want[i] -> slot i). Never by
+    # bucket label (slots 3 and 4 can both read '1M'), never the
+    # click path (clicks do not register on this widget).
+    _chip_by_name = {_nm(c.get("name")): c for c in _chips}
+    for i, name in enumerate(want):
+        _chip = _chip_by_name.get(_nm(name))
+        _slot = _slots[i]
+        if not _chip:
+            return "failed", [], \
+                f"populous drag: chip not found for {name!r}"
+        if not _worldle_populous_drag(page, gid, _chip, _slot, name):
+            return "failed", [], \
+                f"populous drag slot {_slot.get('rank')} shows no " \
+                f"{name!r} after 3 attempts"
+        _dbg(gid, f"worldle populous drag slot {i}: want {name!r} placed")
+    # Guess is disabled while slots are empty — confirm it is
+    # enabled now before submitting.
     try:
-        dom_kind = page.evaluate("""() => {
+        _guess_disabled = page.evaluate("""() => {
           const vis = e => e && e.offsetParent !== null;
-          const slots = Array.from(document.querySelectorAll(
-            '[data-slot], [class*=slot i], [class*=position i]'))
-            .filter(vis).length;
-          const drags = Array.from(document.querySelectorAll(
-            '[draggable=true]')).filter(vis).length;
-          const numbered = Array.from(document.querySelectorAll(
-            '[class*=order i], [class*=rank i]')).filter(vis).length;
-          return {slots, drags, numbered};
-        }""") or {}
+          const b = Array.from(document.querySelectorAll('button'))
+            .filter(vis)
+            .find(e => (e.innerText || '').trim().toLowerCase() === 'guess');
+          return b ? !!b.disabled : null;
+        }""")
     except Exception:
-        dom_kind = {}
-    if (dom_kind.get("drags") or 0) >= n_exp and \
-            ((dom_kind.get("slots") or 0) >= n_exp
-             or (dom_kind.get("numbered") or 0) >= n_exp):
-        # Drag each chip to its target slot, verifying slots.
-        for i, name in enumerate(want):
-            try:
-                boxes = page.evaluate("""(args) => {
-                  const vis = e => e && e.offsetParent !== null;
-                  const norm = s => (s||'').toLowerCase().replace(/\\s+/g,' ').trim();
-                  const chip = Array.from(document.querySelectorAll(
-                    '[draggable=true], button, [role=option], li'))
-                    .filter(vis).find(e => norm(e.innerText) === norm(args[0]));
-                  const slots = Array.from(document.querySelectorAll(
-                    '[data-slot], [class*=slot i], [class*=position i], ' +
-                    '[class*=order i]')).filter(vis);
-                  const slot = slots[args[1]] || null;
-                  if (!chip || !slot) return null;
-                  const cr = chip.getBoundingClientRect();
-                  const sr = slot.getBoundingClientRect();
-                  return {cx: cr.x + cr.width / 2, cy: cr.y + cr.height / 2,
-                          sx: sr.x + sr.width / 2, sy: sr.y + sr.height / 2};
-                }""", [name, i])
-            except Exception:
-                boxes = None
-            if not boxes:
-                return "failed", [], \
-                    f"populous drag: chip/slot not found for {name!r} slot {i}"
-            try:
-                page.mouse.move(boxes["cx"], boxes["cy"])
-                page.mouse.down()
-                page.wait_for_timeout(150)
-                page.mouse.move(boxes["sx"], boxes["sy"], steps=10)
-                page.wait_for_timeout(150)
-                page.mouse.up()
-            except Exception as e:
-                return "failed", [], \
-                    f"populous drag failed for {name!r}: {str(e)[:80]}"
-            _settle(page, base=700)
-            try:
-                slot_txt = page.evaluate("""(args) => {
-                  const vis = e => e && e.offsetParent !== null;
-                  const slots = Array.from(document.querySelectorAll(
-                    '[data-slot], [class*=slot i], [class*=position i], ' +
-                    '[class*=order i]')).filter(vis);
-                  const s = slots[args] || null;
-                  return s ? (s.innerText || '').trim() : '';
-                }""", i) or ""
-            except Exception:
-                slot_txt = ""
-            _dbg(gid, f"worldle populous drag slot {i}: want {name!r} "
-                      f"slot shows {slot_txt!r}")
-            if _nm(slot_txt) != _nm(name):
-                return "failed", [], \
-                    f"populous drag slot {i} shows {slot_txt!r}, want {name!r}"
-    else:
-        # Click-to-order: click in pop-desc order, verify selected
-        # state per click.
-        for name in want:
-            ok, detail = _s_worldle_click_option_text(page, name)
-            if not ok:
-                ok, detail = _s_worldle_click_option_loose(page, name)
-            _dbg(gid, f"worldle populous click {name!r}: ok={ok} ({detail[:50]})")
-            if not ok:
-                return "failed", [], \
-                    f"populous cities click failed: {name!r}"
-            _settle(page, base=700)
-            try:
-                sel = page.evaluate("""(want) => {
-                  const vis = e => e && e.offsetParent !== null;
-                  const norm = s => (s||'').toLowerCase().replace(/\\s+/g,' ').trim();
-                  const el = Array.from(document.querySelectorAll(
-                    'button, [role=option], li, [draggable=true]'))
-                    .filter(vis).find(e => norm(e.innerText) === norm(want));
-                  if (!el) return null;
-                  return {selected: el.getAttribute('aria-selected'),
-                          cls: String(el.className || '').slice(0, 80),
-                          pressed: el.getAttribute('aria-pressed')};
-                }""", name)
-            except Exception:
-                sel = None
-            _dbg(gid, f"worldle populous selected-state {name!r}: {sel}")
+        _guess_disabled = None
+    _dbg(gid, f"worldle populous guess disabled={_guess_disabled}")
+    if _guess_disabled:
+        return "failed", [], \
+            "populous cities: Guess still disabled after all drags"
     _s_worldle_submit_guarded(page, gid, "populousCities", ds)
     _settle(page, base=2200)
     return "attempted", want, f"ordered top-{n_exp} cities by population"
