@@ -27,6 +27,15 @@ GREEN, YELLOW, GREY = (46, 204, 113), (255, 205, 0), (120, 128, 140)
 TEAL = (34, 211, 238)
 TILE_G, TILE_Y, TILE_X = (46, 204, 113), (255, 205, 0), (68, 78, 92)
 
+# Games whose wins are attribute/banner wins, never whole-green-row
+# wins (iter-24, ANALYSIS21 RC6): Batterup/Marveldle solve by matching
+# attribute columns, Countryle by a "you found the ..." banner. A
+# "0 green rows" stat on their solved breakdown cards reads as a
+# failure, so generate_facts drops that stat for these games (same
+# treatment as Waffle with no extra_stat). Compared lower-cased
+# against the display game name passed to generate_facts.
+_ATTRIBUTE_WIN_GAMES = {"batterup", "marveldle", "countryle"}
+
 
 def _fonts():
     pairs = [("C:/Windows/Fonts/segoeuib.ttf", "C:/Windows/Fonts/segoeui.ttf"),
@@ -576,6 +585,10 @@ def generate_facts(out_path, game, date_str, answer, steps,
     metric is meaningless for a swap puzzle (iter-20 card read
     "0 green rows" on a real solve), so with no extra_stat a
     Waffle card drops that stat instead of printing a 0.
+    Attribute/banner games (Batterup, Marveldle, Countryle) also
+    never show "green rows" (iter-24, RC6): their wins are
+    attribute/banner wins, not green-row wins, so the stat would
+    print a misleading "0" on a solved card.
 
     guesses_played overrides the step count when the steps are NOT
     the submitted guesses (Framed: one step per mode answer, but
@@ -593,7 +606,11 @@ def generate_facts(out_path, game, date_str, answer, steps,
         # Iter-21: game-appropriate metric replaces "green rows"
         # (Waffle: swaps used, from the solver evidence).
         stats.append((str(extra_stat[0]), str(extra_stat[1])))
-    elif scoring and str(game or "").lower() != "waffle":
+    elif scoring and str(game or "").lower() != "waffle" \
+            and str(game or "").lower() not in _ATTRIBUTE_WIN_GAMES:
+        # Iter-24 (RC6): attribute/banner games never have whole-green
+        # rows, so the "green rows" stat would print a misleading "0"
+        # on a solved card — drop it instead (same as Waffle above).
         stats.append((str(sum(1 for s in rows
                          if "G" in str(s.get("pattern", "")).upper())),
                  "green rows"))

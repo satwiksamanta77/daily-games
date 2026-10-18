@@ -1319,6 +1319,38 @@ async def _speed_grant_verified(page, cols, state, played, solutions):
     return bool(_popup and _next)
 
 
+async def _speed_grant_already_verified(page, cols, state, played,
+                                        solutions):
+    """True iff the speed game-grant ALREADY holds on the current
+    board (iter-24, P0, ANALYSIS21 carry-forward).
+
+    Same predicate as _speed_grant_verified but WITHOUT its
+    1500ms settle wait: a single green row + coverage + all
+    grids solved + the game offering its advance control, read
+    off the CURRENT board. Read-only probe — never clicks.
+    When True, the caller must claim the win WITHOUT calling
+    _speed_try_advance: the advance click navigates to the hub
+    (iter-23: one Next click after a grant-verified win broke
+    the zero-Next-clicks rule). The no-wait form is enough here
+    because the caller just verified via the grant path (whose
+    own settle already ran) — the advance signal was observed
+    moments ago. Never raises.
+    """
+    try:
+        _green = _green_row_count(state)
+        _covered = (not solutions
+                    or _solutions_played_cover(played, solutions))
+        _all_solved = bool(state) and all(
+            grid_solved(g) for g in state)
+        if not (_green >= 1 and _covered and _all_solved):
+            return False
+        _popup, _next = await _speed_advance_present(page)
+        return _speed_grant_ready(_green, _covered, _all_solved,
+                                  bool(_popup and _next))
+    except Exception:
+        return False
+
+
 async def _check_win_verified(page, cols, boards_n, state, played,
                               solutions, mode_id=None):
     """Page-win check with multi-board verification (iter-19, P2,
@@ -2075,23 +2107,127 @@ async def sweep_popups(page, tag=""):
 # (`_cands`) and every consumer iterates them, clicking / boxing
 # the first VISIBLE + ENABLED one. The candidate dump JS
 # (POWER_BTN_CANDIDATES_JS) lists every match for failure logs.
+# Iter-24 (P0, ANALYSIS21 RC3): the matcher missed the X² key on
+# the official attempt while the key was visibly present, and the
+# two diagnostic probes that should have explained it were both
+# blind in their own ways (see POWER_KEYBOARD_STATE_JS). The
+# matcher below keeps every iter-19/21 branch and adds the
+# rendered forms the old matcher could not see:
+#   * DOM-FLATTENED label: this app renders superscripts as a
+#     plain 2 in a <sup>/sup-styled cell (iter-18 grid finding) —
+#     the key can therefore read back as textContent 'x2' with NO
+#     U+00B2 anywhere. Match 'x'+flat ('x2'/'x3') and a
+#     <sup>-child whose text is the flat exponent.
+#   * FEEDBACK-SUFFIXED label: after a guess containing ² is
+#     evaluated, the key is re-rendered with feedback and its
+#     aria-label/text can gain a suffix ('x², present'). The old
+#     `length <= 3` guard rejected exactly those. Match
+#     startsWith('x'+ch / 'x'+flat) and the words
+#     squared/cubed/power/exponent.
+#   * CLASS-NAMED key: class containing power/exponent/
+#     superscript with a short label.
+#   * SCOPE: buttons AND [role="button"], plus any element inside
+#     a keyboard container (grid cells live in .pb-grid, never in
+#     a keyboard container, so they cannot false-match), with
+#     shadow roots pierced — the old `document.querySelectorAll
+#     ('button')` alone misses a key rendered in any of those
+#     places. Candidates are still filtered by isPowerBtn, and
+#     CLICK/BOX still click/box only the first VISIBLE + ENABLED
+#     one. Nothing here depends on `keyboard_state`: the key is
+#     matched by its rendered label/class alone.
 _POWER_BTN_MATCH_JS = """
   const norm = (s) => (s || '').trim();
-  const isPowerBtn = (b) => {
-    if (!b) return false;
-    const aria = norm(b.getAttribute('aria-label'));
-    if (aria === ch) return true;
-    if (aria === 'x' + ch || aria === 'X' + ch) return true;
-    if (aria.length <= 3 && aria.includes(ch)) return true;
-    const txt = norm(b.textContent);
-    if (txt === ch || txt === 'x' + ch || txt === 'X' + ch) return true;
-    if (txt.length <= 3 && txt.includes(ch)) return true;
-    if (b.dataset && (b.dataset.key === ch || b.dataset.char === ch))
+  const flat = (ch === '²') ? '2' : (ch === '³') ? '3' : ch;
+  const _labelHit = (s) => {
+    if (!s) return false;
+    const t = norm(s);
+    if (t === ch) return true;
+    if (t === 'x' + ch || t === 'X' + ch) return true;
+    if (t === 'x' + flat || t === 'X' + flat) return true;
+    if (t.length <= 3 && t.includes(ch)) return true;
+    const l = t.toLowerCase();
+    if (l.startsWith('x' + ch) || l.startsWith('x' + flat))
       return true;
+    if (l === 'power' || l === 'exponent' || l === 'squared'
+        || l === 'cubed') return true;
+    if (l.startsWith('x squared') || l.startsWith('x cubed')
+        || l.startsWith('x to the power')) return true;
     return false;
   };
-  const _cands = Array.from(document.querySelectorAll('button'))
-    .filter(isPowerBtn);
+  const _hasSupFlat = (b) => {
+    const stack = [b];
+    while (stack.length) {
+      const n = stack.pop();
+      if (!n || n.nodeType !== 1) continue;
+      if (n !== b) {
+        const tag = (n.tagName || '').toUpperCase();
+        const cls = String(n.className || '').toLowerCase();
+        let supEl = (tag === 'SUP' || cls.indexOf('sup') !== -1);
+        if (!supEl) {
+          try {
+            const cs = getComputedStyle(n);
+            if (cs && cs.verticalAlign === 'super') supEl = true;
+          } catch (e) {}
+        }
+        if (supEl && norm(n.textContent) === flat) return true;
+      }
+      for (const c of (n.children || [])) stack.push(c);
+    }
+    return false;
+  };
+  const isPowerBtn = (b) => {
+    if (!b) return false;
+    if (_labelHit(b.getAttribute('aria-label'))) return true;
+    if (_labelHit(b.getAttribute('title'))) return true;
+    if (_labelHit(b.textContent)) return true;
+    if (b.dataset) {
+      if (b.dataset.key === ch || b.dataset.char === ch) return true;
+      for (const v of Object.values(b.dataset)) {
+        if (_labelHit(v)) return true;
+      }
+    }
+    if (_hasSupFlat(b)) {
+      const t = norm(b.textContent);
+      if (t === 'x' + flat || t === 'X' + flat) return true;
+    }
+    const cls = String(b.className || '').toLowerCase();
+    if ((cls.indexOf('power') !== -1
+         || cls.indexOf('exponent') !== -1
+         || cls.indexOf('superscript') !== -1)
+        && norm(b.textContent).length <= 4) return true;
+    return false;
+  };
+  const _qsa = (root, sel) => {
+    try {
+      if (root && typeof root.querySelectorAll === 'function')
+        return root.querySelectorAll(sel);
+    } catch (e) {}
+    return [];
+  };
+  const _allPowerEls = () => {
+    const out = [];
+    const seen = new Set();
+    const push = (el) => {
+      if (el && !seen.has(el)) { seen.add(el); out.push(el); }
+    };
+    const collect = (root) => {
+      for (const el of _qsa(root, 'button')) push(el);
+      for (const el of _qsa(root, '[role="button"]')) push(el);
+      for (const kb of _qsa(
+          root, '[class*="keyboard"], [class*="Keyboard"]')) {
+        for (const el of _qsa(kb, '*')) push(el);
+      }
+      for (const el of _qsa(root, '*')) {
+        if (el.shadowRoot) collect(el.shadowRoot);
+      }
+    };
+    // Top-level buttons: fresh document query on every call
+    // (iter-20) — the common case, before the scoped walk.
+    for (const el of document.querySelectorAll('button')) push(el);
+    collect(document);
+    return out;
+  };
+  const _cands = _allPowerEls().filter(isPowerBtn);
   const _candUsable = (b) => {
     if (!b) return false;
     if (b.disabled) return false;
@@ -2165,6 +2301,7 @@ POWER_BTN_CANDIDATES_JS = """
     return {tag: b.tagName,
             text: (b.textContent || '').trim().slice(0, 24),
             aria: b.getAttribute('aria-label'),
+            cls: String(b.className || '').slice(0, 48),
             rect: {x: Math.round(r.x), y: Math.round(r.y),
                    w: Math.round(r.width), h: Math.round(r.height)},
             disabled: !!b.disabled,
@@ -2235,15 +2372,34 @@ POWER_KEYBOARD_STATE_JS = """
 // `candidates (0): []` with no selector and no keyboard state,
 // so the next artifact could not tell a missing button from a
 // keyboard that had not rendered yet.
+// Iter-24 (P0): this probe NEVER ran — two adjacent string
+// literals in the selector value (`"...power "` newline
+// `"matcher ..."`) are a JS SyntaxError (Unexpected string),
+// so page.evaluate always threw and _power_keyboard_state
+// always returned {}. Every iter-23 `keyboard_state={}` line
+// was this probe bug, not a DOM fact. The strings are now
+// joined with `+`, and the probe also counts [role="button"]
+// elements and shadow hosts (the iter-24 matcher scope).
 () => {
   const btns = Array.from(document.querySelectorAll('button'));
+  const roleBtns = Array.from(
+      document.querySelectorAll('[role="button"]'));
   const kb = document.querySelectorAll(
       '[class*="keyboard"], [class*="Keyboard"]');
   const grids = document.querySelectorAll('div.pb-grid');
-  return {selector: "document.querySelectorAll('button') + power "
-          "matcher (aria-label/text/dataset == ch, x+ch, X+ch)",
+  let shadowHosts = 0;
+  for (const el of document.querySelectorAll('*')) {
+    if (el.shadowRoot) shadowHosts++;
+  }
+  return {selector: "power matcher (rendered label/class, "
+          + "aria-label/text/dataset/title, x+ch, X+ch, x+flat, "
+          + "sup-child, power/exponent class; buttons + "
+          + "role=button + keyboard-container scope, shadow "
+          + "roots pierced)",
           buttons_total: btns.length,
+          role_buttons: roleBtns.length,
           keyboard_containers: kb.length,
+          shadow_hosts: shadowHosts,
           grids: grids.length,
           body_text_len: (document.body
               ? (document.body.innerText || '').length : 0)};
@@ -2261,6 +2417,102 @@ async def _power_keyboard_state(page):
     except Exception:
         pass
     return {}
+
+
+# Identical-retry fail-fast for ²/³ PROBE failures (iter-24, P0,
+# ANALYSIS21 RC3). The iter-23 run burned ~121s re-running the
+# identical ² ladder 16 times: every retry got the same matcher
+# result (0 candidates) in the same board state, because the
+# probe-failure path deliberately did NOT engage the ladder cap
+# (cap = "button existed, entry failed"; a probe failure is not
+# that). The cap is kept — but a retry that is byte-identical to
+# a failed attempt (same matcher result, same board state) is
+# now failed fast instead of re-running the ~30s ladder: the
+# fingerprint is the candidate signature + the in-progress row
+# text. A retry whose fingerprint DIFFERS (keyboard re-rendered,
+# button reappeared, row changed) is NOT identical and proceeds
+# — the fresh fingerprint probe below IS that retry's re-probe,
+# so a late-rendering keyboard is still caught. Focus is not in
+# the fingerprint, but every ladder attempt already runs its
+# focus re-probe (type_equation recovery) and retry paths call
+# focus_grid before retyping, so a focus-fixable failure is
+# fixed on the first attempt, not by a later identical one.
+# Keyed by (page, equation, char) like the ladder cap, reset
+# per mode in play_mode.
+_POWER_PROBE_FAILED_BY_PAGE = weakref.WeakKeyDictionary()
+
+
+def _probe_failed_map(page):
+    """The per-page probe-failure fingerprint map (iter-24).
+
+    Falls back to a fresh (never-matching) map for an
+    unweakrefable page rather than crashing.
+    """
+    try:
+        _m = _POWER_PROBE_FAILED_BY_PAGE.get(page)
+        if _m is None:
+            _m = {}
+            _POWER_PROBE_FAILED_BY_PAGE[page] = _m
+        return _m
+    except TypeError:
+        return {}
+
+
+def _probe_fingerprint(cands, row_text):
+    """Pure fingerprint of one ²/³ probe outcome (iter-24).
+
+    Candidate signature (tag/text/aria/usability per match) +
+    the in-progress row text. Two attempts with the same
+    fingerprint saw the same matcher result in the same board
+    state — re-running the ladder on the second is identical
+    work, not a new attempt.
+    """
+    _sig = tuple(
+        (str(c.get("tag") or ""),
+         str(c.get("text") or ""),
+         str(c.get("aria") or ""),
+         bool(c.get("usable")))
+        for c in (cands or []))
+    return repr((_sig, row_text))
+
+
+async def _probe_failure_is_identical(page, eq, ch, cols):
+    """True iff this ²/³ attempt's probe outcome is identical to
+    a recorded probe failure for the same equation+char
+    (iter-24). No record -> False (first attempt always runs).
+    The fresh probe is the re-probe (_probe_power_candidates),
+    never a bare single read. Never raises."""
+    _rec = _probe_failed_map(page).get((eq, ch))
+    if _rec is None:
+        return False
+    try:
+        _cands = await _probe_power_candidates(page, ch)
+    except Exception:
+        _cands = []
+    try:
+        _row = _in_progress_row_text(
+            await read_state(page, cols, tries=2))
+    except Exception:
+        _row = None
+    return _probe_fingerprint(_cands, _row) == _rec
+
+
+async def _record_probe_failure(page, eq, ch, cols, cands):
+    """Record a ²/³ probe failure's fingerprint (iter-24).
+
+    `cands` is the already re-probed candidate list from the
+    failure dump — no extra lookup is spent re-probing it.
+    Never raises."""
+    try:
+        _row = _in_progress_row_text(
+            await read_state(page, cols, tries=2))
+    except Exception:
+        _row = None
+    try:
+        _probe_failed_map(page)[(eq, ch)] = _probe_fingerprint(
+            cands, _row)
+    except Exception:
+        pass
 
 
 async def _probe_power_candidates(page, ch, attempts=3, wait_ms=250):
@@ -2762,6 +3014,24 @@ async def type_equation(page, eq, delay=200):
                 print(f"[type] power key {part!r} ladder cap: full "
                       f"ladder already failed once for {eq!r} — "
                       f"skipping re-entry (fail fast)")
+            # Iter-24 (P0, ANALYSIS21 RC3): identical-retry
+            # fail-fast. If this attempt's probe outcome is
+            # byte-identical to a recorded probe failure for the
+            # same equation+char (same matcher result, same
+            # in-progress row), do NOT burn ~30s re-running the
+            # ladder — the iter-23 run did exactly that 16
+            # times. A changed fingerprint is NOT identical and
+            # proceeds below (the fingerprint probe itself is
+            # that retry's re-probe).
+            _identical_retry = False
+            if not _ladder_capped:
+                _identical_retry = await _probe_failure_is_identical(
+                    page, eq, part, cols)
+                if _identical_retry:
+                    print(f"[type] power key {part!r} identical-retry "
+                          f"fail-fast: probe outcome identical to a "
+                          f"recorded probe failure for {eq!r} — "
+                          f"skipping ladder (no re-entry)")
             # Iter-18 (ANALYSIS15 §2): the entry verifier is the
             # TILE / SUPERSCRIPT-STYLED-CELL delta between snapshots
             # taken before and after each method — NOT the U+00B2
@@ -2787,9 +3057,9 @@ async def type_equation(page, eq, delay=200):
             after = before
             _after_state = _before_state
             _exhausted = True
-            for _method in (() if _ladder_capped else
-                            ("js-click", "coordinate click",
-                             "clipboard paste", "insert_text")):
+            for _method in (() if (_ladder_capped or _identical_retry)
+                            else ("js-click", "coordinate click",
+                                  "clipboard paste", "insert_text")):
                 _delivered = False
                 if _method == "js-click":
                     # Method 1: JS click via _click_power_key —
@@ -2897,11 +3167,23 @@ async def type_equation(page, eq, delay=200):
                     # site-solution retry and the outer entry
                     # retries (all gated on the cap set) may
                     # re-probe the button instead of failing fast.
-                    print(f"[type] power key {part!r} FAILED after all "
-                          "entry methods (js-click + coordinate click + "
-                          "clipboard paste + insert_text); "
-                          f"U+00B2 count {before}->{after} — row will "
-                          "stall")
+                    # Iter-24: that re-probe is now the cheap
+                    # fingerprint check at the top of this branch
+                    # (identical retries fail fast there); this
+                    # branch records the fingerprint so later
+                    # identical attempts can recognise it.
+                    if _identical_retry:
+                        print(f"[type] power key {part!r} identical-"
+                              f"retry fail-fast: ladder NOT re-run "
+                              f"(probe outcome identical to recorded "
+                              f"failure for {eq!r}) — diagnostic "
+                              f"dump only")
+                    else:
+                        print(f"[type] power key {part!r} FAILED after all "
+                              "entry methods (js-click + coordinate click + "
+                              "clipboard paste + insert_text); "
+                              f"U+00B2 count {before}->{after} — row will "
+                              "stall")
                     _probe_cands = await _dump_power_candidates(
                         page, part)
                     if _probe_cands:
@@ -2911,6 +3193,13 @@ async def type_equation(page, eq, delay=200):
                         # methods may all have run while the
                         # keyboard was mid-render. If it verifies,
                         # this is a recovery, not a failure.
+                        # Iter-24: re-probe AFTER the row has
+                        # focus — the ladder's clicks may all have
+                        # run against an unfocused board.
+                        try:
+                            await focus_grid(page)
+                        except Exception:
+                            pass
                         _re_before = await _grid_superscript_state(
                             page, cols)
                         _re_clicked = bool(
@@ -2939,11 +3228,19 @@ async def type_equation(page, eq, delay=200):
                                   f"ladder cap engaged (button "
                                   f"existed, entry failed — no "
                                   f"re-entry)")
+                    elif _identical_retry:
+                        print(f"[type] power key {part!r} identical-"
+                              f"retry fail-fast confirmed (0 candidates "
+                              f"on re-probe) — no re-entry")
                     else:
                         print(f"[type] power key {part!r} PROBE "
                               f"failure (0 candidates after lookup "
                               f"re-probe) — ladder cap NOT engaged; "
-                              f"retries may re-probe the button")
+                              f"retries may re-probe the button "
+                              f"(identical retries fail fast, "
+                              f"changed-state retries re-run)")
+                        await _record_probe_failure(
+                            page, eq, part, cols, _probe_cands)
             print(f"[type] stage superscript {part!r} done "
                   f"verified={verified} +{time.time() - _t_part:.1f}s")
             await page.wait_for_timeout(120)
@@ -3409,6 +3706,12 @@ async def play_mode(page, mode, script_dir, official=None):
         _POWER_LADDER_FAILED_BY_PAGE[page] = set()
     except TypeError:
         pass
+    # Iter-24: fresh ² probe-failure fingerprints per mode, like
+    # the ladder cap above.
+    try:
+        _POWER_PROBE_FAILED_BY_PAGE[page] = {}
+    except TypeError:
+        pass
     seeded_history = []
     # Iter-22 (P2): per-mode DOM-flattening footnotes, reset per
     # mode like PLAYED is (assigned, not appended across modes).
@@ -3732,6 +4035,25 @@ async def play_mode(page, mode, script_dir, official=None):
                     # single-grid flow (no Next / no new board)
                     # is the game-granted win.
                     if mode["id"] == "speed":
+                        # Iter-24 (P0): the game GRANT already
+                        # holds -> claim the win and STOP. Never
+                        # call _speed_try_advance on the grant
+                        # path: its Next click navigates to the
+                        # hub (iter-23 regression: one Next click
+                        # after a grant-verified win). Advancing
+                        # stays only for wins verified WITHOUT
+                        # the grant (a 2nd board may hide behind
+                        # Next there).
+                        if await _speed_grant_already_verified(
+                                page, cols, state,
+                                list(typed_guesses) + list(played_here),
+                                pool):
+                            print(f"[{mode['id']}] speed grant "
+                                  f"already verified — claiming win "
+                                  f"WITHOUT clicking Next "
+                                  f"(zero-Next-clicks rule)")
+                            signal = "won"
+                            break
                         _adv, _adv_state = await _speed_try_advance(
                             page, cols, state)
                         if _adv == "advanced":

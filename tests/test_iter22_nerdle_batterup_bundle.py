@@ -561,11 +561,15 @@ class TestSpeedPlayModePreAdvanceVerdict(unittest.TestCase):
         self.assertEqual(page.url, "https://speed.nerdlegame.com/")
 
     def test_advance_to_hub_keeps_pre_advance_verdict(self):
+        # Iter-24 (ANALYSIS21 carry-forward) SUPERSEDES the old
+        # contract: a grant-verified win must be claimed WITHOUT
+        # clicking Next (zero-Next-clicks rule). The old test
+        # asserted advance_clicks==1 + hub nav; the new guard
+        # claims the win and breaks before _speed_try_advance.
         # Popup + Next present from the start: the loop-top
-        # verdict verifies via the grant path, the verified
-        # branch advances (board-2 check), the click navigates
-        # to the hub — and the PRE-advance verdict stands
-        # (won), never re-read against the hub page.
+        # verdict verifies via the grant path, the guard claims
+        # the win without advancing, and the page never navigates
+        # to the hub.
         page = _FakeSpeedPage(popup_after=0, navigate_on_click=True)
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -574,9 +578,9 @@ class TestSpeedPlayModePreAdvanceVerdict(unittest.TestCase):
                              official=dict(self.OFFICIAL)))
         out = buf.getvalue()
         self.assertEqual(signal, "won")
-        self.assertEqual(page.advance_clicks, 1)
-        self.assertEqual(page.url, _FakeSpeedPage.HUB)
-        self.assertIn("pre-advance verdict stands", out)
+        self.assertEqual(page.advance_clicks, 0)
+        self.assertNotEqual(page.url, _FakeSpeedPage.HUB)
+        self.assertIn("WITHOUT clicking Next", out)
 
 
 # ---------------------------------------------------------------- fix 1c

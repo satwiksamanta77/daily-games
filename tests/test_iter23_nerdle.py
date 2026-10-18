@@ -179,17 +179,22 @@ class TestProbeFailureDoesNotCap(unittest.TestCase):
         self.assertNotIn(self.EQ, NS._ladder_failed_set(page))
 
     def test_second_entry_retries_ladder_after_probe_failure(self):
-        # Because the cap did not engage, a second entry attempt
-        # re-runs the ladder (re-probes the button) instead of
-        # failing fast — the iter-22 retries were all SKIPPED.
+        # Iter-24 (ANALYSIS21 RC3) SUPERSEDES the old contract:
+        # an identical-retry probe failure FAILS FAST instead of
+        # re-running the ladder. The old test asserted the second
+        # entry increased click_calls; the new fail-fast skips the
+        # ladder when the probe fingerprint matches a recorded
+        # probe failure for the same equation.
         page = _FakeProbePage([[], [], []])
         with contextlib.redirect_stdout(io.StringIO()):
             _run(NS.type_equation(page, self.EQ))
         clicks_after_first = page.click_calls
         self.assertGreater(clicks_after_first, 0)
-        with contextlib.redirect_stdout(io.StringIO()):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
             _run(NS.type_equation(page, self.EQ))
-        self.assertGreater(page.click_calls, clicks_after_first)
+        self.assertEqual(page.click_calls, clicks_after_first)
+        self.assertIn("fail-fast", buf.getvalue())
 
 
 class TestLookupReprobe(unittest.TestCase):

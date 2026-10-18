@@ -999,7 +999,8 @@ _CONSENT_ACCEPT_JS = """(() => {
     'okay', 'continue']);
   const CMP = '[class*=consent i],[class*=cookie i],[class*=cmp i],' +
     '[class*=didomi i],[class*=truste i],[class*=fc-],[class*=modal i],' +
-    '[class*=dialog i],[class*=notice i],[id*=consent i],[id*=cookie i],' +
+    '[class*=dialog i],[class*=notice i],[class*=privacy i],' +
+    '[id*=consent i],[id*=cookie i],[id*=privacy i],' +
     '[id*=didomi],[id*=truste],[role=dialog]';
   const inCmp = (el) => {
     try { if (el.closest(CMP)) return true; } catch (e) {}
@@ -2474,7 +2475,32 @@ def _phoodle_unhide(page, gid="phoodle"):
         return None
 
 
-def _qc_visible_content(gid, vdir, gameplay_path=None, solve_span_s=None):
+def _gameplay_phase_s(solve_span_s, first_action_s):
+    """Pure: gameplay-phase window = solve span minus pre-play time.
+
+    Fix-loop iter 24 (ANALYSIS21 RC6): _SOLVE_SPAN runs START->shot_win
+    and therefore includes browser launch, page load, consent/menu
+    navigation and idle waits — time during which no gameplay exists.
+    The QC coverage check compared the gameplay clip against that whole
+    span, so a good Marveldle final (53.3s of gameplay in a 106.7s
+    span, most of the span being pre-first-typing load/menu time)
+    failed as "gameplay < 50% of solve span". The gameplay phase starts
+    at the first recorded player action (_FIRST_TYPE, START-relative,
+    same clock as the span), so span - first_action is the window the
+    clip must cover. Returns None when either input is missing /
+    non-numeric or the phase is not positive — the caller then falls
+    back to the whole-span comparison (old behaviour)."""
+    try:
+        span = float(solve_span_s)
+        first = float(first_action_s)
+    except (TypeError, ValueError):
+        return None
+    phase = span - first
+    return round(phase, 1) if phase > 0 else None
+
+
+def _qc_visible_content(gid, vdir, gameplay_path=None, solve_span_s=None,
+                        gameplay_phase_s=None):
     """Visible-content QC (shared helper, fix-loop iter 3).
 
     Metadata QC (solved + 1920x1080 + dur>=40) passed a BLANK phoodle video.
@@ -2560,14 +2586,33 @@ def _qc_visible_content(gid, vdir, gameplay_path=None, solve_span_s=None):
                         detail["gameplay"]["duration_s"] = round(_gp_dur, 1)
                     if solve_span_s and _gp_dur > 0:
                         detail["gameplay"]["solve_span_s"] = round(float(solve_span_s), 1)
+                        # Iter 24 (RC6): coverage denominator is the
+                        # gameplay-phase window when known (gameplay
+                        # clip vs first-action->shot_win), NOT the
+                        # whole START->shot_win span — the span
+                        # includes pre-play load/menu time that no
+                        # gameplay clip can or should cover. Falls
+                        # back to the whole span when no phase is
+                        # known (old behaviour).
+                        _denom = None
+                        _denom_label = "solve span"
+                        try:
+                            if gameplay_phase_s and float(gameplay_phase_s) > 0:
+                                _denom = float(gameplay_phase_s)
+                                _denom_label = "gameplay phase"
+                                detail["gameplay"]["gameplay_phase_s"] = round(_denom, 1)
+                        except (TypeError, ValueError):
+                            _denom = None
+                        if _denom is None:
+                            _denom = float(solve_span_s)
                         detail["gameplay"]["coverage"] = round(
-                            _gp_dur / float(solve_span_s), 3)
-                        if _gp_dur < 0.5 * float(solve_span_s):
+                            _gp_dur / _denom, 3)
+                        if _gp_dur < 0.5 * _denom:
                             ok = False
                             detail["gameplay"]["fail"] = (
-                                "gameplay < 50% of solve span "
+                                f"gameplay < 50% of {_denom_label} "
                                 f"({_gp_dur:.1f}s < 50% of "
-                                f"{float(solve_span_s):.1f}s)")
+                                f"{_denom:.1f}s)")
             except Exception as e:
                 detail["gameplay"] = {"error": str(e)[:100]}
         else:
@@ -8097,6 +8142,186 @@ def _s_worldle_switch_mode(page, gid, mode, day_string):
     return _ok
 
 
+def _worldle_g4_snapshot(page):
+    """Snapshot the visible innermost-text elements (iter-24,
+    ANALYSIS21 RC5): one evaluate returning [{text, x, y, w, h,
+    chain}] where chain is the ancestor tag/cls/id list
+    (nearest-first, up to 6 levels, jumping shadow-root hosts).
+    Light DOM + every shadow root. Used for the toggle-diff:
+    the snapshot before a toggle click vs after it names the
+    elements the toggle actually opened, whatever the menu's
+    markup is. Returns [] on any failure."""
+    try:
+        return page.evaluate("""/* G4-DOM-SNAPSHOT */ () => {
+          const roots = [document];
+          const collect = rt => {
+            try {
+              for (const el of rt.querySelectorAll('*')) {
+                if (el.shadowRoot) {
+                  roots.push(el.shadowRoot);
+                  collect(el.shadowRoot);
+                }
+              }
+            } catch (e) {}
+          };
+          try { collect(document); } catch (e) {}
+          const norm = s => (s || '').replace(/\\s+/g, ' ').trim();
+          const vis = e => { try { const r = e.getBoundingClientRect();
+            return r.width > 0 && r.height > 0; }
+            catch (err) { return false; } };
+          const desc = el => { try { return {tag: el.tagName || '',
+            cls: String(el.getAttribute('class') || '')
+              .split(/\\s+/)[0].slice(0, 60) || '',
+            id: el.id || ''}; } catch (e) {
+              return {tag: '', cls: '', id: ''}; } };
+          const out = [];
+          const seen = new Set();
+          for (const rt of roots) {
+            let els = [];
+            try { els = Array.from(rt.querySelectorAll('*')); }
+            catch (e) { continue; }
+            for (const el of els) {
+              if (seen.has(el)) continue;
+              seen.add(el);
+              if (!vis(el)) continue;
+              const txt = norm(
+                el.innerText || el.textContent || '');
+              if (!txt || txt.length > 80) continue;
+              const hasTextChild = Array.from(el.children || [])
+                .some(c => norm(
+                  c.innerText || c.textContent || ''));
+              if (hasTextChild) continue;
+              const chain = [];
+              let cur = el, guard = 0;
+              while (cur && guard < 7) {
+                const p = cur.parentElement;
+                if (p) { chain.push(desc(p)); cur = p; }
+                else {
+                  const r = cur.getRootNode ?
+                    cur.getRootNode() : null;
+                  if (r && r.host) {
+                    chain.push(desc(r.host)); cur = r.host;
+                  } else break;
+                }
+                guard++;
+              }
+              let r;
+              try { r = el.getBoundingClientRect(); }
+              catch (e) { continue; }
+              out.push({text: txt,
+                x: Math.round(r.x), y: Math.round(r.y),
+                w: Math.round(r.width), h: Math.round(r.height),
+                chain: chain.slice(0, 6)});
+              if (out.length >= 3000) return out;
+            }
+          }
+          return out;
+        }""") or []
+    except Exception:
+        return []
+
+
+def _worldle_g4_diff_entries(before, after, labels):
+    """Pure: diff two G4 DOM snapshots (iter-24, ANALYSIS21 RC5).
+
+    Returns {entries_new, entries_removed, container_new,
+    container_removed, anchored_new, anchored_removed,
+    n_new, n_removed, new_label_matches, removed_label_matches}.
+    `entries_*` are the raw texts of the newly appeared /
+    disappeared elements that share the container of the
+    label-matching elements (DOM order, deduped) — the opened
+    menu's leaves, including any unmapped/renamed label. A
+    container counts only when >=3 label-matching elements
+    share one ancestor descriptor (tag/cls/id at any depth);
+    the anchored dict names that descriptor + via='toggle-diff'
+    (or 'toggle-diff-removed'). No container -> entries empty.
+    """
+    def _key(e):
+        try:
+            return (str(e.get("text") or "").strip().lower(),
+                    int(e.get("x") or 0), int(e.get("y") or 0),
+                    int(e.get("w") or 0), int(e.get("h") or 0))
+        except (TypeError, ValueError):
+            return None
+
+    def _label_key(text):
+        try:
+            return _s_worldle_label_key(text)
+        except Exception:
+            return str(text or "").strip().lower()
+
+    label_keys = {_label_key(l) for l in (labels or [])}
+    before = [e for e in (before or []) if isinstance(e, dict)]
+    after = [e for e in (after or []) if isinstance(e, dict)]
+    before_keys = {_key(e) for e in before}
+    after_keys = {_key(e) for e in after}
+    new = [e for e in after if _key(e) not in before_keys]
+    removed = [e for e in before if _key(e) not in after_keys]
+
+    def _container(elements):
+        matches = [e for e in elements
+                   if _label_key(e.get("text") or "")
+                   in label_keys]
+        if len(matches) < 3:
+            return [], None, matches
+        counts = {}
+        order = []
+        anc_of = {}
+        for e in matches:
+            for depth, anc in enumerate(e.get("chain") or []):
+                if not isinstance(anc, dict):
+                    continue
+                k = (depth, str(anc.get("tag") or ""),
+                     str(anc.get("cls") or ""),
+                     str(anc.get("id") or ""))
+                if k not in counts:
+                    counts[k] = 0
+                    order.append(k)
+                    anc_of[k] = anc
+                counts[k] += 1
+        best = None
+        best_count = 0
+        for k in order:
+            if counts[k] > best_count:
+                best, best_count = k, counts[k]
+        if best is None or best_count < 3:
+            return [], None, matches
+        depth, tag, cls, aid = best
+        entries = []
+        seen = set()
+        for e in elements:
+            chain = e.get("chain") or []
+            hit = any(isinstance(a, dict)
+                      and str(a.get("tag") or "") == tag
+                      and str(a.get("cls") or "") == cls
+                      and str(a.get("id") or "") == aid
+                      for a in chain)
+            if not hit:
+                continue
+            t = str(e.get("text") or "").strip()
+            if t and t.lower() not in seen:
+                seen.add(t.lower())
+                entries.append(t)
+        anchored = {"tag": tag, "cls": cls, "id": aid,
+                    "role": "", "via": "toggle-diff",
+                    "score": best_count, "leaves": len(entries)}
+        return entries, anchored, matches
+
+    entries_new, anch_new, matches_new = _container(new)
+    entries_rem, anch_rem, matches_rem = _container(removed)
+    if anch_rem is not None:
+        anch_rem = dict(anch_rem, via="toggle-diff-removed")
+    return {"entries_new": entries_new,
+            "entries_removed": entries_rem,
+            "container_new": bool(anch_new),
+            "container_removed": bool(anch_rem),
+            "anchored_new": anch_new,
+            "anchored_removed": anch_rem,
+            "n_new": len(new), "n_removed": len(removed),
+            "new_label_matches": len(matches_new),
+            "removed_label_matches": len(matches_rem)}
+
+
 def _s_worldle_live_round_modes(page, gid):
     """Read the live round list from the OPEN dropdown.
 
@@ -8176,7 +8401,20 @@ def _s_worldle_live_round_modes(page, gid):
     failure, returns a dump of the top scored containers
     (tag/class/role/rect/score/leaves/sample) that Python
     logs — the opened menu's actual markup, so the next
-    artifact shows what to align the selector to."""
+    artifact shows what to align the selector to.
+
+    Fix-loop iter 24 (ANALYSIS21 RC5): the anchored pass STILL
+    scores 0 everywhere — the menu's container is never among
+    the candidates, or its leaves live in a shadow tree the
+    passes never pierced. Two changes: (1) every leaf pass
+    now pierces shadow roots (container + descendant hosts);
+    (2) TOGGLE-DIFF — on attempts 2-3 the reader snapshots the
+    visible-text DOM before the toggle click and diffs it
+    against the snapshot after: appeared elements are what
+    the toggle opened, disappeared elements mean the toggle
+    closed an already-open menu (re-open + rescan, else use
+    the removed entries). The diff, not markup guessing,
+    names the real container."""
     try:
         labels = list(_WORLDLE_MODE_LABELS.values())
         # Toggle click (tiered). Returns True iff a toggle was
@@ -8292,6 +8530,33 @@ def _s_worldle_live_round_modes(page, gid):
           }
           const hasTextChild = e => Array.from(e.children || [])
             .some(c => norm(c.innerText || c.textContent));
+          // Iter-24 (ANALYSIS21 RC5): leaves pierce shadow
+          // roots — a menu whose entries live inside a web
+          // component's shadow tree is invisible to a plain
+          // querySelectorAll on the container, so every pass
+          // below collects leaves from the container, its
+          // shadow root, and every descendant shadow host.
+          const leavesIn = m => {
+            const sel = 'button, [role=option], [role=menuitem], ' +
+              '[role=menuitemradio], a, li, span, div, p';
+            let arr = Array.from(m.querySelectorAll(sel));
+            const addShadow = rt => {
+              for (const el of rt.querySelectorAll('*')) {
+                if (el.shadowRoot) {
+                  arr = arr.concat(Array.from(
+                    el.shadowRoot.querySelectorAll(sel)));
+                  addShadow(el.shadowRoot);
+                }
+              }
+            };
+            try {
+              if (m.shadowRoot) arr = arr.concat(Array.from(
+                m.shadowRoot.querySelectorAll(sel)));
+              addShadow(m);
+            } catch (err) {}
+            return arr.filter(vis)
+              .filter(e => !hasTextChild(e));
+          };
           let best = null, bestScore = -1, bestLeaves = [];
           for (const m of cands) {
             // Iter-18 leaf rule, kept: entries are NOT bare
@@ -8299,10 +8564,7 @@ def _s_worldle_live_round_modes(page, gid):
             // holding an emoji span + a label span. A leaf is the
             // INNERMOST text-bearing element: no element child
             // carrying non-empty text.
-            const leaves = Array.from(m.querySelectorAll(
-              'button, [role=option], [role=menuitem], ' +
-              '[role=menuitemradio], a, li, span, div, p'))
-              .filter(vis).filter(e => !hasTextChild(e));
+            const leaves = leavesIn(m);
             if (leaves.length < 3 || leaves.length > 60) continue;
             let score = 0;
             for (const lf of leaves)
@@ -8329,10 +8591,7 @@ def _s_worldle_live_round_modes(page, gid):
           // artifact names the menu's actual container.
           let anchored = null;
           try {
-            const leavesOf = m => Array.from(m.querySelectorAll(
-              'button, [role=option], [role=menuitem], ' +
-              '[role=menuitemradio], a, li, span, div, p'))
-              .filter(vis).filter(e => !hasTextChild(e));
+            const leavesOf = m => leavesIn(m);
             const scoreOf = leaves => leaves.filter(lf =>
               labelKeys.has(keyOf(
                 lf.innerText || lf.textContent || ''))).length;
@@ -8490,10 +8749,7 @@ def _s_worldle_live_round_modes(page, gid):
                 fbSeen.add(m);
                 if (/^(BODY|HTML)$/.test(m.tagName)) continue;
                 if (!vis(m)) continue;
-                const leaves = Array.from(m.querySelectorAll(
-                  'button, [role=option], [role=menuitem], ' +
-                  '[role=menuitemradio], a, li, span, div, p'))
-                  .filter(vis).filter(e => !hasTextChild(e));
+                const leaves = leavesIn(m);
                 if (leaves.length < 3 || leaves.length > 60) continue;
                 let score = 0;
                 for (const lf of leaves)
@@ -8535,6 +8791,10 @@ def _s_worldle_live_round_modes(page, gid):
         # unreadable list still returns None below — never a faked
         # live read.
         raw_ev = {}
+        # Iter-24 RC5: pre-toggle DOM snapshot for the
+        # toggle-diff (filled on attempts 2-3, before the
+        # toggle click).
+        _snap_before = []
         # Iter-20 (ANALYSIS17 §2h): TOGGLE-vs-SCAN failure split,
         # logged per attempt. The iter-19 log only said "attempt N
         # found no dropdown container", which conflates two
@@ -8552,6 +8812,7 @@ def _s_worldle_live_round_modes(page, gid):
             if _attempt == 1:
                 raw_ev = _scan()
             elif _attempt == 2:
+                _snap_before = _worldle_g4_snapshot(page)
                 _tog = _toggle()
                 _toggle_outcomes.append(
                     f"attempt2 opened={_tog.get('opened')} "
@@ -8564,6 +8825,7 @@ def _s_worldle_live_round_modes(page, gid):
                 except Exception:
                     pass
                 page.wait_for_timeout(300)
+                _snap_before = _worldle_g4_snapshot(page)
                 _tog = _toggle()
                 _toggle_outcomes.append(
                     f"attempt3 opened={_tog.get('opened')} "
@@ -8597,6 +8859,86 @@ def _s_worldle_live_round_modes(page, gid):
             _dbg(gid, "worldle G4 live rounds reader: attempt "
                       f"{_attempt} anchored="
                       f"{str(_anch_attempt)[:400]}")
+            if not _has_container and _attempt in (2, 3):
+                # Iter-24 RC5: TOGGLE-DIFF. The markup /
+                # anchored / content passes all score 0, so
+                # stop guessing the menu's markup: diff the
+                # DOM snapshot before the toggle click against
+                # the snapshot after it. Elements that APPEARED
+                # are what the toggle opened; elements that
+                # DISAPPEARED mean the toggle CLOSED an
+                # already-open menu the scan-first pass had
+                # missed (then re-open + rescan, else use the
+                # removed entries — they WERE the open menu).
+                try:
+                    _snap_after = _worldle_g4_snapshot(page)
+                    _diff = _worldle_g4_diff_entries(
+                        _snap_before, _snap_after, labels)
+                except Exception as _e_diff:
+                    _diff = {}
+                    _dbg(gid, "worldle G4 toggle-diff: diff "
+                              f"failed ({_e_diff})")
+                if isinstance(_diff, dict) and _diff:
+                    _dbg(gid, "worldle G4 toggle-diff: attempt "
+                              f"{_attempt} new={_diff.get('n_new')} "
+                              f"removed={_diff.get('n_removed')} "
+                              "new_label_matches="
+                              f"{_diff.get('new_label_matches')} "
+                              "removed_label_matches="
+                              f"{_diff.get('removed_label_matches')} "
+                              "container_new="
+                              f"{_diff.get('container_new')} "
+                              "container_removed="
+                              f"{_diff.get('container_removed')} "
+                              "anchored_new="
+                              f"{str(_diff.get('anchored_new'))[:300]} "
+                              "anchored_removed="
+                              f"{str(_diff.get('anchored_removed'))[:300]}")
+                    if _diff.get("container_new"):
+                        raw_ev = {"entries":
+                                  _diff.get("entries_new") or [],
+                                  "container": True,
+                                  "anchored":
+                                      _diff.get("anchored_new"),
+                                  "diag": []}
+                        _has_container = True
+                        _n_entries = len(raw_ev["entries"])
+                        _dbg(gid, "worldle G4 toggle-diff: opened "
+                                  "menu found by DOM diff; "
+                                  f"anchored="
+                                  f"{str(_diff.get('anchored_new'))[:300]} "
+                                  f"entries={_n_entries}")
+                    elif _diff.get("container_removed"):
+                        _dbg(gid, "worldle G4 toggle-diff: toggle "
+                                  "CLOSED an already-open menu; "
+                                  "re-opening + rescanning")
+                        _tog2 = _toggle()
+                        page.wait_for_timeout(700)
+                        raw_ev = _scan()
+                        if isinstance(raw_ev, dict):
+                            _has_container = bool(
+                                raw_ev.get("container"))
+                            _n_entries = len(
+                                raw_ev.get("entries") or [])
+                        elif isinstance(raw_ev, list):
+                            _has_container = True
+                            _n_entries = len(raw_ev)
+                        if not _has_container:
+                            raw_ev = {"entries":
+                                      _diff.get("entries_removed")
+                                      or [],
+                                      "container": True,
+                                      "anchored": _diff.get(
+                                          "anchored_removed"),
+                                      "diag": []}
+                            _has_container = True
+                            _n_entries = len(raw_ev["entries"])
+                            _dbg(gid, "worldle G4 toggle-diff: "
+                                      "re-open scan still empty; "
+                                      "using removed (was-open) "
+                                      "menu entries; anchored="
+                                      f"{str(_diff.get('anchored_removed'))[:300]} "
+                                      f"entries={_n_entries}")
             if _has_container:
                 break
             _dbg(gid, "worldle G4 live rounds reader: attempt "
@@ -10125,6 +10467,101 @@ def _worldle_capital_is_blueish(s):
     return False
 
 
+def _worldle_capital_is_greenish(s):
+    """Pure: the feedback-green rule for a Capital dot (iter-24,
+    ANALYSIS21 RC2). The game recolours the CORRECT dot blue
+    (#5252ff) -> green instead of adding a marker element, so a
+    green fill on a dot that was blue is the game's own grading
+    signal. Named greens + the 6-digit-hex / rgb() g-dominant
+    rule (g > 100, g > r + 30, g >= b - 20) — the mirror of the
+    b-dominant blue rule, so yellow/orange/teal-adjacent fills
+    that fail the g>r+30 test do not count."""
+    import re as _re
+    v = _re.sub(r"\s+", "", str(s or "").lower())
+    if v in ("green", "limegreen", "lime", "forestgreen", "seagreen",
+             "mediumseagreen", "darkgreen", "springgreen"):
+        return True
+    m = _re.match(r"^#([0-9a-f]{6})$", v)
+    if m:
+        n = int(m.group(1), 16)
+        r, g, b = (n >> 16) & 255, (n >> 8) & 255, n & 255
+        return g > 100 and g > r + 30 and g >= b - 20
+    m = _re.match(r"rgba?\((\d+),(\d+),(\d+)", v)
+    if m:
+        r, g, b = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        return g > 100 and g > r + 30 and g >= b - 20
+    return False
+
+
+def _worldle_capital_dot_recoloured(before_dots, after_dots,
+                                    px=None, py=None):
+    """Pure: did a Capital dot change blue -> green between two
+    pinpoint-probe dot lists (iter-24, ANALYSIS21 RC2)?
+
+    Dots are matched by position (within 3px — the same dot
+    before/after). A dot counts as recoloured when NONE of its
+    fill fields was greenish before, ANY fill field (fill /
+    computed_fill / bg / resolved_fill) was blueish before, and
+    ANY fill field is greenish after — the attribute fill may
+    stay #5252ff while the computed fill turns green, so no
+    single field is trusted alone. Returns (bool, detail);
+    detail names the dot + before->after fills, and flags
+    whether the recoloured dot is at/near the clicked point
+    (within 40px) when px/py are given."""
+    import math as _m
+    before = [d for d in (before_dots or []) if isinstance(d, dict)]
+    after = [d for d in (after_dots or []) if isinstance(d, dict)]
+    _fields = ("fill", "computed_fill", "bg", "resolved_fill")
+
+    def _fills(d):
+        return [str(d.get(f) or "") for f in _fields]
+
+    def _any(fn, d):
+        return any(fn(v) for v in _fills(d))
+
+    found = []
+    for a in after:
+        try:
+            ax, ay = float(a.get("x")), float(a.get("y"))
+        except (TypeError, ValueError):
+            continue
+        match = None
+        for b in before:
+            try:
+                bx, by = float(b.get("x")), float(b.get("y"))
+            except (TypeError, ValueError):
+                continue
+            if _m.hypot(ax - bx, ay - by) <= 3.0:
+                match = b
+                break
+        if match is None:
+            continue
+        if _any(_worldle_capital_is_greenish, match):
+            continue
+        if not _any(_worldle_capital_is_blueish, match):
+            continue
+        if not _any(_worldle_capital_is_greenish, a):
+            continue
+        near = None
+        if px is not None and py is not None:
+            try:
+                near = _m.hypot(ax - float(px), ay - float(py)) <= 40.0
+            except (TypeError, ValueError):
+                near = None
+        found.append((a, match, near))
+    if not found:
+        return False, "no blue->green dot recolour"
+    # Prefer a recoloured dot at/near the clicked point; else
+    # the first recoloured dot (a correct pin recolours exactly
+    # one dot — the clicked one).
+    pick = next((f for f in found if f[2] is True), found[0])
+    a, b, near = pick
+    return True, (f"dot id={a.get('id')!r} at ({a.get('x')},"
+                  f"{a.get('y')}) recoloured blue->green "
+                  f"(before={_fills(b)} after={_fills(a)} "
+                  f"near_click={near})")
+
+
 def _worldle_capital_nearest_dot(dots, fit_px, max_dist=60.0):
     """Pure: the dot nearest `fit_px` (the projected city
     coordinates), or None (iter-22, ANALYSIS19 §2).
@@ -10865,6 +11302,11 @@ def _s_worldle_play_capital(page, gid, day):
             if _diag.get("marker_elements") is not None:
                 _pin_probe["marker_elements"] = _diag.get(
                     "marker_elements")
+        # Iter-24 RC2 baseline for the recolour check: the
+        # pinpoint probe's dots (fill/computed_fill/bg) BEFORE
+        # the click, so a blue->green change is measurable.
+        _dots_before_recolour = list(
+            (_pin_probe or {}).get("dots") or [])
         _dots_before = len((_pin_probe or {}).get("dots") or [])
         _target = _worldle_capital_pick_pin_target(
             _pin_probe, (px, py), c.get("name") or "")
@@ -11011,22 +11453,70 @@ def _s_worldle_play_capital(page, gid, day):
                            or a.get("topTag") in ("CIRCLE", "ELLIPSE"))
             return bool(_sig_changed and _top_marker)
 
+        def _recolour_landed():
+            # Iter-24 RC2: recolour / Next-round / confetti are
+            # marker-equivalent signals. Re-probes the pinpoint
+            # dots + body text + confetti DOM; returns (bool,
+            # detail). Only a blue->green dot change counts as
+            # recolour (a wrong pin recolours red, not green).
+            try:
+                _after_probe = _worldle_capital_pinpoint_probe(
+                    page, px, py) or {}
+                _ok_r, _det_r = _worldle_capital_dot_recoloured(
+                    _dots_before_recolour,
+                    _after_probe.get("dots") or [], px, py)
+            except Exception as _e_r:
+                return False, f"recolour re-probe failed ({_e_r})"
+            if _ok_r:
+                return True, f"recolour: {_det_r}"
+            try:
+                _body_r = (page.evaluate(
+                    "() => document.body.innerText") or "").lower()
+            except Exception:
+                _body_r = ""
+            if "next round" in _body_r:
+                return True, ("game shows 'Next round' after the "
+                              "pin (completion signal)")
+            try:
+                _conf = bool(page.evaluate(
+                    "() => !!document.querySelector("
+                    "'[class*=confetti i], [id*=confetti i]')"))
+            except Exception:
+                _conf = False
+            if _conf:
+                return True, "confetti element present after the pin"
+            return False, f"no recolour ({_det_r})"
+
+        def _marker_or_recolour(b, a):
+            # Iter-24 RC2: element-count marker OR recolour /
+            # Next-round / confetti. Used everywhere the old
+            # _marker_appeared gate ran, so a landed pin that
+            # recolours its dot never falls through to the
+            # ladder / NOT-LANDED paths.
+            if _marker_appeared(b, a):
+                return True
+            _ok_r, _det_r = _recolour_landed()
+            if _ok_r:
+                _dbg(gid, "worldle capital pin recolour signal: "
+                          f"{_det_r}")
+            return _ok_r
+
         # Iter-16 (ANALYSIS12 §7): inMap is NOT placement — the
         # iter-15 click landed on the map (inMap=True, top=svg) yet
         # registered NO pin, and the fallbacks below never ran
         # because they are gated on `not _landed`. When no marker
         # appeared, run the pin ladder (path dispatch / real press /
         # confirm step) regardless of _landed.
-        if not _marker_appeared(before, after):
+        if not _marker_or_recolour(before, after):
             _lad_after, _lad_detail = _s_worldle_capital_pin_ladder(
-                page, gid, px, py, before, _marker_appeared)
+                page, gid, px, py, before, _marker_or_recolour)
             _dbg(gid, f"worldle capital pin ladder: {_lad_detail}")
             if _lad_after is not None:
                 after = _lad_after
                 after_markers = int(after.get("markers") or 0)
-                _landed = bool(after.get("inMap")) or _marker_appeared(
+                _landed = bool(after.get("inMap")) or _marker_or_recolour(
                     before, after)
-        if not _landed and not _marker_appeared(before, after):
+        if not _landed and not _marker_or_recolour(before, after):
             # The click point is covered by a NON-map element: ONE
             # coordinate-carrying dispatch on the picked map element,
             # then re-probe. Still only believed if it lands.
@@ -11068,9 +11558,9 @@ def _s_worldle_play_capital(page, gid, day):
             _settle(page, base=1200)
             after = _worldle_pin_probe(page, px, py)
             after_markers = int(after.get("markers") or 0)
-            _landed = bool(after.get("inMap")) or _marker_appeared(
+            _landed = bool(after.get("inMap")) or _marker_or_recolour(
                 before, after)
-        if not _landed and not _marker_appeared(before, after):
+        if not _landed and not _marker_or_recolour(before, after):
             # Second fallback (iter 13): the handler may live inside
             # the map component's shadow tree, where a light-DOM
             # dispatch never reaches it. Dispatch on the deepest
@@ -11082,9 +11572,9 @@ def _s_worldle_play_capital(page, gid, day):
             _settle(page, base=1200)
             after = _worldle_pin_probe(page, px, py)
             after_markers = int(after.get("markers") or 0)
-            _landed = bool(after.get("inMap")) or _marker_appeared(
+            _landed = bool(after.get("inMap")) or _marker_or_recolour(
                 before, after)
-        if not _landed and not _marker_appeared(before, after):
+        if not _landed and not _marker_or_recolour(before, after):
             _dbg(gid, f"worldle capital pin NOT LANDED probe-v2: {after}")
             return "partial", [name], \
                 "pin click did not land on the map (markers " \
@@ -11104,7 +11594,7 @@ def _s_worldle_play_capital(page, gid, day):
                       if (g or {}).get("question") not in (0,)]
             _right = any("right" in str((g or {}).get("name") or "")
                          .lower() for g in _nonq0)
-            _mk = _marker_appeared(
+            _mk = _marker_or_recolour(
                 before, _worldle_pin_probe(page, px, py))
             return (_mk or _delta or _right), \
                 {"delta": _delta, "right": _right, "marker": _mk}
@@ -11140,6 +11630,17 @@ def _s_worldle_play_capital(page, gid, day):
                 "pin click produced no marker and no city-guesses " \
                 f"delta (markers {before_markers}->{after_markers}); " \
                 f"name played; probe-v2={_after2}"
+        # Iter-24 RC1: EXPLICIT return on the pin_ok=True path.
+        # The function previously fell off the end here ->
+        # implicit None -> dispatcher TypeError, aborting the
+        # 9 bonus modes after Capital. pin_ok=True means the
+        # store delta / right entry / marker-or-recolour signal
+        # confirmed the pin; the dispatcher win check (store
+        # name_ok + pin_ok) still decides solved vs failed, so
+        # this return can never upgrade a failed pin to solved.
+        return "attempted", [name], \
+            f"pin landed; arbitrate={_info} markers " \
+            f"{before_markers}->{after_markers}"
 
 
 
@@ -17573,6 +18074,36 @@ def _attr_wait_post_submit(page, gid, timeout_s=8.0):
     return rows
 
 
+def _attr_consent_recheck(page, gid, why, full=False):
+    """Re-dismiss a CMP/consent overlay that (re-)appeared mid-solve.
+
+    Fix-loop iter 24 (ANALYSIS21 RC4): Batterup's "We value your
+    privacy" CMP re-appears after the first guess (ad-iframe navigation
+    re-triggers it) and covers the board, so every later pick/submit
+    click times out. The one-shot _close_modals sweep at solve start
+    never re-runs (dedup via _qp_modals_closed), so the attribute-game
+    loop must re-check consent explicitly: before every pick, after
+    every submit, and whenever submit verification fails with the RC4
+    signature (dropdown open + no row growth). _dismiss_consent clicks
+    an Accept-all button inside a consent/cookie/CMP/privacy container
+    (including shadow DOM / same-origin iframes); full=True also forces
+    a full modal sweep for non-CMP dialogs. Returns the clicked button
+    label, or None. Never raises."""
+    hit = None
+    try:
+        hit = _dismiss_consent(page)
+    except Exception:
+        hit = None
+    if hit:
+        _dbg(gid, f"consent re-check ({why}): dismissed CMP via {hit}")
+    if full:
+        try:
+            _close_modals(page, _force=True)
+        except Exception:
+            pass
+    return hit
+
+
 def _attr_verify_submitted(page, gid, baseline_rows, timeout_s=8.0):
     """Verify a submit actually landed on an attribute-game board.
 
@@ -17623,6 +18154,21 @@ def _attr_verify_submitted(page, gid, baseline_rows, timeout_s=8.0):
                       "dropdown rows) — dropdown detector is known to stay "
                       "open after genuine submits (iter9)")
     else:
+        # RC4 (iter 24): an unverified submit that leaves the dropdown
+        # OPEN with NO row growth is the CMP-overlay signature (Batterup
+        # iter-23: submit verify populated_rows=0 + dropdown_open=True,
+        # then every re-pick click timed out behind "We value your
+        # privacy"). Re-check consent FIRST — blind re-picks just time
+        # out against the overlay again — then clean the board state
+        # for the retry's fresh pick.
+        if _pr.get("dropdown_open"):
+            try:
+                _attr_consent_recheck(
+                    page, gid,
+                    "unverified submit, dropdown open + no row growth",
+                    full=True)
+            except Exception:
+                pass
         # Clean the board state for the retry's fresh pick.
         try:
             _attr_dismiss_suggestion(page)
@@ -17676,6 +18222,12 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
     for n, name in enumerate(seq):
         last = (n == len(seq) - 1)
         _idle_drift(page)
+        # RC4 (iter 24): the CMP can (re-)appear between guesses
+        # (ad-iframe navigation re-triggers it); the start-of-solve
+        # sweep never re-runs (dedup), so re-check consent before
+        # every pick. Cheap CMP-only probe; a no-op when no CMP is
+        # present.
+        _attr_consent_recheck(page, gid, f"before guess {n + 1}")
         # Pre-submit baseline: the verification gate is ROW GROWTH past
         # this count, so a stale row from an earlier guess can never
         # vouch for this one.
@@ -17686,6 +18238,18 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
             _baseline_rows = 0
         ok, detail = _type_country_guess(page, page, name)
         _dbg(gid, f"guess {n + 1}/{len(seq)} {name!r}: pick ok={ok} ({detail})")
+        if not ok:
+            # RC4 (iter 24): a pick that fails while a CMP covers the
+            # board (Playwright click timeout) is NOT a missed
+            # suggestion — the board was unclickable. Re-check consent,
+            # close the dropdown, and retry the pick once before
+            # dropping it.
+            _attr_consent_recheck(page, gid, f"pick failed for {name!r}",
+                                  full=True)
+            _attr_dismiss_dropdown_soft(page)
+            ok, detail = _type_country_guess(page, page, name)
+            _dbg(gid, f"guess {n + 1}/{len(seq)} {name!r}: re-pick "
+                      f"ok={ok} ({detail})")
         if not ok:
             # suggestion missed: drop this probe and continue like a human.
             # It was NEVER submitted: record separately, do not count it.
@@ -17733,6 +18297,15 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
                 _dbg(gid, f"guess {n + 1}/{len(seq)} {name!r}: submit "
                           f"attempt {_attempt + 1}/3 NOT verified on the "
                           f"board; re-picking and retrying")
+                # RC4 (iter 24): verification already re-checked
+                # consent on the dropdown-open + no-growth signature;
+                # re-check again here (cheap probe) in case the CMP
+                # re-appeared with a different signature, and close
+                # the dropdown explicitly before re-picking so a
+                # stale open dropdown cannot swallow the pick.
+                _attr_consent_recheck(
+                    page, gid, "before re-pick after unverified submit")
+                _attr_dismiss_dropdown_soft(page)
                 # Re-pick: the input was cleared by the dismiss inside
                 # verification, so type + pick the suggestion again.
                 ok, detail = _type_country_guess(page, page, name)
@@ -18982,7 +19555,10 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
     _CURRENT_RUN.update({"stage": "qc"})
     _fvis_ok, _fvis_detail = _qc_visible_content(
         gid, vdir, gameplay_path=(vdir / "gameplay_1080.mp4")
-        if (vdir / "gameplay_1080.mp4").exists() else None)
+        if (vdir / "gameplay_1080.mp4").exists() else None,
+        solve_span_s=_SOLVE_SPAN.get(gid),
+        gameplay_phase_s=_gameplay_phase_s(_SOLVE_SPAN.get(gid),
+                                           _FIRST_TYPE.get(gid)))
     if not _fvis_ok:
         _dbg(gid, f"QC visible-content FAIL: {_fvis_detail}")
     _fqc = {"game": gid, "date": date_key, "solved": bool(solved),
@@ -19073,6 +19649,28 @@ def _waffle_facts_stat(evidence):
     if not m:
         return None
     return (m.group(1), "swaps used")
+
+
+def _solver_typeerror_is_signature_mismatch(exc, solver):
+    """Pure: is this TypeError a signature/argument mismatch for
+    the solver call itself (iter-24, ANALYSIS21 RC1)? Only then
+    may run_one retry the solver without `gid`. An inner
+    TypeError (e.g. Capital's None-unpack, "cannot unpack
+    non-iterable NoneType object") must NOT match: the message
+    must name a signature-mismatch shape AND (the solver's own
+    name or 'gid') — an inner call's mismatch naming some
+    other function does not qualify."""
+    msg = str(exc)
+    sig = bool(re.search(
+        r"missing .* required positional argument"
+        r"|takes .* positional argument.*but .* (?:was|were) given"
+        r"|got an unexpected keyword argument"
+        r"|got multiple values for argument",
+        msg))
+    names_solver = bool(
+        getattr(solver, "__name__", "")
+        and getattr(solver, "__name__") in msg)
+    return bool(sig and (names_solver or "'gid'" in msg))
 
 
 def run_one(gid):
@@ -19368,8 +19966,25 @@ def run_one(gid):
                         solved, evidence = solver(pg, ans)
                     else:
                         solved, evidence = solver(pg, aval_s, gid)
-                except TypeError:
-                    solved, evidence = solver(pg, aval_s)
+                except TypeError as _te:
+                    # Iter-24 RC1: this fallback exists ONLY for
+                    # solvers whose signature takes (pg, aval) with
+                    # no gid. The old bare `except TypeError`
+                    # caught a TypeError raised INSIDE the solver
+                    # (e.g. Capital's None-unpack) and re-raised
+                    # the misleading "missing 'gid'" error. Retry
+                    # without gid ONLY when the error is a
+                    # signature mismatch for THIS solver call;
+                    # otherwise re-raise the real traceback so
+                    # the crash is diagnosed, not masked.
+                    if _solver_typeerror_is_signature_mismatch(
+                            _te, solver):
+                        _dbg(gid, "solver signature mismatch "
+                                  f"({str(_te)[:120]}); retrying "
+                                  "without gid")
+                        solved, evidence = solver(pg, aval_s)
+                    else:
+                        raise
                 if not solved and not _defer_stale:
                     try:
                         # Shell-vs-iframe: countryle's shell body is EMPTY
@@ -19749,7 +20364,9 @@ def run_one(gid):
     _vis_ok, _vis_detail = _qc_visible_content(
         gid, vdir, gameplay_path=(vdir / "gameplay_1080.mp4")
         if (vdir / "gameplay_1080.mp4").exists() else None,
-        solve_span_s=_SOLVE_SPAN.get(gid))
+        solve_span_s=_SOLVE_SPAN.get(gid),
+        gameplay_phase_s=_gameplay_phase_s(_SOLVE_SPAN.get(gid),
+                                           _FIRST_TYPE.get(gid)))
     if not _vis_ok:
         _dbg(gid, f"QC visible-content FAIL: {_vis_detail}")
     _qc = {"game": gid, "date": date_key, "solved": bool(solved),
