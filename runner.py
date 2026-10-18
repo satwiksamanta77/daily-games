@@ -18776,6 +18776,14 @@ def _attr_post_submit_probe(page):
       background-colour hue, with the old class-keyword match as a
       fallback), so the all-attribute win path reads the board's own
       colours instead of class names the site never sets.
+      Fix-loop iter 28 (ANALYSIS25 RC1): the colour read is
+      ANCESTOR-AWARE — stateOf walks from each leaf cell up to
+      (excluding) its row, so container-coloured boards (Marveldle:
+      green on the tile container) count their greens too; the
+      iter-27 leaf-only read returned exact=0 on Marveldle's
+      all-green Glob row and missed a win the board had already
+      awarded. Transparent nodes are no verdict ('unknown');
+      opaque non-feedback colours are 'other'.
     - dropdown_open uses the shared conjunctive detector
       (_ATTR_DROPDOWN_OPEN_JS): a visible suggestion row with text
       while the input holds text. After a genuine submit the input
@@ -18810,39 +18818,59 @@ def _attr_post_submit_probe(page):
             .filter(t => t).slice(-6);
           const headerLabels = new Set(['#', 'team', 'div.', 'div',
             'born', 'age', 'pos.', 'pos', 'name', 'player']);
-          const stateOf = el => {
-            const cls = String(el.className || '');
-            if (/exact|correct|green/i.test(cls)) return 'green';
-            if (/yellow|partial|present/i.test(cls)) return 'yellow';
-            try {
-              const bg = window.getComputedStyle(el).backgroundColor || '';
-              const m = bg.match(
-                /rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)(?:,\\s*([\\d.]+))?/);
-              if (m) {
-                if (m[4] !== undefined && parseFloat(m[4]) === 0) {
-                  return 'unknown';
-                }
-                const r = parseInt(m[1], 10);
-                const g = parseInt(m[2], 10);
-                const b = parseInt(m[3], 10);
-                const mx = Math.max(r, g, b);
-                const mn = Math.min(r, g, b);
-                const sat = mx === 0 ? 0 : (mx - mn) / mx;
-                if (sat > 0.12 && mx > 40) {
-                  let hue = 0;
-                  if (mx === r) {
-                    hue = (60 * ((g - b) / (mx - mn)) + 360) % 360;
-                  } else if (mx === g) {
-                    hue = (60 * ((b - r) / (mx - mn)) + 120);
-                  } else {
-                    hue = (60 * ((r - g) / (mx - mn)) + 240);
+          // Fix-loop iter 28 (ANALYSIS25 RC1): the iter-27 read
+          // examined ONLY the leaf cell's own class/background, but
+          // Marveldle's green lives on the TILE CONTAINER (a
+          // non-leaf ancestor) — every leaf read 'other', so an
+          // all-green row counted exact=0 and the win was missed.
+          // stateOf now walks from the leaf up to (excluding) the
+          // row element, returning the FIRST verdict found at any
+          // level (nearest wins): leaf-coloured boards (Batterup)
+          // still read the leaf; container-coloured boards
+          // (Marveldle) read the tile container. The walk never
+          // crosses the row boundary, so a green row container or
+          // page chrome can never mark a cell green. A fully
+          // transparent node is NO verdict (the walk continues up);
+          // an opaque non-feedback colour is 'other'; exhausting
+          // the walk with no verdict is 'unknown' (the continuation
+          // filter skips 'unknown' cells — same as the iter-27
+          // leaf-only read, so no new constraints are invented).
+          const stateOf = (el, rowEl) => {
+            let node = el;
+            while (node && node !== rowEl) {
+              const cls = String(node.className || '');
+              if (/exact|correct|green/i.test(cls)) return 'green';
+              if (/yellow|partial|present/i.test(cls)) return 'yellow';
+              try {
+                const bg = window.getComputedStyle(node).backgroundColor || '';
+                const m = bg.match(
+                  /rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)(?:,\\s*([\\d.]+))?/);
+                if (m && !(m[4] !== undefined &&
+                    parseFloat(m[4]) === 0)) {
+                  const r = parseInt(m[1], 10);
+                  const g = parseInt(m[2], 10);
+                  const b = parseInt(m[3], 10);
+                  const mx = Math.max(r, g, b);
+                  const mn = Math.min(r, g, b);
+                  const sat = mx === 0 ? 0 : (mx - mn) / mx;
+                  if (sat > 0.12 && mx > 40) {
+                    let hue = 0;
+                    if (mx === r) {
+                      hue = (60 * ((g - b) / (mx - mn)) + 360) % 360;
+                    } else if (mx === g) {
+                      hue = (60 * ((b - r) / (mx - mn)) + 120);
+                    } else {
+                      hue = (60 * ((r - g) / (mx - mn)) + 240);
+                    }
+                    if (hue >= 80 && hue <= 170) return 'green';
+                    if (hue >= 35 && hue <= 75) return 'yellow';
                   }
-                  if (hue >= 80 && hue <= 170) return 'green';
-                  if (hue >= 35 && hue <= 75) return 'yellow';
+                  return 'other';
                 }
-              }
-            } catch (e) {}
-            return 'other';
+              } catch (e) {}
+              node = node.parentElement || null;
+            }
+            return 'unknown';
           };
           const isNameLike = t => t.length >= 4 && t.indexOf(' ') >= 0 &&
             /^[A-Za-z .'-]+$/.test(t);
@@ -18866,7 +18894,7 @@ def _attr_post_submit_probe(page):
               populated++;
               feedback += cells.length;
               const cellStates = cells.map(c => ({
-                text: (c.innerText || '').trim(), state: stateOf(c)}));
+                text: (c.innerText || '').trim(), state: stateOf(c, r)}));
               for (const cs of cellStates) {
                 if (cs.state === 'green') exactCells++;
               }
@@ -21087,6 +21115,34 @@ def _framed_segment_bounds(per_mode, duration):
     return bounds, kept
 
 
+def _framed_trim_first_bound(bounds, first_action_s):
+    """Trim the leading idle from Framed's FIRST segment only (iter 28).
+
+    Framed assembly runs with autocrop OFF (autocrop's non-uniform
+    cuts would shift every mode boundary — the misplaced-cards root
+    cause), so the ~26s of empty board before the first typing aired
+    1:1 in the final (ANALYSIS25 Fix 5). The segments are cut
+    independently from the recording timeline, so moving ONLY the
+    first segment's start cannot shift any later mode boundary: the
+    mode cards are prepended per segment and every later bound is
+    untouched. The cut lands 1s before the first recorded action
+    (typing), only when the anchor falls strictly inside the first
+    segment; a missing/out-of-segment anchor means no cut. Returns
+    new bounds (same length, still increasing) — the input list is
+    not mutated. Pure.
+    """
+    try:
+        if not bounds or first_action_s is None:
+            return list(bounds)
+        a, b = float(bounds[0][0]), float(bounds[0][1])
+        cut = float(first_action_s) - 1.0
+        if a < cut < b and cut - a > 0.5 and b - cut >= 2.0:
+            return [(cut, b)] + list(bounds[1:])
+        return list(bounds)
+    except Exception:
+        return list(bounds)
+
+
 def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
                      solved, evidence, vpath):
     """Cut the four Framed modes into one captioned, bordered video."""
@@ -21192,6 +21248,19 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
                 # t_switch values, NO lead rebase: the polished clip
                 # starts at recording 0 with autocrop OFF).
                 bounds, kept = _framed_segment_bounds(per_mode, gd)
+                # Iter 28: trim the leading idle from the FIRST segment
+                # only (see _framed_trim_first_bound) — autocrop is OFF
+                # for Framed, so without this the ~26s of empty board
+                # before the first typing airs 1:1 in the final.
+                _fa = _FIRST_TYPE_REC.get(gid)
+                _bounds_before = bounds
+                bounds = _framed_trim_first_bound(bounds, _fa)
+                if (bounds and _bounds_before
+                        and bounds[0][0] != _bounds_before[0][0]):
+                    _dbg(gid, f"framed leading trim: first segment "
+                              f"{_bounds_before[0][0]:.1f} -> "
+                              f"{bounds[0][0]:.1f} "
+                              f"(first_action={_fa})")
                 _dbg(gid, f"framed bounds (card-anchored): {bounds}")
                 for i, (a, b) in enumerate(bounds):
                     d = kept[i]
