@@ -576,6 +576,17 @@ def canuckle(d=None):
                 if _idx_date(i) <= key:
                     best = (i, ans)
             if best:
+                # Iter-34 (fix-loop): the live fallback returns the
+                # best puzzle with date <= target — which can be a
+                # PREVIOUS day's puzzle when the site has not rolled
+                # yet, and the runner used to solve it and label it
+                # as the target day's. The bundled path above is
+                # date-exact; the live path must be too. A stale
+                # fallback is a defer, never a solve.
+                if _idx_date(best[0]) != key:
+                    raise SystemExit(
+                        f"canuckle: live fallback is {_idx_date(best[0])} "
+                        f"!= target {key} (stale, defer)")
                 return {"answer": best[1], "index": best[0], "date": _idx_date(best[0]), "via": "live"}
     except Exception as e:
         print(f"[canuckle] live failed: {e}")
@@ -1736,7 +1747,14 @@ def marveldle(d=None, mode="comics"):
     except SystemExit:
         raise
     except Exception as _e:
-        print(f"[marveldle] pick-id gate check failed (proceeding to live-solve): {str(_e)[:110]}")
+        # Iter-34 (fix-loop): FAIL-CLOSED. The old code printed
+        # "proceeding to live-solve" and solved the board anyway when
+        # the pick-id fetch itself failed — but a failed fetch proves
+        # nothing about which day's board is live, and the site's
+        # board on a fetch failure is the previous day's puzzle
+        # (2026-10-16 HOWARD THE DUCK bug). Cannot prove published
+        # => defer, never solve-and-label.
+        raise SystemExit(f"marveldle: pick-id check failed ({str(_e)[:110]}) - cannot prove target published, defer")
     try:
         sid = _marvel_sid()
         chars = _marvel_call(f"/characters/{up}", sid, timeout=60)

@@ -4043,15 +4043,26 @@ def _framed_open_board_with_unlock(page, mid):
     return _ready
 
 
+class _FramedStaleBoard(Exception):
+    """Framed served a board whose number is not the target day's.
+
+    Raised by _framed_live_answer; caught in solve_framed_modes,
+    which records the mode as deferred (never solved, never
+    assembled)."""
+
+
 def _framed_live_answer(page, mode, fallback):
-    """Re-resolve a Framed answer for the day the board is ACTUALLY serving.
+    """Gate a Framed answer on the day the board is ACTUALLY serving.
 
     The board header carries the site's own round counter ("ONE FRAME #665"),
-    and each mode advances that counter at its own rate. Comparing it with the
-    number answers.py computed for the unshifted date tells us the day the site
-    really means, and re-running the lookup for that day yields the title the
-    board will accept. Falls back to the given answer when the header cannot be
-    read, so a layout change degrades to the old behaviour rather than breaking.
+    and each mode advances that counter at its own rate. Iter-34: the
+    header number IS the day claim — it must equal the number
+    answers.py computed for the target date, or the mode defers
+    (raise _FramedStaleBoard). The old code re-resolved the answer
+    for the SERVED day (re-key) and fell back to the target answer
+    when the header was unreadable — solving a stale board and
+    labelling it the target day's. A board we cannot prove is the
+    target day's is a defer, never a solve.
     """
     # The mode menu lists ALL FOUR games' headers, so a generic
     # /(CLASSIC|ONE FRAME|TITLESHOT|POSTER)\s*#\s*(\d+)/ match can pick up a
@@ -4091,82 +4102,33 @@ def _framed_live_answer(page, mode, fallback):
             print(f"[framed] {mode}: menu number read failed: "
                   f"{str(_me)[:80]}")
     if not shown:
-        return fallback
+        # Iter-34 (fix-loop): FAIL-CLOSED. An unreadable header proves
+        # nothing about which day's board is live; the old code fell
+        # back to the target answer and solved whatever board was
+        # showing. A board we cannot prove is the target day's is a
+        # defer, never a solve.
+        raise _FramedStaleBoard(
+            f"framed {mode}: board header number unreadable "
+            f"(cannot prove board is the target day's)")
     try:
         base = A.framed(A.target_date(), mode=mode)
         base_num = base.get("puzzle")
-        if not base_num or base_num == shown:
-            return fallback
-        # The board is `shown`; the engine answered `base_num`. Walk the date
-        # forward/back by whole days until the numbers line up.
-        for delta in range(-7, 8):
-            if delta == 0:
-                continue
-            cand = A.framed(A.shift_target_date(delta), mode=mode)
-            if cand.get("puzzle") == shown and cand.get("answer"):
-                print(f"[framed] {mode}: board is #{shown} (engine had "
-                      f"#{base_num}) -> date {delta:+d}d, answer "
-                      f"{cand['answer']!r}")
-                return cand["answer"]
     except Exception as e:
-        print(f"[framed] {mode}: live re-resolve failed: {str(e)[:110]}")
-    # Last resort: ask the site's own source for the board's own number
-    # directly. Titleshot/poster: the CORE API (asset.framed_title ||
-    # asset.title) — the titles top-ten API counts guesses, not correct
-    # answers, so its last-frame leader is the WRONG answer when the
-    # puzzle is a sequel/sibling (titleshot #501: leader "Despicable Me",
-    # real answer "Despicable Me 2"). Classic keeps the titles API
-    # (it shows all 6 frames; frame 6 is the reveal). One-frame NEVER
-    # uses the frame-6 leader — it shows only frame 001, so its answer
-    # comes from the site's bundled list Mh[shown-1] (iter 32: one-frame
-    # #685's frame-6 leader '2001: A Space Odyssey' scored wrong twice).
-    if mode == "one-frame":
-        try:
-            _bundled = A.framed_oneframe_bundled(shown)
-        except Exception:
-            _bundled = None
-        if _bundled:
-            print(f"[framed] {mode}: bundled list for #{shown} "
-                  f"-> {_bundled!r}")
-            return _bundled
-        print(f"[framed] {mode}: bundled list for #{shown} gave nothing; "
-              f"falling back to titles frame-1 leader")
-    if mode in ("titleshot", "poster"):
-        try:
-            _core = A.framed_core(mode, shown)
-        except Exception:
-            _core = None
-        if _core:
-            print(f"[framed] {mode}: direct core API for #{shown} "
-                  f"-> {_core!r}")
-            return _core
-        print(f"[framed] {mode}: core API for #{shown} gave nothing; "
-              f"falling back to titles API")
-    try:
-        import requests as _rq
-        # Explicit API mapping: the titles API's gameType for the
-        # Classic mode is "daily" (answers.FRAMED_MODES keeps that as
-        # value[0]); the internal id is "classic" everywhere else.
-        _gt = A.FRAMED_MODES[mode][0]
-        _r = _rq.get(f"https://titles.framed.wtf/v1/titles/top-ten/{shown}",
-                     params={"gameType": _gt}, timeout=20,
-                     headers={"User-Agent": "WordSolverX Video"})
-        if _r.ok:
-            _fr = (_r.json().get("frames") or [])
-            if _fr:
-                # One-frame shows only frame 001: use frame 1's leader,
-                # never frames[-1] (frame 6). Classic keeps frames[-1].
-                _pick = _fr[0] if mode == "one-frame" else _fr[-1]
-                _raw = _pick.get("items")
-                _it = json.loads(_raw) if isinstance(_raw, str) else (_raw or [])
-                if _it and _it[0].get("title"):
-                    print(f"[framed] {mode}: direct titles API for #{shown} "
-                          f"-> {_it[0]['title']!r}")
-                    return _it[0]["title"]
-    except Exception as e:
-        print(f"[framed] {mode}: direct titles fetch failed: {str(e)[:90]}")
-    print(f"[framed] {mode}: board #{shown} did not map to a known date; "
-          f"using {fallback!r}")
+        raise _FramedStaleBoard(
+            f"framed {mode}: engine number unreadable: {str(e)[:80]}")
+    if not base_num:
+        raise _FramedStaleBoard(
+            f"framed {mode}: engine number missing for target day")
+    if base_num != shown:
+        # Iter-34 (fix-loop): the served board's own number IS the
+        # day claim. The old code walked +/-7 days / bundled lists /
+        # titles APIs to answer the SERVED board (re-key) — solving
+        # a stale board and labelling it the target day's. Served
+        # != target is a defer; the next run (with the served day
+        # as its target) picks it up.
+        raise _FramedStaleBoard(
+            f"framed {mode}: served board #{shown} != target "
+            f"#{base_num} (stale board, defer)")
     return fallback
 
 
@@ -4361,8 +4323,22 @@ def solve_framed_modes(page, answers):
         else:
             _dbg("framed", f"{mid}: ghost-frame text never cleared; "
                            f"proceeding (logged for diagnosis)")
-        # The board is live: agree with the day the site is actually serving.
-        ans = _framed_live_answer(page, mid, ans)
+        # The board is live: gate on the day the site is actually serving.
+        # Iter-34: _framed_live_answer raises _FramedStaleBoard when
+        # the board's own number is not the target day's (or is
+        # unreadable). That mode defers — never solved, never
+        # assembled — and the next run picks it up.
+        try:
+            ans = _framed_live_answer(page, mid, ans)
+        except _FramedStaleBoard as _sb:
+            _ev = f"defer: {str(_sb)}"
+            per_mode.append({"mode": mid, "answer": ans, "solved": False,
+                             "deferred": True, "evidence": _ev,
+                             "t_start": mode_start,
+                             "t_switch": mode_switch})
+            print(f"[framed] {mname}: {_ev}")
+            _dbg("framed", f"{mid}: {_ev}")
+            continue
         # Framed reveals nothing - no letters, no similarity score - so there is
         # genuinely nothing to constrain-propagate. The honest play is to spend
         # the site's REAL budget on plausible wrong titles and only then commit
@@ -6495,7 +6471,36 @@ def _align_answer_to_live_day(gid, ans, page=None):
     _dbg(gid, f"live-day decision: probe served={want} target={have} "
           f"host={_host} url={_url}")
     if want == have:
-        return ans, None
+        # Iter-34: a probe agreeing with the target is NOT proof
+        # when the site's own displayed number says otherwise. For
+        # Semantle the header "Game #N" is page state from the game
+        # host; if it maps to a different day, trust it over the
+        # probe (a probe reading can come from a history/archive
+        # fetch). The displayed day OVERRIDES the probe here and
+        # the normal re-key path below judges it: tgt-1 => the
+        # caller defers; tgt+1 => the caller re-keys; further away
+        # => displayed/probe disagreement, keep target, no re-key.
+        if gid == "semantle" and page is not None:
+            try:
+                _shown2 = _live_day_displayed_puzzle_number(page)
+            except Exception:
+                _shown2 = None
+            if _shown2 is not None:
+                _d2 = _semantle_date_from_puzzle_number(_shown2)
+                if _d2 is not None and _d2 != have:
+                    _off = (_d2 - have).days
+                    if abs(_off) > 1:
+                        _dbg(gid, f"live-day decision: probe served={want} "
+                              f"but site displays Game #{_shown2} = {_d2} "
+                              f"({_off:+d}d) — displayed/probe "
+                              f"disagreement, keeping target answer")
+                        return ans, None
+                    _dbg(gid, f"live-day decision: probe served={want} "
+                          f"but site displays Game #{_shown2} = {_d2} "
+                          f"— overriding probe with displayed day")
+                    want = _d2
+        if want == have:
+            return ans, None
     if abs((want - have).days) > 1:
         # Probe failure, not a re-key: a real day-key disagreement is
         # at most one day (clock/timezone rollover). A 4-day jump is
@@ -16888,6 +16893,30 @@ def _s_worldle_play_bonus(page, gid, day, mode):
     return "skipped", [], f"no player for mode {mode}"
 
 
+def _worldle_summary_date(text):
+    """Parse the Worldle Summary/postcard date ("OCTOBER 18, 2026")
+    to a date, or None when the text carries no parseable date.
+    Pure + unit-testable."""
+    try:
+        m = re.search(r"\b(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|"
+                      r"AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)"
+                      r"\s+(\d{1,2}),\s+(\d{4})\b",
+                      str(text or ""), re.IGNORECASE)
+    except Exception:
+        return None
+    if not m:
+        return None
+    _months = {"JANUARY": 1, "FEBRUARY": 2, "MARCH": 3, "APRIL": 4,
+               "MAY": 5, "JUNE": 6, "JULY": 7, "AUGUST": 8,
+               "SEPTEMBER": 9, "OCTOBER": 10, "NOVEMBER": 11,
+               "DECEMBER": 12}
+    try:
+        return date(int(m.group(3)), _months[m.group(1).upper()],
+                    int(m.group(2)))
+    except (ValueError, KeyError):
+        return None
+
+
 def _s_worldle(page, ans, gid):
     """Worldle ALL daily rounds in ONE video, one chapter per played
     mode: Country first, then bonus rounds in dropdown order, then the
@@ -17106,9 +17135,30 @@ def _s_worldle(page, ans, gid):
     # ---- Summary end card (not a puzzle). No chapter segment is
     # recorded for it here: _s_worldle_final_chapters appends the
     # Summary chapter once, at gameplay end.
-    if _s_worldle_switch_mode(page, gid, "summary", day_string):
+    _summary_ok = _s_worldle_switch_mode(page, gid, "summary", day_string)
+    if _summary_ok:
         _record("summary", "end-card", [],
                 "summary end card (not a puzzle)", (True, [], "n/a"))
+        # Iter-34 (fix-loop): the Summary/postcard carries the
+        # site's own day claim for the board just played. The
+        # solver above follows run_one's re-key (adjacent-date
+        # matching), so a silent probe + stale board could play a
+        # neighbouring day's data labelled as the target's. If the
+        # postcard date is readable and disagrees with the played
+        # day, defer — never ship a mislabelled video. Unreadable
+        # => proceed (a missing read is not evidence of a stale
+        # board).
+        try:
+            _sum_txt = page.evaluate(
+                "() => document.body.innerText") or ""
+        except Exception:
+            _sum_txt = ""
+        _sum_date = _worldle_summary_date(_sum_txt)
+        if _sum_date is not None and str(_sum_date) != str(day.get("date")):
+            _dbg(gid, f"worldle summary date {_sum_date} != played day "
+                      f"{day.get('date')} (stale board, defer)")
+            return False, (f"defer: worldle summary date {_sum_date} != "
+                           f"played day {day.get('date')} (stale board)")
     else:
         _record("summary", "skipped", [],
                 "summary navigation failed (end card only)",
@@ -18692,6 +18742,22 @@ def _phrazle_grid_letters(page):
         return []
 
 
+def _phrazle_date_from_game_number(n):
+    """Game #N -> the date Phrazle serves it, or None if unreadable.
+
+    Pure + unit-testable. The site numbers games 2/day from
+    2022-04-18 (slot 1 before noon, slot 2 after); both slots of a
+    day map back to that day: date = start + (N-1)//2 days.
+    """
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return None
+    if n < 1:
+        return None
+    return A.PHRAZLE_START + timedelta(days=(n - 1) // 2)
+
+
 def _phrazle_browser_answer(page, tgt):
     """Let the page pick its own answer, then trust it.
 
@@ -18727,6 +18793,25 @@ def _s_phrazle(page, ans, gid):
     # groups are the final arbiter: a phrase that does not fill the visible
     # cells is rejected with "Please use all available spaces".
     pick = _phrazle_browser_answer(page, A.target_date()) or {}
+    # Iter-34 (fix-loop): the page's own game number IS the day
+    # claim. The old code trusted the page's answer unconditionally
+    # (served-following): a stale board's phrase was solved and
+    # labelled the target day's. The fake clock pins the browser to
+    # the target day just after midnight, so the served number must
+    # map to the target date exactly — anything else is a stale
+    # board (or a clock mismatch), and defers. An unreadable number
+    # (pick == {}) is NOT evidence of a stale board: proceed with
+    # the planner answer as before.
+    _served_no = (pick or {}).get("game_number")
+    if _served_no is not None:
+        _served_date = _phrazle_date_from_game_number(_served_no)
+        if _served_date is not None and _served_date != A.target_date():
+            _dbg(gid, f"phrazle served game_number {_served_no} = "
+                      f"{_served_date} != target {A.target_date()} "
+                      f"(stale board, defer)")
+            return False, (f"defer: phrazle served game_number "
+                           f"{_served_no} ({_served_date}) != target "
+                           f"{A.target_date()} (stale board)")
     cand = pick.get("answer")
     groups = _phrazle_grid_letters(page)
     if groups and cand:
@@ -18796,7 +18881,7 @@ def _s_contexto(page, ans, gid):
 
 
 def _s_phoodle(page, ans, gid):
-    """Phoodle: answer the puzzle the site is ACTUALLY serving.
+    """Phoodle: solve ONLY the target day's board (iter-34 gate).
 
     Phoodle fetches /daily-word/rest/<date> using the BROWSER's local date. With
     BROWSER_TZ=Pacific/Kiritimati (UTC+14) and the clock just after local
@@ -18825,17 +18910,19 @@ def _s_phoodle(page, ans, gid):
     # Read the page's own calendar day and re-resolve the answer for exactly
     # that day. The captured request is used as a cross-check when present.
     live_date = _browser_today(page)
-    if live_date and live_date != A.target_date():
-        try:
-            cand = A.phoodle(live_date)
-            if cand.get("answer"):
-                print(f"[phoodle] page clock is {live_date} (target "
-                      f"{A.target_date()}) -> answering {cand['answer']!r} "
-                      f"instead of {ans!r}")
-                ans = str(cand["answer"]).upper()
-                _PLANS.pop(gid, None)
-        except Exception as e:
-            print(f"[phoodle] live-date re-resolve failed: {str(e)[:110]}")
+    if live_date is not None and live_date != A.target_date():
+        # Iter-34 (fix-loop): the page's own calendar day IS the day
+        # claim. The old code re-resolved to the served day's word
+        # (served-following): a stale board's word was solved and
+        # labelled the target day's. The fake clock pins the browser
+        # to the target day, so any deviation is a stale board (or
+        # a clock mismatch) — defer, never solve-and-label. (The
+        # _LIVE_DAY raw-word cross-check below is unchanged: it
+        # corrects the word within the SAME date, not across dates.)
+        _dbg(gid, f"phoodle page clock is {live_date} (target "
+                  f"{A.target_date()}) — stale board, defer")
+        return False, (f"defer: phoodle served board for {live_date} "
+                       f"!= target {A.target_date()} (stale board)")
     # Cross-check against the word the site actually requested.
     if _LIVE_DAY.get("raw"):
         try:
@@ -21669,6 +21756,16 @@ def run_framed_all(gid, g, tgt, date_key, today, short):
     # A success means every mode that had an answer and could be played was won.
     playable = [d for d in per_mode if d.get("answer")]
     solved = bool(playable) and all(d.get("solved") for d in playable)
+    # Iter-34: when every playable mode deferred for a stale board,
+    # the evidence must start with "defer:" so the run is classified
+    # as a defer (no video, next run picks it up), not a solve
+    # failure.
+    if not solved and playable:
+        _def_evs = [str(d.get("evidence") or "") for d in per_mode
+                    if d.get("deferred")
+                    and str(d.get("evidence") or "").startswith("defer:")]
+        if len(_def_evs) == len(playable):
+            evidence = "; ".join(_def_evs)
     print(f"[{gid}] solved={solved} ({len(solved_modes)}/{len(per_mode)} modes) {evidence}")
     # Preliminary result.json for the framed path too (run_framed_all
     # bypasses run_one's post-solve write; _assemble_framed writes the

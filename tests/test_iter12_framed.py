@@ -143,33 +143,21 @@ class _FramedFakePage:
 
 
 class TestFramedLiveAnswerCore(unittest.TestCase):
-    """_framed_live_answer re-resolves via the core API for titleshot."""
+    """Iter-34: _framed_live_answer is a GATE, not a re-key. A served
+    board number that differs from the target day's number defers
+    (raise _FramedStaleBoard) — the old date-walk / core-API re-key
+    (solving the served board and labelling it the target day's)
+    is deleted."""
 
-    def test_date_walk_uses_core(self):
+    def test_served_number_mismatch_defers(self):
         page = _FramedFakePage(shown=501, body="TITLESHOT #501")
-        core_500 = {"asset": {"title": "Innerspace", "framed_title": ""}}
-        core_501 = {"asset": {"title": "Despicable Me 2",
-                              "framed_title": ""}}
-
-        def _get(url, **kw):
-            if "core.framed.wtf" in url and "/500" in url:
-                return _Resp(200, core_500)
-            if "core.framed.wtf" in url and "/501" in url:
-                return _Resp(200, core_501)
-            if "titles.framed.wtf" in url:
-                return _Resp(404, {})
-            raise AssertionError(f"unexpected fetch: {url}")
-
-        with mock.patch("requests.get", _get):
-            with mock.patch.object(A, "target_date",
-                                   return_value=date(2026, 10, 17)):
-                with mock.patch.object(
-                        A, "shift_target_date",
-                        side_effect=lambda dlt: date(2026, 10, 17)
-                        + timedelta(days=dlt)):
-                    got = R._framed_live_answer(page, "titleshot",
-                                                "Despicable Me")
-        self.assertEqual(got, "Despicable Me 2")
+        with mock.patch.object(
+                A, "framed",
+                return_value={"puzzle": 500, "answer": "X"}):
+            with self.assertRaises(R._FramedStaleBoard) as cm:
+                R._framed_live_answer(page, "titleshot", "Despicable Me")
+        self.assertIn("501", str(cm.exception))
+        self.assertIn("500", str(cm.exception))
 
 
 class TestFramedSegmentBounds(unittest.TestCase):
@@ -333,6 +321,12 @@ class TestSearchleOpener(unittest.TestCase):
         # The old bug: the fixed opener was dropped and plan_sequence
         # fell back to an entropy pick. The opener must now be the
         # date-seeded bank pick, not whatever pick_guess prefers.
+        # Drop any cached plan first: test_iter12_carry populates
+        # R._PLANS["searchle"] under a MOCKED target_date (2026-10-18),
+        # and _guesses would otherwise return that stale cached plan
+        # instead of recomputing with the real date (order-dependent
+        # failure in the full suite; passes in isolation).
+        R._PLANS.pop("searchle", None)
         g = R._guesses("searchle", "KNEES")
         bank = S.words_searchle().get(5) or []
         import random as _r

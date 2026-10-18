@@ -170,48 +170,39 @@ class _FakePage:
 
 
 class TestLiveAnswerOneFrame(unittest.TestCase):
-    def setUp(self):
-        A._FRAMED_ONEFRAME_TITLES_CACHE = None
+    # Iter-34: _framed_live_answer is now a GATE, not a re-key.
+    # Served board number != target number => _FramedStaleBoard
+    # (mode defers); unreadable header => defer. The bundled-list /
+    # titles-API re-key paths were the hole (solving a stale board
+    # and labelling it the target day's) and are deleted. The
+    # planner-side bundled lookup (answers.framed one-frame) is
+    # unchanged and still covered by the tests above.
 
-    def tearDown(self):
-        A._FRAMED_ONEFRAME_TITLES_CACHE = None
+    def _framed_engine(self, puzzle):
+        return mock.patch("answers.framed",
+                          return_value={"puzzle": puzzle,
+                                        "answer": "Engine"})
 
-    def _framed_never_matches(self, *a, **kw):
-        # Date-walk finds no date whose number == shown.
-        return {"puzzle": 999, "answer": "Nope"}
-
-    def test_live_answer_oneframe_uses_bundle(self):
-        pg = _FakePage(shown=2)
-        with mock.patch("requests.get", _bundle_get), \
-                mock.patch("answers.framed", self._framed_never_matches):
-            got = R._framed_live_answer(pg, "one-frame", "fallback")
-        self.assertEqual(got, "The Blob")
-
-    def test_live_answer_oneframe_bundle_down_uses_frame1(self):
-        def _get(url, **kw):
-            if "framed.wtf/one-frame" in url:
-                return _Resp(404, text="")
-            if "titles.framed.wtf" in url:
-                return _Resp(200, payload=_TOP_TEN)
-            raise AssertionError(f"unexpected fetch: {url}")
-
+    def test_live_answer_match_returns_fallback(self):
         pg = _FakePage(shown=685)
-        with mock.patch("requests.get", _get), \
-                mock.patch("answers.framed", self._framed_never_matches):
+        with self._framed_engine(685):
             got = R._framed_live_answer(pg, "one-frame", "fallback")
-        self.assertEqual(got, "Outbreak")
+        self.assertEqual(got, "fallback")
 
-    def test_live_answer_classic_still_uses_last_frame(self):
-        def _get(url, **kw):
-            if "titles.framed.wtf" in url:
-                return _Resp(200, payload=_TOP_TEN)
-            raise AssertionError(f"unexpected fetch: {url}")
+    def test_live_answer_mismatch_defers(self):
+        pg = _FakePage(shown=684)
+        with self._framed_engine(685):
+            with self.assertRaises(R._FramedStaleBoard) as cm:
+                R._framed_live_answer(pg, "one-frame", "fallback")
+        self.assertIn("684", str(cm.exception))
+        self.assertIn("685", str(cm.exception))
 
-        pg = _FakePage(shown=1682)
-        with mock.patch("requests.get", _get), \
-                mock.patch("answers.framed", self._framed_never_matches):
-            got = R._framed_live_answer(pg, "classic", "fallback")
-        self.assertEqual(got, "2001: A Space Odyssey")
+    def test_live_answer_unreadable_defers(self):
+        pg = _FakePage(shown=None)
+        with self._framed_engine(685):
+            with self.assertRaises(R._FramedStaleBoard) as cm:
+                R._framed_live_answer(pg, "classic", "fallback")
+        self.assertIn("unreadable", str(cm.exception))
 
 
 if __name__ == "__main__":

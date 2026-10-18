@@ -29,7 +29,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -72,12 +72,21 @@ class TestGloblePageTz(unittest.TestCase):
     timeZone)."""
 
     def test_kiritimati_rolled_is_not_used(self):
-        # On 2026-10-17 real Kiritimati has already rolled to 10-18,
-        # so the page tz must NOT be Kiritimati for that target day.
-        tz = A._globle_page_tz(date(2026, 10, 17), "Pacific/Kiritimati")
+        # Kiritimati (UTC+14) is the earliest zone: its real today is
+        # always one day ahead of Honolulu's (UTC-10, exactly 24h
+        # behind, and in the candidate list). So for target ==
+        # Kiritimati-today minus one day, Kiritimati has already
+        # rolled past the target and the page tz must NOT be
+        # Kiritimati. Relative dates: the old hardcoded 2026-10-17
+        # version expired once no zone's real date was 2026-10-17
+        # anymore (a full-suite run on 2026-10-18 evening failed it);
+        # the intent — never pick a zone that already rolled past the
+        # target — is unchanged.
+        target = (datetime.now(ZoneInfo("Pacific/Kiritimati")).date()
+                  - timedelta(days=1))
+        tz = A._globle_page_tz(target, "Pacific/Kiritimati")
         self.assertNotEqual(tz, "Pacific/Kiritimati")
-        self.assertEqual(datetime.now(ZoneInfo(tz)).date(),
-                         date(2026, 10, 17))
+        self.assertEqual(datetime.now(ZoneInfo(tz)).date(), target)
 
     def test_prefers_browser_tz_when_it_matches(self):
         tokyo_today = datetime.now(ZoneInfo("Asia/Tokyo")).date()
