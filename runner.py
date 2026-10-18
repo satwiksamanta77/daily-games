@@ -3194,6 +3194,13 @@ def _colorfle_swatches(page):
     return sw
 
 
+# Iter-27: the modal-hidden condition for the Colorfle poll below.
+_COLORFLE_MODAL_HIDDEN_JS = """() => {
+  const m = document.querySelector('.modal');
+  return !m || m.offsetParent === null || m.style.display === 'none';
+}"""
+
+
 def _dismiss_colorfle_modal(page):
     """Close the How-to-Play modal.
 
@@ -3206,7 +3213,19 @@ def _dismiss_colorfle_modal(page):
             if (m) { m.classList.remove('active','show','visible');
                      m.style.display = 'none'; }
         }""")
-        page.wait_for_timeout(800)
+        # Iter-27: poll for the modal actually hidden (100ms) instead
+        # of a fixed 800ms sleep; same 800ms cap, exits as soon as
+        # the condition the sleep was waiting for is true.
+        import time as _t
+        _end = _t.time() + 0.8
+        while _t.time() < _end:
+            try:
+                _hidden = page.evaluate(_COLORFLE_MODAL_HIDDEN_JS)
+            except Exception:
+                _hidden = True
+            if _hidden:
+                break
+            page.wait_for_timeout(100)
     except Exception:
         pass
 
@@ -3317,6 +3336,21 @@ def solve_colorfle(page, ans):
                    f"(stats={stats[:120]!r})")
 
 
+def _framed_wait_board_ready(page, cap_ms=6000):
+    """Poll _framed_board_ready every 250ms up to cap_ms (iter-27):
+    the old fixed 6000ms sleep kept waiting after the board was
+    already ready. Same cap, same readiness condition, strictly
+    faster when the board lands early. Never changes typing."""
+    import time as _t
+    _end = _t.time() + cap_ms / 1000.0
+    while True:
+        if _framed_board_ready(page):
+            return True
+        if _t.time() >= _end:
+            return False
+        page.wait_for_timeout(250)
+
+
 def _framed_open_mode(page, url):
     """Open a Framed mode and make sure the real game board is showing.
 
@@ -3328,7 +3362,7 @@ def _framed_open_mode(page, url):
     its placeholder.
     """
     page.goto(url, wait_until="domcontentloaded", timeout=45000)
-    page.wait_for_timeout(6000)
+    _framed_wait_board_ready(page)
     if _framed_board_ready(page):
         return True
     # The mode menu lives in an OFF-SCREEN sidebar (its tiles measure x = -288),
@@ -3342,7 +3376,7 @@ def _framed_open_mode(page, url):
         try:
             page.goto("https://framed.wtf" + want,
                       wait_until="domcontentloaded", timeout=45000)
-            page.wait_for_timeout(6000)
+            _framed_wait_board_ready(page)
         except Exception:
             pass
     return _framed_board_ready(page)
@@ -10572,6 +10606,41 @@ def _worldle_capital_dot_recoloured(before_dots, after_dots,
                   f"near_click={near})")
 
 
+def _worldle_capital_marker_appeared(before, after):
+    """Pure: did an element-count marker appear (extracted from the
+    Capital pin closure, iter-27, so the marker-or-recolour
+    decision is unit-testable)."""
+    if int((after or {}).get("markers") or 0) > int(
+            (before or {}).get("markers") or 0):
+        return True
+    _sig_changed = bool((after or {}).get("sig")
+                        and (before or {}).get("sig")
+                        and (after or {}).get("sig")
+                        != (before or {}).get("sig"))
+    _top_marker = ("marker" in str((after or {}).get("topCls") or "")
+                   .lower()
+                   or "pin" in str((after or {}).get("topCls") or "")
+                   .lower()
+                   or (after or {}).get("topTag")
+                   in ("CIRCLE", "ELLIPSE"))
+    return bool(_sig_changed and _top_marker)
+
+
+def _worldle_capital_marker_or_recolour(before, after, recolour_ok,
+                                        recolour_detail, log=None):
+    """Pure decision: marker OR recolour (iter-27). ALWAYS reports
+    an observed recolour through `log` — previously the recolour
+    probe was short-circuited when the marker count rose, so the
+    explicit `recolour: blue->green` line vanished in iter-25/26
+    even though the dot had recoloured (markers 4->5, clicked
+    circle#right-811 fill #5252ff). The verdict is unchanged:
+    marker OR recolour."""
+    if recolour_ok and log is not None:
+        log(f"worldle capital pin recolour signal: {recolour_detail}")
+    return bool(_worldle_capital_marker_appeared(before, after)
+                or recolour_ok)
+
+
 def _worldle_capital_nearest_dot(dots, fit_px, max_dist=60.0):
     """Pure: the dot nearest `fit_px` (the projected city
     coordinates), or None (iter-22, ANALYSIS19 §2).
@@ -11453,16 +11522,9 @@ def _s_worldle_play_capital(page, gid, day):
                   f"before={_dots_before} after={_dots_after} "
                   f"markers={before_markers}->{after_markers}")
 
-        def _marker_appeared(b, a):
-            if int(a.get("markers") or 0) > int(b.get("markers") or 0):
-                return True
-            _sig_changed = bool(a.get("sig") and b.get("sig")
-                                 and a.get("sig") != b.get("sig"))
-            _top_marker = ("marker" in str(a.get("topCls") or "").lower()
-                           or "pin" in str(a.get("topCls") or "").lower()
-                           or a.get("topTag") in ("CIRCLE", "ELLIPSE"))
-            return bool(_sig_changed and _top_marker)
-
+        # (Iter-27: _marker_appeared now lives at module level as
+        # _worldle_capital_marker_appeared; the recolour probe below
+        # always runs — see _marker_or_recolour.)
         def _recolour_landed():
             # Iter-24 RC2: recolour / Next-round / confetti are
             # marker-equivalent signals. Re-probes the pinpoint
@@ -11502,14 +11564,17 @@ def _s_worldle_play_capital(page, gid, day):
             # Next-round / confetti. Used everywhere the old
             # _marker_appeared gate ran, so a landed pin that
             # recolours its dot never falls through to the
-            # ladder / NOT-LANDED paths.
-            if _marker_appeared(b, a):
-                return True
+            # ladder / NOT-LANDED paths. Iter-27: the recolour
+            # probe ALWAYS runs — the old version short-circuited
+            # on a marker-count rise, so when markers went 4->5
+            # (iter-25/26) the recolour was never probed and the
+            # explicit `recolour: blue->green` line vanished even
+            # though the dot had recoloured. Verdict unchanged:
+            # marker OR recolour.
             _ok_r, _det_r = _recolour_landed()
-            if _ok_r:
-                _dbg(gid, "worldle capital pin recolour signal: "
-                          f"{_det_r}")
-            return _ok_r
+            return _worldle_capital_marker_or_recolour(
+                b, a, _ok_r, _det_r,
+                log=lambda _m: _dbg(gid, _m))
 
         # Iter-16 (ANALYSIS12 §7): inMap is NOT placement — the
         # iter-15 click landed on the map (inMap=True, top=svg) yet
@@ -17042,6 +17107,303 @@ def _countryle_evaluate_win(body, picked, seq, url=""):
     return False, f"no win signal in board body (picked {picked!r})"
 
 
+# Stable slide signal (iter-27): the active .owl-item index.
+# The full slide fingerprint's href/btns components can change WITHOUT a
+# slide advance (ad churn / iframe navigations), so a fingerprint change
+# alone is not proof the slide moved. The active carousel index only
+# changes when the slide does.
+_COUNTRYLE_SLIDE_IDX_JS = """() => {
+  const items = Array.from(document.querySelectorAll('.owl-item'));
+  const active = items.findIndex(
+      el => el.classList && el.classList.contains('active'));
+  return {active: active, count: items.length};
+}"""
+
+
+def _countryle_slide_key(fr):
+    """Active .owl-item index + count, or None when unreadable."""
+    try:
+        r = fr.evaluate(_COUNTRYLE_SLIDE_IDX_JS) or {}
+        if r.get("count"):
+            return (r.get("active"), r.get("count"))
+    except Exception:
+        pass
+    return None
+
+
+def _countryle_slide_advanced(before_key, before_fp, after_key, after_fp):
+    """True when the slide verifiably advanced. Primary signal: the
+    active .owl-item index changed. Fallback (no .owl-item readable):
+    the full slide fingerprint changed — the iter-16 behaviour."""
+    if before_key is not None and after_key is not None:
+        return after_key != before_key
+    return (after_fp or "") != (before_fp or "")
+
+
+def _countryle_deck_present(fr):
+    """True when the welcome deck is on screen: an onboarding button
+    (NEXT/SKIP/PLAY) is offered AND the Owl carousel is in the DOM.
+    Used to detect the deck re-appearing after PLAY (iter-26: the
+    app re-navigated to /welcome mid-input-wait)."""
+    try:
+        box = fr.evaluate(_COUNTRYLE_BTN_JS)
+        if not box:
+            return False
+        key = _countryle_slide_key(fr)
+        return key is not None and key[1] > 0
+    except Exception:
+        return False
+
+
+def _countryle_deliver_tap(page, fr, box, method):
+    """One tap delivery attempt. Returns True when the delivery
+    itself fired (NOT that the slide advanced — the caller
+    verifies that separately after a settle)."""
+    try:
+        if method == "element":
+            el = fr.query_selector(
+                f"button:text-is('{box['t']}'), "
+                f"a:text-is('{box['t']}')")
+            if not el:
+                return False
+            el.click(timeout=2500)
+            return True
+        if method == "coords":
+            page.mouse.click(box["x"], box["y"])
+            return True
+        if method == "js-click":
+            return bool(fr.evaluate(_COUNTRYLE_BTN_JS_CLICK_JS,
+                                    box["t"]))
+    except Exception:
+        return False
+    return False
+
+
+def _countryle_run_deck(page, fr, gid):
+    """Tap through the Countryle welcome deck (Owl Carousel, 6 slides).
+
+    Iter-27 (ANALYSIS24 §3, CORRECTED root cause): the iter-25->26
+    code diff contains ZERO Countryle hunks — same code, same
+    5x NEXT + PLAY! tap sequence, same log shape in both runs
+    (iter-25 solved, iter-26 failed). The iter-26 failure was
+    NOT taps that never advanced: the scan DID reach the PLAY!
+    button, which only mounts on the last slide. What failed was
+    AFTER PLAY: the app re-navigated to /welcome at 05:08:57
+    (log NAV line, mid-input-wait), the deck was back on slide 1
+    (gameplay frame f0025), and the bot never verified the game
+    mounted, never re-ran onboarding, and burned the input wait.
+    Two latent defects made that possible: (1) the tap ladder ran
+    js-click FIRST and trusted the dispatch — a synthetic
+    .click() that the site's handlers may ignore; (2) the
+    advance verdict compared the full fingerprint, whose
+    href/btns components change without a slide advance.
+
+    Fix: REAL-click-first ladder (Playwright element click, then
+    coordinate click, then JS click last), post-tap slide-advance
+    verification after EACH method against the stable active
+    .owl-item index, retry with the next method when a tap did
+    not advance, and a LOUD 'deck-stuck' failure when the full
+    ladder + escalation cannot advance the slide — the caller
+    must NOT proceed to an input wait that cannot succeed.
+
+    Returns (fr, status): 'input-visible' (deck dismissed, input
+    on screen), 'deck-dismissed' (no onboarding button left,
+    input not yet visible — PLAY/input-wait phase follows),
+    'no-deck' (no button found on first scan), 'deck-stuck'.
+    The iter-16 slide-sensitive fingerprint is unchanged.
+    """
+    page._qp_stuck = 0
+    for _tap in range(16):
+        # Re-acquire EVERY iteration: the iframe navigates mid-deck and
+        # the old handle goes stale (every poll then misses).
+        _fr_new = _countryle_live_frame(page, fr)
+        if _fr_new is not fr:
+            _dbg(gid, "onboarding: frame re-acquired "
+                      f"(was {(fr.url if fr else '')[:40]})")
+            fr = _fr_new
+        box = None
+        try:
+            # PLAY/START-first scan (see _COUNTRYLE_BTN_JS): tap PLAY as
+            # soon as it exists instead of starving it behind NEXT.
+            box = fr.evaluate(_COUNTRYLE_BTN_JS)
+        except Exception:
+            box = None
+        if not box:
+            try:
+                if fr.query_selector("input"):
+                    return fr, "input-visible"
+            except Exception:
+                pass
+            return fr, ("no-deck" if _tap == 0 else "deck-dismissed")
+        # A leftover loading mask (ad shell) absorbs every click when the
+        # blocked ad scripts never fire their callback: strip it first.
+        try:
+            fr.evaluate("""() => {
+                for (const m of document.querySelectorAll(
+                        '#loading-mask, .mask, [class*=loading i]'))
+                    m.remove();
+            }""")
+        except Exception:
+            pass
+        try:
+            _before_key = _countryle_slide_key(fr)
+            _before = (fr.evaluate(_COUNTRYLE_SLIDE_FP_JS) or "")
+        except Exception:
+            _before_key, _before = None, ""
+        # An invisible overlay (re-rendered ad/mask layer) was absorbing
+        # every tap: probe the point and evict whatever is not the button.
+        try:
+            _int = fr.evaluate("""(pt) => {
+                const el = document.elementFromPoint(pt.x, pt.y);
+                if (!el) return null;
+                if (el.closest('button, a')) return null;
+                const desc = el.tagName + '#' + (el.id || '') + '.' +
+                    ((el.className || '').toString().slice(0, 60));
+                el.remove();
+                return desc;
+            }""", box)
+            if _int:
+                _dbg(gid, f"evicted interceptor {_int!r} over {box['t']}")
+        except Exception:
+            pass
+        # Delivery ladder, REAL clicks first: Playwright element click
+        # (a trusted click the site's handlers see), then a coordinate
+        # click, then JS .click() as last resort. After EACH method,
+        # verify the slide actually advanced; a method that did not
+        # advance is retried with the next method, not trusted.
+        _via = None
+        _advanced = False
+        for _method in ("element", "coords", "js-click"):
+            if not _countryle_deliver_tap(page, fr, box, _method):
+                continue
+            _via = _method
+            page.wait_for_timeout(700)
+            try:
+                if fr.query_selector("input"):
+                    _dbg(gid, "input visible, onboarding done")
+                    return fr, "input-visible"
+            except Exception:
+                pass
+            try:
+                _after_key = _countryle_slide_key(fr)
+                _after = (fr.evaluate(_COUNTRYLE_SLIDE_FP_JS) or "")
+            except Exception:
+                _after_key, _after = None, ""
+            if _countryle_slide_advanced(_before_key, _before,
+                                         _after_key, _after):
+                _advanced = True
+                break
+        _push_click_at(box["x"], box["y"])
+        _dbg(gid, f"onboarding tap {box['t']!r} via={_via} "
+                  f"advanced={_advanced}")
+        if _advanced:
+            page._qp_stuck = 0
+            continue
+        # No method advanced the slide: log the stuck-tap probe, then
+        # escalate ONCE (keyboard activation), then SKIP for NEXT.
+        # Fix-loop iter 6: the ladder still fails to advance
+        # slide 1 on first attempts for an UNPROVEN reason —
+        # log the slide key + fingerprint + elementFromPoint at
+        # the tap point so the next artifact shows whether
+        # taps are absorbed (overlay) or the fingerprint
+        # lags the real slide.
+        try:
+            _hit = fr.evaluate("""(pt) => {
+              const el = document.elementFromPoint(pt.x, pt.y);
+              if (!el) return 'elementFromPoint: null';
+              return 'elementFromPoint: ' + el.tagName + '#'
+                + (el.id || '') + '.'
+                + ((el.className || '').toString().slice(0, 60))
+                + ' text=' + JSON.stringify(
+                  (el.innerText || '').trim().slice(0, 40));
+            }""", {"x": box["x"], "y": box["y"]})
+        except Exception as _he:
+            _hit = f"elementFromPoint probe failed: {str(_he)[:60]}"
+        _dbg(gid, f"stuck-tap probe: slide_key_before={_before_key} "
+                  f"fp_before_head={_before[:120]!r} {_hit}")
+        # Escalate ONCE instead of re-tapping the same button:
+        # a tap that did not advance the slide is being absorbed
+        # (overlay) or the button needs a real JS click /
+        # keyboard activation. If the escalation also leaves the
+        # slide unchanged, stop tapping this deck — the explicit
+        # PLAY loop below handles the final slide — instead of
+        # burning 5 identical taps.
+        try:
+            _escalated = fr.evaluate(
+                _COUNTRYLE_BTN_JS_CLICK_JS, box["t"])
+        except Exception:
+            _escalated = False
+        try:
+            for _k in ("Enter", "Space", "ArrowRight"):
+                page.keyboard.press(_k)
+                page.wait_for_timeout(600)
+        except Exception:
+            pass
+        page.wait_for_timeout(800)
+        try:
+            _after2_key = _countryle_slide_key(fr)
+            _after2 = (fr.evaluate(_COUNTRYLE_SLIDE_FP_JS) or "")
+        except Exception:
+            _after2_key, _after2 = None, _after
+        if _countryle_slide_advanced(_before_key, _before,
+                                     _after2_key, _after2):
+            _dbg(gid, "onboarding: escalation advanced the slide")
+            page._qp_stuck = 0
+            continue
+        _dbg(gid, "onboarding: slide still unchanged after "
+                  f"escalation (JS click={_escalated})")
+        if box["t"] == "NEXT":
+            # SKIP jumps straight to the game: when NEXT
+            # taps are being absorbed, SKIP is the
+            # progression that still exists on this slide.
+            try:
+                _sk = fr.evaluate(
+                    _COUNTRYLE_BTN_JS_CLICK_JS, "SKIP")
+            except Exception:
+                _sk = False
+            page.wait_for_timeout(1200)
+            try:
+                _after3_key = _countryle_slide_key(fr)
+                _after3 = (fr.evaluate(
+                    _COUNTRYLE_SLIDE_FP_JS) or "")
+            except Exception:
+                _after3_key, _after3 = None, _after2
+            if _sk and (_countryle_slide_advanced(
+                    _before_key, _before, _after3_key, _after3)
+                    or fr.query_selector("input")):
+                _dbg(gid, "onboarding: SKIP advanced "
+                          "past the stuck NEXT slide")
+                page._qp_stuck = 0
+                continue
+            _dbg(gid, "onboarding: SKIP also did not "
+                      "advance the slide")
+        # NEVER break to the PLAY-only wait from a slide
+        # with no PLAY button (iter4 regression): the deck
+        # can only advance via NEXT/SKIP, so keep
+        # re-scanning until the tap cap; the PLAY loop
+        # below runs when the deck actually reaches a PLAY
+        # slide or the cap is hit.
+        _stuck = getattr(page, "_qp_stuck", 0) + 1
+        page._qp_stuck = _stuck
+        if _stuck >= 3:
+            _dbg(gid, "onboarding FAILED: same slide stuck "
+                      f"({_stuck}x full ladder); NOT proceeding "
+                      "to an input wait that cannot succeed")
+            return fr, "deck-stuck"
+    # Tap cap hit with the deck still present.
+    try:
+        if fr.query_selector("input"):
+            return fr, "input-visible"
+    except Exception:
+        pass
+    if _countryle_deck_present(fr):
+        _dbg(gid, "onboarding FAILED: tap cap hit with the deck "
+                  "still present; NOT proceeding to an input "
+                  "wait that cannot succeed")
+        return fr, "deck-stuck"
+    return fr, "deck-dismissed"
+
+
 def _s_countryle(page, ans, gid):
     """Countryle: pass the /welcome gate INSIDE the app iframe, then guess."""
     import time as _time_c
@@ -17089,200 +17451,17 @@ def _s_countryle(page, ans, gid):
         b0 = (fr.evaluate("() => document.body.innerText") or "")[:400]
     except Exception:
         b0 = ""
-    # (Was conditional on the welcome text — when the condition was False,
-    # _last_tap was never defined and the tap loop raised NameError.)
-    _last_tap = None
-    page._qp_unch = 0
-    for _tap in range(16):
-            # Re-acquire EVERY iteration: the iframe navigates mid-deck and
-            # the old handle goes stale (every poll then misses).
-            _fr_new = _countryle_live_frame(page, fr)
-            if _fr_new is not fr:
-                _dbg(gid, "onboarding: frame re-acquired "
-                          f"(was {(fr.url if fr else '')[:40]})")
-                fr = _fr_new
-            box = None
-            try:
-                # PLAY/START-first scan (see _COUNTRYLE_BTN_JS): tap PLAY as
-                # soon as it exists instead of starving it behind NEXT.
-                box = fr.evaluate(_COUNTRYLE_BTN_JS)
-            except Exception:
-                box = None
-            if not box:
-                break
-            # A leftover loading mask (ad shell) absorbs every click when the
-            # blocked ad scripts never fire their callback: strip it first.
-            try:
-                fr.evaluate("""() => {
-                    for (const m of document.querySelectorAll(
-                            '#loading-mask, .mask, [class*=loading i]'))
-                        m.remove();
-                }""")
-            except Exception:
-                pass
-            try:
-                _before = (fr.evaluate(_COUNTRYLE_SLIDE_FP_JS) or "")
-            except Exception:
-                _before = ""
-            # (Removed: the old "rotate the label" step re-scanned for a
-            # different button when the same label repeated. When NEXT was
-            # the deck's only button the re-scan returned None and the loop
-            # tapped NEXT again anyway — the 5x "slide unchanged" repeat.
-            # A genuinely-stuck tap now escalates below, then breaks out.)
-            # An invisible overlay (re-rendered ad/mask layer) was absorbing
-            # every tap: probe the point and evict whatever is not the button.
-            try:
-                _int = fr.evaluate("""(pt) => {
-                    const el = document.elementFromPoint(pt.x, pt.y);
-                    if (!el) return null;
-                    if (el.closest('button, a')) return null;
-                    const desc = el.tagName + '#' + (el.id || '') + '.' +
-                        ((el.className || '').toString().slice(0, 60));
-                    el.remove();
-                    return desc;
-                }""", box)
-                if _int:
-                    _dbg(gid, f"evicted interceptor {_int!r} over {box['t']}")
-            except Exception:
-                pass
-            # Delivery ladder, JS click FIRST: it compares the exact
-            # uppercased label, so it cannot miss on case. The old order
-            # (element click first) used box['t'].title() in a :text-is
-            # selector — 'NEXT'.title() is 'Next', which :text-is never
-            # matches against an all-caps button, so the element path
-            # silently never fired and every tap fell through to raw
-            # viewport coords (which miss when a shell overlay absorbs
-            # the click). Coords remain the last resort, not the default.
-            _via = None
-            try:
-                if fr.evaluate(_COUNTRYLE_BTN_JS_CLICK_JS, box["t"]):
-                    _via = "js-click"
-            except Exception:
-                pass
-            if _via is None:
-                try:
-                    _el = fr.query_selector(
-                        f"button:text-is('{box['t']}'), "
-                        f"a:text-is('{box['t']}')")
-                    if _el:
-                        _el.click(timeout=2500)
-                        _via = "element"
-                except Exception as _ce:
-                    _dbg(gid, f"element click intercepted: {str(_ce)[:110]}")
-            if _via is None:
-                page.mouse.click(box["x"], box["y"])  # iframe full-page: 0,0
-                _via = "coords"
-            _push_click_at(box["x"], box["y"])
-            _dbg(gid, f"onboarding trusted tap {box['t']!r} via={_via}")
-            page.wait_for_timeout(1400)
-            try:
-                if fr.query_selector("input"):
-                    _dbg(gid, "input visible, onboarding done")
-                    break
-                _after = (fr.evaluate(_COUNTRYLE_SLIDE_FP_JS) or "")
-                if _after == _before:
-                    _u = getattr(page, "_qp_unch", 0) + 1
-                    page._qp_unch = _u
-                    _last_tap = box["t"]
-                    _dbg(gid, f"slide unchanged after trusted tap ({_u}x, "
-                              f"last={_last_tap})")
-                    # Fix-loop iter 6: the ladder still fails to advance
-                    # slide 1 on first attempts for an UNPROVEN reason —
-                    # log the slide fingerprints + elementFromPoint at
-                    # the tap point so the next artifact shows whether
-                    # taps are absorbed (overlay) or the fingerprint
-                    # lags the real slide.
-                    try:
-                        _hit = fr.evaluate("""(pt) => {
-                          const el = document.elementFromPoint(pt.x, pt.y);
-                          if (!el) return 'elementFromPoint: null';
-                          return 'elementFromPoint: ' + el.tagName + '#'
-                            + (el.id || '') + '.'
-                            + ((el.className || '').toString().slice(0, 60))
-                            + ' text=' + JSON.stringify(
-                              (el.innerText || '').trim().slice(0, 40));
-                        }""", {"x": box["x"], "y": box["y"]})
-                    except Exception as _he:
-                        _hit = f"elementFromPoint probe failed: {str(_he)[:60]}"
-                    _dbg(gid, f"stuck-tap probe: fp_before_len={len(_before)} "
-                              f"fp_after_len={len(_after)} "
-                              f"fp_before_head={_before[:120]!r} "
-                              f"fp_after_head={_after[:120]!r} {_hit}")
-                    # Escalate ONCE instead of re-tapping the same button:
-                    # a tap that did not advance the slide is being absorbed
-                    # (overlay) or the button needs a real JS click /
-                    # keyboard activation. If the escalation also leaves the
-                    # slide unchanged, stop tapping this deck — the explicit
-                    # PLAY loop below handles the final slide — instead of
-                    # burning 5 identical taps.
-                    try:
-                        _escalated = fr.evaluate(
-                            _COUNTRYLE_BTN_JS_CLICK_JS, box["t"])
-                    except Exception:
-                        _escalated = False
-                    try:
-                        for _k in ("Enter", "Space", "ArrowRight"):
-                            page.keyboard.press(_k)
-                            page.wait_for_timeout(600)
-                    except Exception:
-                        pass
-                    page.wait_for_timeout(800)
-                    try:
-                        _after2 = (fr.evaluate(_COUNTRYLE_SLIDE_FP_JS) or "")
-                    except Exception:
-                        _after2 = _after
-                    if _after2 == _before:
-                        _dbg(gid, "onboarding: slide still unchanged after "
-                                  f"escalation (JS click={_escalated})")
-                        if box["t"] == "NEXT":
-                            # SKIP jumps straight to the game: when NEXT
-                            # taps are being absorbed, SKIP is the
-                            # progression that still exists on this slide.
-                            try:
-                                _sk = fr.evaluate(
-                                    _COUNTRYLE_BTN_JS_CLICK_JS, "SKIP")
-                            except Exception:
-                                _sk = False
-                            page.wait_for_timeout(1200)
-                            try:
-                                _after3 = (fr.evaluate(
-                                    _COUNTRYLE_SLIDE_FP_JS) or "")
-                            except Exception:
-                                _after3 = _after2
-                            if _sk and (_after3 != _before
-                                        or fr.query_selector("input")):
-                                _dbg(gid, "onboarding: SKIP advanced "
-                                          "past the stuck NEXT slide")
-                                page._qp_unch = 0
-                                page._qp_stuck = 0
-                                _last_tap = None
-                                continue
-                            _dbg(gid, "onboarding: SKIP also did not "
-                                      "advance the slide")
-                        # NEVER break to the PLAY-only wait from a slide
-                        # with no PLAY button (iter4 regression): the deck
-                        # can only advance via NEXT/SKIP, so keep
-                        # re-scanning until the tap cap; the PLAY loop
-                        # below runs when the deck actually reaches a PLAY
-                        # slide or the cap is hit.
-                        _stuck = getattr(page, "_qp_stuck", 0) + 1
-                        page._qp_stuck = _stuck
-                        if _stuck >= 3:
-                            _dbg(gid, "onboarding: same slide stuck "
-                                      f"({_stuck}x full ladder); giving up "
-                                      "deck taps, PLAY/input wait follows")
-                            break
-                        continue
-                    _dbg(gid, "onboarding: escalation advanced the slide")
-                    page._qp_unch = 0
-                    page._qp_stuck = 0
-                    _last_tap = None
-                else:
-                    page._qp_unch = 0
-                    page._qp_stuck = 0
-                    _last_tap = None
-            except Exception:
-                pass
+    # Tap through the welcome deck via _countryle_run_deck
+    # (real-click-first ladder + slide-advance verification +
+    # loud deck-stuck failure, iter-27). A stuck deck FAILS here
+    # instead of falling through to a PLAY loop + input wait
+    # that cannot succeed (iter-26 shape).
+    fr, _deck_status = _countryle_run_deck(page, fr, gid)
+    if _deck_status == "deck-stuck":
+        return False, ("countryle onboarding FAILED: welcome-deck "
+                       "slide did not advance through the real-click "
+                       "ladder + escalation; not proceeding to an "
+                       "input wait that cannot succeed")
     # final explicit PLAY/START push: the deck's last slide button is the
     # one that actually mounts the game (runs ended one click short of it)
     # Iteration 2: 4 -> 2 taps. Rerun #1 spent ~146s in the PLAY/input-wait
@@ -17306,16 +17485,16 @@ def _s_countryle(page, ans, gid):
                 _dbg(gid, "PLAY loop: no PLAY/START button on this slide")
                 break
             _played = False
+            _play_via = None
+            # Iter-27: REAL click first (Playwright element click),
+            # then coordinate click, then JS click last — same
+            # ladder as the deck taps, not js-click first.
             try:
-                for _lbl in ("PLAY", "START", "CONTINUE", "GO"):
-                    if fr.evaluate(_COUNTRYLE_BTN_JS_CLICK_JS, _lbl):
-                        _played = True
-                        break
+                pb.click(timeout=2500)
+                _played, _play_via = True, "element"
             except Exception:
                 pass
-            if _played:
-                _dbg(gid, "explicit PLAY tap via JS click")
-            else:
+            if not _played:
                 try:
                     bb = pb.bounding_box()
                     if bb:
@@ -17323,9 +17502,19 @@ def _s_countryle(page, ans, gid):
                                          bb["y"] + bb["height"] / 2)
                         _push_click_at(bb["x"] + bb["width"] / 2,
                                        bb["y"] + bb["height"] / 2)
-                        _dbg(gid, "explicit PLAY tap")
+                        _played, _play_via = True, "coords"
                 except Exception:
-                    pb.click(timeout=2500)
+                    pass
+            if not _played:
+                try:
+                    for _lbl in ("PLAY", "START", "CONTINUE", "GO"):
+                        if fr.evaluate(_COUNTRYLE_BTN_JS_CLICK_JS, _lbl):
+                            _played, _play_via = True, "js-click"
+                            break
+                except Exception:
+                    pass
+            if _played:
+                _dbg(gid, f"explicit PLAY tap via {_play_via}")
             page.wait_for_timeout(2500)
         except Exception:
             break
@@ -17333,6 +17522,7 @@ def _s_countryle(page, ans, gid):
     a = str(ans or "").strip()
     picked = "none"
     _fin = None
+    _deck_rerun = False
     _t_wait0 = _time2.time()
     for _w in range(10):
         # Re-acquire EVERY wait iteration: the old code polled a handle
@@ -17350,6 +17540,30 @@ def _s_countryle(page, ans, gid):
             _dbg(gid, f"input appeared after "
                       f"{_time2.time() - _t_wait0:.1f}s (wait iter {_w})")
             break
+        # Iter-27 (ANALYSIS24 §3, iter-26 failure): the app can
+        # re-navigate to /welcome AFTER PLAY (post-PLAY reload),
+        # putting the deck back on slide 1 while this wait runs.
+        # When the deck is back, re-run ONE onboarding pass
+        # instead of waiting out a clock that cannot succeed.
+        if not _deck_rerun and _countryle_deck_present(fr):
+            _deck_rerun = True
+            _dbg(gid, "onboarding: welcome deck re-appeared during "
+                      "input wait (post-PLAY reload); re-running "
+                      "one deck pass")
+            fr, _deck_status2 = _countryle_run_deck(page, fr, gid)
+            if _deck_status2 == "deck-stuck":
+                return False, ("countryle onboarding FAILED on "
+                               "re-appeared deck: slide did not "
+                               "advance through the real-click "
+                               "ladder + escalation")
+            try:
+                _fin = fr.query_selector("input")
+            except Exception:
+                _fin = None
+            if _fin:
+                _dbg(gid, "input appeared after deck re-run "
+                          f"({_time2.time() - _t_wait0:.1f}s)")
+                break
         if _w == 5:     # keyboard fallback: some decks advance on Enter/Space
             for _k in ("Enter", "Space", "ArrowRight"):
                 try:
@@ -18407,6 +18621,30 @@ def _attr_norm_name(s):
 #    open and verified dropdown_open=True + 0 rows. Iter 26 adds
 #    .result-box selectors to the click, selection-state, and
 #    post-submit dropdown probes, and logs every real mouse click.
+# 5. PROBE REWRITE + DATE GATE + CONTINUATION (iter 27,
+#    ANALYSIS24 RC2): iter-26's bare-selector dropdown detector
+#    overcorrected — the `.result-box` container stays mounted
+#    (empty) after a selection, so `dropdown_open` read True forever
+#    and `_attr_selection_state` read selected=False forever, while
+#    frames proved all 3 guesses submitted (f0013/f0020/f0030). The
+#    dropdown detector is now conjunctive (visible row with text +
+#    input holds text; see _ATTR_DROPDOWN_OPEN_JS) and
+#    feedback_tiles counts leaf cells per populated row (3 rows x 6
+#    = 18), with green cells read from computed background colour.
+#    The CDN-answer trust is also gone: the CDN archive proves
+#    game_date 2026-10-18 = game #973 = Alec Burleson while
+#    game_date 2026-10-17 = game #972 = Wyatt Langford, so the
+#    iter-26 served board (#972 10/17/26) was the PREVIOUS day's
+#    board, not a "display rollover" — _s_batterup now gates on
+#    served-header == target BEFORE playing anything, and the
+#    solver continues from feedback past the planned 3 guesses (up
+#    to the board's 8 rows) instead of stopping.
+# 6. PITCHER HYPOTHESIS (iter 26/27): "suggestion index covers
+#    batters only" is SUPPORTED (5/5 observed names + all 8 vendored
+#    answers are position players) but NOT proven from site code.
+#    No production guess is ever burned on a pitcher probe: pitchers
+#    stay excluded from the pool, and the hypothesis is covered by
+#    unit tests on the exclusion logic only.
 _BATTERUP_NO_SUGGESTION_NAMES = {"jesus tinoco", "wade miley",
                                  "jhoan duran"}
 _BATTERUP_PITCHER_POSITIONS = {"SP", "RP", "CP", "P", "CL"}
@@ -18437,6 +18675,66 @@ def _attr_pool(gid):
     return []
 
 
+# Shared suggestion-dropdown detector (fix-loop iter 27, ANALYSIS24 RC2).
+#
+# Iter-26 root cause, frame- + log-proven: the old open-detectors
+# treated ANY visible element matching a bare selector (`.result-box`,
+# `[class*=dropdown]`, ...) as an open dropdown. The `.result-box`
+# suggestion container stays mounted (empty) after a selection, and
+# nav chrome carries dropdown-ish classes, so `dropdown_open` read
+# True forever and `_attr_selection_state` read selected=False forever
+# — even while frames proved the guesses had been submitted (iter-26
+# f0013/f0020/f0030). The keyboard Enter in the doomed re-select loop
+# then submitted each guess as a side effect, while the bot counted
+# every pick as failed.
+#
+# The detector below is CONJUNCTIVE: an element counts as an open
+# suggestion dropdown only if ALL hold — it matches a suggestion
+# selector, it is really visible (layout box + visibility + opacity),
+# it is outside nav/header/footer chrome, it carries non-empty row
+# text, AND the guess input currently holds text (after a genuine
+# submit the input is cleared, so a stale mounted container can never
+# read open). Used verbatim by _attr_post_submit_probe and
+# _attr_selection_state so the two probes can never disagree again.
+# Sets the JS variable `_attrOpen` (boolean). No adjacent string
+# literals in the JS: every JS string piece is joined with `+`.
+_ATTR_DROPDOWN_OPEN_JS = """
+  var _attrOpen = false;
+  try {
+    var _attrInp = document.querySelector(
+      'input[name=guess], #input-box, input[type=text], ' +
+      'input:not([type]), input[type=search]');
+    var _attrVal = _attrInp ? (_attrInp.value || '') : '';
+    if (_attrVal.trim()) {
+      var _attrSels = ['[role=listbox]', '[role=option]',
+        '.react-autosuggest__suggestions-container--open',
+        '.result-box', '[class*=result-box i]',
+        '#player-search .result-box', '#result-id',
+        'ul[class*=suggest i]', '[class*=suggestion i]',
+        '[class*=autocomplete i]', '[class*=suggest i]'];
+      var _attrFound = false;
+      for (var _si = 0; _si < _attrSels.length && !_attrFound; _si++) {
+        var _attrEls = document.querySelectorAll(_attrSels[_si]);
+        for (var _ei = 0; _ei < _attrEls.length; _ei++) {
+          var _el = _attrEls[_ei];
+          if (!_el || _el.offsetParent === null) { continue; }
+          var _cs = window.getComputedStyle(_el);
+          if (_cs.visibility === 'hidden' || _cs.display === 'none' ||
+              parseFloat(_cs.opacity || '1') <= 0) { continue; }
+          var _rc = _el.getBoundingClientRect();
+          if (!_rc || _rc.width <= 0 || _rc.height <= 0) { continue; }
+          if (_el.closest('nav, header, footer')) { continue; }
+          if (!(_el.innerText || '').trim()) { continue; }
+          _attrFound = true;
+          break;
+        }
+      }
+      _attrOpen = _attrFound;
+    }
+  } catch (e) { _attrOpen = false; }
+"""
+
+
 def _attr_post_submit_probe(page):
     """Post-submit board probe: {rows, dropdown_open, populated,
     populated_rows, feedback_tiles}.
@@ -18461,6 +18759,35 @@ def _attr_post_submit_probe(page):
     leaf texts are all column labels, do not count) OR >=1
     coloured/feedback tile. The post-submit wait keys on populated,
     never on dropdown state. Never raises.
+
+    Fix-loop iter 27 (ANALYSIS24 RC2): the row detection below is
+    UNCHANGED (it already counted the 3 submitted rows correctly in
+    iter-26); what changed is what the probe READS off those rows
+    plus the dropdown detector:
+
+    - feedback_tiles is now the count of feedback CELLS actually in
+      the DOM across populated rows (leaf cells per row, name heading
+      excluded), NOT a class-keyword match. The old fbRe
+      (/exact|correct|green|.../) matched nothing on this board, so
+      it reported feedback_tiles=0 while frames showed 3 rows x 6
+      cells = 18 tiles. After 3 submitted guesses the probe now
+      reports submitted rows=3, feedback_tiles=18.
+    - visible_exact_cells is now the count of GREEN cells (computed
+      background-colour hue, with the old class-keyword match as a
+      fallback), so the all-attribute win path reads the board's own
+      colours instead of class names the site never sets.
+    - dropdown_open uses the shared conjunctive detector
+      (_ATTR_DROPDOWN_OPEN_JS): a visible suggestion row with text
+      while the input holds text. After a genuine submit the input
+      is cleared, so the post-submit board reads dropdown_open=False
+      (iter-26 frame f0030: input empty, no dropdown).
+    - row_details: per populated row, {name, cells: [{text, state}]}
+      with state in {green, yellow, other} from the computed
+      background colour (+ class fallback). This is what the
+      feedback-driven continuation in solve_attr_game filters on.
+      Name = the row's name-like first line (a leaf with a space,
+      letters only); when the name heading is not inside the row
+      container, name is "" and the row still contributes its cells.
     """
     try:
         return page.evaluate("""() => {
@@ -18483,41 +18810,84 @@ def _attr_post_submit_probe(page):
             .filter(t => t).slice(-6);
           const headerLabels = new Set(['#', 'team', 'div.', 'div',
             'born', 'age', 'pos.', 'pos', 'name', 'player']);
-          const fbRe = /exact|correct|green|yellow|match|present|absent/i;
+          const stateOf = el => {
+            const cls = String(el.className || '');
+            if (/exact|correct|green/i.test(cls)) return 'green';
+            if (/yellow|partial|present/i.test(cls)) return 'yellow';
+            try {
+              const bg = window.getComputedStyle(el).backgroundColor || '';
+              const m = bg.match(
+                /rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)(?:,\\s*([\\d.]+))?/);
+              if (m) {
+                if (m[4] !== undefined && parseFloat(m[4]) === 0) {
+                  return 'unknown';
+                }
+                const r = parseInt(m[1], 10);
+                const g = parseInt(m[2], 10);
+                const b = parseInt(m[3], 10);
+                const mx = Math.max(r, g, b);
+                const mn = Math.min(r, g, b);
+                const sat = mx === 0 ? 0 : (mx - mn) / mx;
+                if (sat > 0.12 && mx > 40) {
+                  let hue = 0;
+                  if (mx === r) {
+                    hue = (60 * ((g - b) / (mx - mn)) + 360) % 360;
+                  } else if (mx === g) {
+                    hue = (60 * ((b - r) / (mx - mn)) + 120);
+                  } else {
+                    hue = (60 * ((r - g) / (mx - mn)) + 240);
+                  }
+                  if (hue >= 80 && hue <= 170) return 'green';
+                  if (hue >= 35 && hue <= 75) return 'yellow';
+                }
+              }
+            } catch (e) {}
+            return 'other';
+          };
+          const isNameLike = t => t.length >= 4 && t.indexOf(' ') >= 0 &&
+            /^[A-Za-z .'-]+$/.test(t);
           let populated = 0, feedback = 0, exactCells = 0;
+          const rowDetails = [];
           for (const r of rowsEls) {
             const descs = Array.from(r.querySelectorAll('*'));
             const filled = descs.filter(x => x.children.length === 0 &&
               (x.innerText || '').trim());
-            const tiles = descs.filter(x => fbRe.test(
-              String(x.className || '')));
-            feedback += tiles.length;
+            const firstLine = ((r.innerText || '').trim().split('\\n')[0]
+              || '').trim();
+            const nameLeaf = isNameLike(firstLine)
+              ? filled.find(x => (x.innerText || '').trim() === firstLine)
+              : null;
+            const name = nameLeaf ? firstLine : '';
+            const cells = filled.filter(x => x !== nameLeaf);
             const isHeader = filled.length > 0 && filled.every(x =>
               headerLabels.has(
                 (x.innerText || '').trim().toLowerCase()));
-            if ((filled.length >= 2 || tiles.length >= 1) && !isHeader) {
+            if ((filled.length >= 2 || cells.length >= 1) && !isHeader) {
               populated++;
-              // Visible exact/green cells INSIDE populated rows only:
-              // the old page-wide [class] count swept hidden templates
-              // and static page chrome into exact_n.
-              exactCells += tiles.length;
+              feedback += cells.length;
+              const cellStates = cells.map(c => ({
+                text: (c.innerText || '').trim(), state: stateOf(c)}));
+              for (const cs of cellStates) {
+                if (cs.state === 'green') exactCells++;
+              }
+              rowDetails.push({name: name, cells: cellStates});
             }
           }
-          const drop = Array.from(document.querySelectorAll(
-            '[role=listbox], [class*=suggest i], [class*=autocomplete i], ' +
-            '[class*=dropdown i], .result-box, ' +
-            '[class*=result-box i]')).filter(vis).length > 0;
+          let drop = false;
+          """ + _ATTR_DROPDOWN_OPEN_JS + """
+          drop = _attrOpen;
           return {rows: rows, dropdown_open: drop,
                   populated: populated > 0, populated_rows: populated,
                   feedback_tiles: feedback,
-                  visible_exact_cells: exactCells};
+                  visible_exact_cells: exactCells,
+                  row_details: rowDetails};
         }""") or {"rows": [], "dropdown_open": False, "populated": False,
                   "populated_rows": 0, "feedback_tiles": 0,
-                  "visible_exact_cells": 0}
+                  "visible_exact_cells": 0, "row_details": []}
     except Exception:
         return {"rows": [], "dropdown_open": False, "populated": False,
                 "populated_rows": 0, "feedback_tiles": 0,
-                "visible_exact_cells": 0}
+                "visible_exact_cells": 0, "row_details": []}
 
 
 def _attr_dismiss_dropdown_soft(page):
@@ -18771,6 +19141,14 @@ def _attr_selection_state(page, name):
     "typed" and "selected" is the suggestion dropdown CLOSING with
     the input holding exactly the picked name.
 
+    Fix-loop iter 27 (ANALYSIS24 RC2): the open check is now the
+    shared conjunctive detector (_ATTR_DROPDOWN_OPEN_JS) — a visible
+    suggestion row with text while the input holds text. The old
+    check treated any visible `.result-box` element as "open", but
+    the container stays mounted after selection, so it reported
+    selected=False forever and the re-select loop ran until a
+    keyboard Enter submitted the guess as a side effect.
+
     Returns {"selected": True/False/None, "suggestion_open": bool,
     "input_value": str}. selected=None means the probe itself was
     unavailable (evaluate failed / returned nothing) — the caller
@@ -18783,24 +19161,9 @@ def _attr_selection_state(page, name):
             'input[name=guess], #input-box, input[type=text], ' +
             'input:not([type]), input[type=search]');
           const val = inp ? (inp.value || '') : '';
-          const sels = ['[role=listbox]', '[role=option]',
-            '.react-autosuggest__suggestions-container--open',
-            'ul[class*=suggest i]', '[class*=suggestion i]',
-            '[class*=autocomplete i] [role=listbox]',
-            // Iter 26: Batterup's suggestion rows are .result-box
-            // elements (see the _attr hygiene note) — without these
-            // the probe reported open=False while the row sat open
-            // and unselected, and selected=True vacuously.
-            '.result-box', '[class*=result-box i]',
-            '#player-search .result-box'];
           let open = false;
-          for (const s of sels) {
-            const els = document.querySelectorAll(s);
-            for (const e of els) {
-              if (e && e.offsetParent !== null) { open = true; break; }
-            }
-            if (open) break;
-          }
+          """ + _ATTR_DROPDOWN_OPEN_JS + """
+          open = _attrOpen;
           return {input_value: val, suggestion_open: open};
         }""", name)
     except Exception:
@@ -19042,7 +19405,17 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
     blind re-pick. A probe whose suggestion index returns nothing is
     replaced in place by a proven-suggestion name; the answer is
     never replaced. The CMP re-check stays as a fallback only —
-    iter-24 refuted CMP as the cause (no dialog in any frame)."""
+    iter-24 refuted CMP as the cause (no dialog in any frame).
+
+    Fix-loop iter 27 (ANALYSIS24 RC2, batterup only): the CDN answer
+    is a seed, never the served board's answer. If the planned
+    guesses (2 probes + CDN answer) are submitted without a win,
+    the solver CONTINUES from the feedback tiles
+    (_batterup_next_from_feedback: green = equal, yellow/other =
+    not equal per column), up to the board's 8 rows, until an
+    all-green row or the rows/pool run out. A win needs a whole
+    all-green feedback row (summed greens across rows never win).
+    """
     _close_modals(page)
     answer_name = str(answer_name or "").strip()
     if not answer_name:
@@ -19120,7 +19493,40 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
                           f"({_detail})")
         return _ok, _detail
 
-    for n, name in enumerate(seq):
+    _continuation = []  # batterup feedback-driven guesses past the plan
+
+    def _try_continue():
+        """Batterup-only: append one feedback-driven guess (past the
+        planned probes + CDN answer) and return True. The CDN answer
+        is NEVER trusted as the served board's answer: if its row is
+        not all-green, the solver keeps going from feedback, up to
+        the board's 8 rows. Returns False when no candidate exists
+        (no row_details, pool exhausted, or 8 rows already
+        submitted) — the caller then fails honestly. Never raises."""
+        if gid != "batterup":
+            return False
+        if len(_submitted) >= 8:
+            return False
+        try:
+            _tried = {_attr_norm_name(x) for x in
+                      list(seq) + _submitted + _pick_failed +
+                      _submit_failed}
+            _nxt = _batterup_next_from_feedback(page, _tried)
+        except Exception:
+            return False
+        if not _nxt:
+            return False
+        seq.append(_nxt)
+        _continuation.append(_nxt)
+        _dbg(gid, f"continuation: next feedback-driven guess {_nxt!r} "
+                  f"(submitted={len(_submitted)}/8; "
+                  f"continuation={_continuation})")
+        return True
+
+    _seq_idx = 0
+    while _seq_idx < len(seq):
+        n, name = _seq_idx, seq[_seq_idx]
+        _seq_idx += 1
         last = (n == len(seq) - 1)
         _idle_drift(page)
         # RC4 (iter 24): the CMP can (re-)appear between guesses
@@ -19171,6 +19577,8 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
             _pick_failed.append(name)
             _REJECTED[gid] = list(_pick_failed)
             if not last:
+                continue
+            if _try_continue():
                 continue
             return False, (f"answer pick failed ({detail}); "
                            f"submitted={len(_submitted)} "
@@ -19338,6 +19746,8 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
             # submitted guess, whatever the pick reported).
             _submit_failed.append(name)
             if last:
+                if _try_continue():
+                    continue
                 return False, (f"answer {name!r} NOT submitted after "
                                f"3 attempts (board never showed a new "
                                f"populated row); submitted={_submitted} "
@@ -19387,7 +19797,19 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
                 # so it needs the board to vouch twice: a populated row
                 # AND in-row feedback tiles (page-wide tile counts alone
                 # can come from hidden templates / static page chrome).
-                if _board_rows >= 1 and _board_fb >= 1:
+                if gid == "batterup" and _board.get("row_details"):
+                    # With per-row feedback available, a win needs a
+                    # WHOLE all-green row: exact_n sums greens across
+                    # rows, so 3 rows x 2 greens would fake a win.
+                    _all_green, _all_name = \
+                        _batterup_all_green_row(_board)
+                    if _all_green:
+                        okw, ev = True, (f"all-green row "
+                                         f"({_all_name or 'unnamed'})")
+                    else:
+                        _dbg(gid, "summed greens ignored: no all-green "
+                                  f"row (exact_n={exact_n})")
+                elif _board_rows >= 1 and _board_fb >= 1:
                     okw, ev = True, (f"all-attribute win ({exact_n} "
                                      f"visible exact/green cells in "
                                      f"populated rows; "
@@ -19425,11 +19847,205 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
             # game was won (batterup rerun #9: "answer echo" fired on an
             # unsubmitted board). A win needs the game's own signal.
             _dbg(gid, f"answer echo present={_echo_present} (not win evidence)")
+            if _try_continue():
+                continue
             return False, (f"no win signal; {ev} "
                            f"(submitted={len(_submitted)}, "
                            f"attempted-pick-failed={len(_pick_failed)}, "
                            f"attempted-submit-failed={_submit_failed})")
     return False, "no guesses played"
+
+
+# Batterup feedback-driven continuation (fix-loop iter 27,
+# ANALYSIS24 RC2). The board has 8 rows; iter-26 stopped at 3
+# because its plan was exhausted and its probes said nothing had
+# landed. With true state detection, the solver continues from the
+# feedback tiles: green = exact match on that column, yellow/white =
+# not an exact match on that column (yellow = close-but-not-equal).
+# Columns, in board order: 0 jersey #, 1 Team, 2 Div., 3 Born,
+# 4 Age, 5 Pos. The vendored players file carries no Division, so
+# Division is derived from the standard MLB alignment below.
+_BATTERUP_TEAM_DIVISION = {
+    "Orioles": "AL East", "Red Sox": "AL East", "Yankees": "AL East",
+    "Rays": "AL East", "Blue Jays": "AL East",
+    "White Sox": "AL Central", "Guardians": "AL Central",
+    "Tigers": "AL Central", "Royals": "AL Central",
+    "Twins": "AL Central",
+    "Astros": "AL West", "Athletics": "AL West", "Angels": "AL West",
+    "Mariners": "AL West", "Rangers": "AL West",
+    "Braves": "NL East", "Marlins": "NL East", "Mets": "NL East",
+    "Phillies": "NL East", "Nationals": "NL East",
+    "Cubs": "NL Central", "Reds": "NL Central", "Brewers": "NL Central",
+    "Pirates": "NL Central", "Cardinals": "NL Central",
+    "Diamondbacks": "NL West", "Rockies": "NL West",
+    "Dodgers": "NL West", "Padres": "NL West", "Giants": "NL West",
+}
+_BATTERUP_PLAYERS_CACHE = None
+
+
+def _batterup_players_by_name():
+    """{norm_name: player dict} from the vendored players file,
+    cached. Never raises ({} on load failure)."""
+    global _BATTERUP_PLAYERS_CACHE
+    if _BATTERUP_PLAYERS_CACHE is not None:
+        return _BATTERUP_PLAYERS_CACHE
+    out = {}
+    try:
+        j = json.loads((HERE / "frontend_data" / "src" / "lib" / "data" /
+                        "batterup-players.json").read_text(encoding="utf-8"))
+        for p in j:
+            if isinstance(p, dict) and p.get("player_name"):
+                out[_attr_norm_name(p.get("player_name"))] = p
+    except Exception:
+        out = {}
+    _BATTERUP_PLAYERS_CACHE = out
+    return out
+
+
+def _batterup_age(player, ref_date):
+    """Current age on ref_date from birth_date (pure). The game's
+    Age column matches this for all three iter-26 rows (Trevino 33,
+    LeMahieu 38, Burleson 27 on 2026-10-18). None when uncomputable."""
+    try:
+        y, m, d = (int(x) for x in str(
+            player.get("birth_date") or "").split("-"))
+        return (ref_date.year - y -
+                ((ref_date.month, ref_date.day) < (m, d)))
+    except Exception:
+        return None
+
+
+def _batterup_cell_value(player, col):
+    """Canonical value of `player` for feedback column `col`
+    (0 #, 1 Team, 2 Div., 3 Born, 4 Age, 5 Pos.). None when the
+    column cannot be derived for this player (e.g. unknown team
+    division) — such cells impose no constraint. Pure."""
+    try:
+        if col == 0:
+            v = player.get("jersey_number")
+            return int(v) if v is not None else None
+        if col == 1:
+            return str(player.get("team_name") or "") or None
+        if col == 2:
+            return _BATTERUP_TEAM_DIVISION.get(
+                str(player.get("team_name") or ""))
+        if col == 3:
+            return str(player.get("born") or "") or None
+        if col == 4:
+            try:
+                return _batterup_age(player, A.target_date())
+            except Exception:
+                return None
+        if col == 5:
+            pos = {str(x).upper()
+                   for x in (player.get("position") or [])}
+            return pos or None
+    except Exception:
+        return None
+    return None
+
+
+def _batterup_next_from_feedback(page, tried=()):
+    """Next Batterup guess from the board's feedback tiles.
+
+    Reads _attr_post_submit_probe's row_details (per-row cells with
+    green/yellow/other states), turns them into constraints against
+    the vendored player attributes, and returns the first pool
+    batter (never a pitcher — _attr_pool excludes them; never a
+    tried name) satisfying them. Pass 1 uses ALL constraints
+    (green = equal, yellow/other = not equal; Pos. green = overlap,
+    Pos. yellow/other = disjoint). Pass 2 relaxes to green-only
+    constraints (a mis-modelled yellow must never strand the
+    solver). Pass 3 is the first untried pool batter. Returns None
+    when the probe carries no row_details (e.g. mocked probes in
+    older tests, or a board with no populated rows) — the caller
+    then stops honestly instead of guessing blind. Never raises.
+    """
+    try:
+        probe = _attr_post_submit_probe(page)
+    except Exception:
+        return None
+    rows = (probe or {}).get("row_details") or []
+    if not rows:
+        return None
+    players = _batterup_players_by_name()
+    if not players:
+        return None
+    tried = {_attr_norm_name(t) for t in (tried or ())}
+    # A cell's index within its row IS its column (the probe emits
+    # cells in DOM order).
+    constraints = []  # (col, state, value)
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        guessed = players.get(_attr_norm_name(r.get("name") or ""))
+        if not guessed:
+            continue
+        for idx, cell in enumerate(r.get("cells") or []):
+            if not isinstance(cell, dict):
+                continue
+            state = str(cell.get("state") or "")
+            if state in ("unknown", ""):
+                continue
+            val = _batterup_cell_value(guessed, idx)
+            if val is None:
+                continue
+            constraints.append((idx, state, val))
+
+    def _matches(cand, green_only=False):
+        for col, state, val in constraints:
+            if green_only and state != "green":
+                continue
+            cv = _batterup_cell_value(cand, col)
+            if cv is None:
+                continue
+            if col == 5:
+                overlap = bool(set(cv) & set(val))
+                if state == "green" and not overlap:
+                    return False
+                if state != "green" and overlap:
+                    return False
+            else:
+                if state == "green" and cv != val:
+                    return False
+                if state != "green" and cv == val:
+                    return False
+        return True
+
+    try:
+        pool = _attr_pool("batterup")
+    except Exception:
+        pool = []
+    for green_only in (False, True):
+        for name in pool:
+            if not name or _attr_norm_name(name) in tried:
+                continue
+            cand = players.get(_attr_norm_name(name))
+            if not cand:
+                continue
+            if _matches(cand, green_only=green_only):
+                return name
+    for name in pool:
+        if name and _attr_norm_name(name) not in tried:
+            return name
+    return None
+
+
+def _batterup_all_green_row(probe):
+    """True + row name when some populated row is ALL green (every
+    feedback cell green) — the only board-state win for Batterup.
+    Summed greens across rows must never count: a row with 5 green
+    + 1 white is not a win. Returns (False, "") when the probe
+    carries no row_details. Pure."""
+    try:
+        for r in (probe or {}).get("row_details") or []:
+            cells = (r or {}).get("cells") or []
+            if cells and all(
+                    str(c.get("state") or "") == "green" for c in cells):
+                return True, str(r.get("name") or "")
+    except Exception:
+        pass
+    return False, ""
 
 
 def _batterup_site_header(page):
@@ -19451,42 +20067,150 @@ def _batterup_site_header(page):
 
 def _s_batterup(page, ans, gid):
     _close_modals(page)
-    solved, evidence = solve_attr_game(page, ans, gid)
-    # Date honesty (fix-loop iter 4): log BOTH the CDN game_date (the date
-    # the answer was keyed on) and the site's displayed header date, and
-    # only claim the date when they agree OR the discrepancy is the known
-    # CDN-vs-display rollover. Do NOT change which puzzle is served — the
-    # served board already accepted the answer; this only makes the date
-    # claim honest.
+    # Date-keying, fix-loop iter 27 (ANALYSIS24 RC2). The iter-26
+    # "same puzzle, display rollover" claim is REFUTED by the CDN
+    # archive itself, read live: game_date 2026-10-18 = game #973 =
+    # Alec Burleson, while game_date 2026-10-17 = game #972 = Wyatt
+    # Langford. The iter-26 served board (#972 10/17/26) was therefore
+    # the PREVIOUS day's board for target 2026-10-18 — and the CDN
+    # answer (Burleson) did not solve it (his row showed only USA
+    # green). CDN game_number and site header number agree 1:1 per
+    # date; there is no rollover that makes #972 also the 10/18
+    # puzzle.
+    #
+    # Gate, BEFORE any guess is played: the served board's own header
+    # date must equal the target date. If it does not, DEFER with no
+    # video — never solve a previous-day board and label it as
+    # today's. If the header is missing after retries, defer too
+    # (fail closed: an unproven board is not played). When the
+    # served board IS the target day's board, the CDN answer is
+    # still only a seed: if its row is not all-green, the solver
+    # continues from feedback (see solve_attr_game's continuation),
+    # and the post-solve log records the feedback the CDN answer's
+    # row actually received.
+    _cdn = _BATTERUP_CDN.get(gid) or {}
+    _cdn_date = str(_cdn.get("game_date") or "")
+    _cdn_num = _cdn.get("game_number")
+    _cdn_answer = str(_cdn.get("player_name") or ans or "")
     try:
-        _cdn = _BATTERUP_CDN.get(gid) or {}
-        _cdn_date = str(_cdn.get("game_date") or "")
-        _hdr = _batterup_site_header(page)
-        _site_iso = (_hdr or {}).get("iso", "")
-        _tgt = A.target_date()
-        _tgt_iso = _tgt.isoformat()
-        _prev_iso = (_tgt - timedelta(days=1)).isoformat()
-        if _cdn_date and _site_iso and _cdn_date == _site_iso == _tgt_iso:
-            _date_note = (f"dates agree: cdn_game_date={_cdn_date} "
-                          f"site_header=#{_hdr['number']} {_hdr['display']}")
-        elif _cdn_date == _tgt_iso and _site_iso == _prev_iso:
-            _date_note = (
-                f"dates differ by known rollover: cdn_game_date={_cdn_date} "
-                f"site_header=#{_hdr['number']} {_hdr['display']} "
-                f"({_site_iso}); CDN keys by the UTC-day boundary "
-                f"(~01:04 UTC) while the site displays the US-local date — "
-                f"same puzzle, display rollover, NOT a previous-day board")
-        else:
-            _date_note = (
-                f"WARNING: date mismatch unexplained: "
-                f"cdn_game_date={_cdn_date or '?'} "
-                f"site_header={('#' + _hdr['number'] + ' ' + _hdr['display'] + ' ' + _site_iso) if _hdr else 'not found'} "
-                f"target={_tgt_iso}; date claim NOT made")
-        _dbg(gid, f"batterup dates: {_date_note}")
-        evidence = f"{evidence} [{_date_note}]"
-    except Exception as _e:
-        _dbg(gid, f"batterup date check failed: {str(_e)[:100]}")
-    return solved, evidence
+        _tgt_iso = A.target_date().isoformat()
+    except Exception:
+        _tgt_iso = ""
+    _hdr = None
+    for _attempt in range(3):
+        try:
+            _hdr = _batterup_site_header(page)
+        except Exception:
+            _hdr = None
+        if _hdr:
+            break
+        try:
+            page.wait_for_timeout(2000)
+        except Exception:
+            break
+    _gate = (f"cdn_game_date={_cdn_date or '?'} "
+             f"cdn_game_number={_cdn_num if _cdn_num is not None else '?'} "
+             f"cdn_answer={_cdn_answer!r} "
+             f"site_header={('#' + str(_hdr.get('number')) + ' ' + str(_hdr.get('display')) + ' ' + str(_hdr.get('iso'))) if _hdr else 'not found'} "
+             f"target={_tgt_iso}")
+    _dbg(gid, f"batterup date-keying: {_gate}")
+    if not _hdr:
+        return False, (f"defer: site header not found after retries; "
+                       f"cannot prove the served board is the target "
+                       f"day's board; not playing an unproven board "
+                       f"[{_gate}]")
+    if _hdr.get("iso") != _tgt_iso:
+        return False, (f"defer: served board "
+                       f"#{_hdr.get('number')} {_hdr.get('display')} "
+                       f"({_hdr.get('iso')}) is NOT the target day's "
+                       f"board ({_tgt_iso}); will NOT solve a "
+                       f"previous-day board [{_gate}]")
+    if _cdn_num is not None and str(_cdn_num) != str(_hdr.get("number")):
+        _dbg(gid, f"WARNING: CDN game_number={_cdn_num} != served "
+                  f"#{_hdr.get('number')}; CDN answer treated as a seed "
+                  f"only, never as the served board's answer")
+    solved, evidence = solve_attr_game(page, ans, gid)
+    # Post-solve date evidence: what feedback did the CDN answer's
+    # row actually receive on the served board? (Iter-26: Burleson's
+    # row was 1-green on the #972 board — the fact that exposed the
+    # date mismatch. A CDN answer whose row is not all-green is
+    # never, by itself, the served board's answer.)
+    try:
+        _pr = _attr_post_submit_probe(page)
+        _cdn_row = None
+        for _r in (_pr or {}).get("row_details") or []:
+            if _attr_norm_name(_r.get("name") or "") == \
+                    _attr_norm_name(_cdn_answer):
+                _cdn_row = _r
+                break
+        if _cdn_row is not None:
+            _cells = _cdn_row.get("cells") or []
+            _greens = sum(1 for _c in _cells
+                          if str(_c.get("state") or "") == "green")
+            _dbg(gid, f"batterup date-keying: CDN answer "
+                      f"{_cdn_answer!r} row on served board: "
+                      f"{_greens}/{len(_cells)} green "
+                      f"(states={[str(_c.get('state')) for _c in _cells]})")
+    except Exception:
+        pass
+    _date_note = (f"batterup date-keying: {_gate}; "
+                  f"served board is the target day's board")
+    return solved, f"{evidence} [{_date_note}]"
+
+
+# Iter-27: is the clicked menu label gone from the visible menu?
+# (Substring match, like the :has-text selectors in _s_marveldle.)
+_MARVELDLE_MENU_SETTLED_JS = """(label) => {
+  const want = (label || '').trim().toUpperCase();
+  for (const e of document.querySelectorAll(
+      'button, a, [role=button], [role=link]')) {
+    if (e && e.offsetParent !== null &&
+        (e.innerText || '').trim().toUpperCase().includes(want))
+      return false;
+  }
+  return true;
+}"""
+
+
+def _marveldle_wait_menu_settled(page, before_url, label, cap_ms=1500):
+    """Poll (150ms) until the menu click's effect is visible — the
+    URL changed or the clicked label left the visible menu — or
+    cap_ms elapses (iter-27). Same cap as the old fixed 1500ms
+    sleep, strictly faster when the transition lands early, and
+    never shorter than the transition itself: while the label is
+    still on screen the click has not settled."""
+    import time as _t
+    _end = _t.time() + cap_ms / 1000.0
+    while _t.time() < _end:
+        try:
+            if page.url != before_url:
+                return True
+            if page.evaluate(_MARVELDLE_MENU_SETTLED_JS, label):
+                return True
+        except Exception:
+            pass
+        page.wait_for_timeout(150)
+    return False
+
+
+def _marveldle_wait_inputs(page, cap_ms=20000, poll_ms=250):
+    """Poll for guess inputs every poll_ms up to cap_ms (iter-27).
+    Same cap as the old 10x2000ms loop, finer-grained: the old
+    loop could sit up to 2s on inputs that were already present.
+    Returns the input count."""
+    import time as _t
+    _end = _t.time() + cap_ms / 1000.0
+    n = 0
+    while True:
+        try:
+            n = page.evaluate(
+                "() => document.querySelectorAll("
+                "'input,textarea,[contenteditable=true]').length")
+        except Exception:
+            n = 0
+        if n or _t.time() >= _end:
+            return n
+        page.wait_for_timeout(poll_ms)
 
 
 def _s_marveldle(page, ans, gid):
@@ -19509,34 +20233,24 @@ def _s_marveldle(page, ans, gid):
             try:
                 el = page.query_selector(sel)
                 if el and el.is_visible():
+                    _url_before = page.url
                     el.click(timeout=3000)
-                    page.wait_for_timeout(1500)
+                    _marveldle_wait_menu_settled(page, _url_before, label)
                     _dbg(gid, f"clicked {label!r} via {sel}")
                     break
             except Exception:
                 pass
-    n = 0
-    for _iw in range(10):
-        try:
-            n = page.evaluate(
-                "() => document.querySelectorAll("
-                "'input,textarea,[contenteditable=true]').length")
-        except Exception:
-            n = 0
-        if n:
-            break
-        page.wait_for_timeout(2000)
+    import time as _time_m
+    _t_menu0 = _time_m.time()
+    n = _marveldle_wait_inputs(page)
     _dbg(gid, f"after menu: url={page.url} inputs={n} "
-              f"(waited {(_iw + 1) * 2}s)")
+              f"(waited {_time_m.time() - _t_menu0:.1f}s)")
     if not n:
         for u in ("https://marveldle.com/game", "https://marveldle.com/play",
                   "https://marveldle.com/classic", "https://marveldle.com/comics"):
             try:
                 page.goto(u, wait_until="domcontentloaded", timeout=25000)
-                page.wait_for_timeout(4000)
-                n2 = page.evaluate(
-                    "() => document.querySelectorAll("
-                    "'input,textarea,[contenteditable=true]').length")
+                n2 = _marveldle_wait_inputs(page, cap_ms=4000)
                 _dbg(gid, f"tried {u} inputs={n2}")
                 if n2:
                     break
