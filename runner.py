@@ -2720,12 +2720,14 @@ def _semantic_dom_scores(page, word):
     (raw_semantle / raw_contexto) vs kept rows — plus attempts and
     error, so a later log line can tell "selector matched nothing"
     apart from "rows matched but filtered" apart from "evaluate
-    threw"; (b) one bounded re-read: if the first attempt finds no
-    score AND no row for this word (matched_row None — the guess row
-    may render just after the first read on the Angular POST
-    round-trip), wait 1200ms and probe once more. A matched row with
-    no decimal is NOT retried (the row is there; re-reading cannot
-    add a decimal). The selector itself was verified against the
+    threw"; (b) bounded poll for the current word's row: if an
+    attempt finds no score AND no row for this word (matched_row
+    None — the guess row may render well after the first read; in
+    run 39115522198 the row for each Semantle guess was still absent
+    9s after typing began and appeared only 4–11s after Enter),
+    wait 1000ms and probe again, up to 10 attempts (~9s of
+    waiting). A matched row with no decimal is NOT retried (the row
+    is there; re-reading cannot add a decimal). The selector itself was verified against the
     LIVE Semantle bundle template (main-BDG63Q2B.js, still served):
     the ngFor guess row is a div with class " dark:border-neutral-300"
     and NO rounded-md; the recent-guess card (wB template) carries
@@ -2734,7 +2736,7 @@ def _semantic_dom_scores(page, word):
     probe = {"rows_scanned": 0, "matched_row": None, "numbers": [],
              "attempts": 0, "raw_semantle": 0, "kept_semantle": 0,
              "raw_contexto": 0, "kept_contexto": 0, "error": None}
-    for _attempt in (1, 2):
+    for _attempt in range(1, 11):
         probe["attempts"] = _attempt
         try:
             rows = page.evaluate("""() => {
@@ -2803,12 +2805,13 @@ def _semantic_dom_scores(page, word):
         probe["numbers"] = _pparse.get("numbers", [])
         if score is not None:
             return score, probe
-        # Bounded re-read (see docstring): only when no row for this
+        # Bounded poll (see docstring): only while no row for this
         # word was found at all — a matched row with no decimal cannot
         # gain one by re-reading, and a found score already returned.
-        if _attempt == 1 and probe["matched_row"] is None:
+        # No wait after the final attempt (nothing left to wait for).
+        if probe["matched_row"] is None and _attempt < 10:
             try:
-                page.wait_for_timeout(1200)
+                page.wait_for_timeout(1000)
             except Exception:
                 pass
             continue

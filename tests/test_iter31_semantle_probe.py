@@ -8,13 +8,15 @@ evaluate threw vs probe ran before rows rendered).
 
 Fix: (a) _semantic_dom_scores now returns per-stage diagnostics —
 raw selector counts BEFORE the rounded-md/text filters (raw_semantle /
-raw_contexto) vs kept rows, plus attempts and error; (b) one bounded
-re-read when the first attempt finds no row for this word at all
-(matched_row None — the guess row may render just after the first read
-on the Angular POST round-trip); a matched row with no decimal is NOT
-retried. (c) _semantic_guess_accepted logs the diagnostics on EVERY
-probe (gid-gated _dbg line) instead of dropping them; the selector
-itself was verified against the LIVE Semantle bundle template
+raw_contexto) vs kept rows, plus attempts and error; (b) bounded poll
+for the current word's row (up to 10 attempts, 1000ms apart) when no
+row for this word is found — the run-39115522198 diagnostics proved
+each Semantle guess's row was still absent 9s after typing began and
+appeared only 4–11s after Enter, so the original single 1200ms
+re-read was too short; a matched row with no decimal is NOT retried.
+(c) _semantic_guess_accepted logs the diagnostics on EVERY probe
+(gid-gated _dbg line) instead of dropping them; the selector itself
+was verified against the LIVE Semantle bundle template
 (main-BDG63Q2B.js): ngFor rows are divs with class
 " dark:border-neutral-300" and NO rounded-md; the recent-guess card
 carries BOTH classes, so the rounded-md exclusion is correct.
@@ -105,7 +107,17 @@ class TestDomScoresDiagnostics(unittest.TestCase):
         got, probe = R._semantic_dom_scores(pg, "nutrient")
         self.assertEqual(got, "-0.67")
         self.assertEqual(probe["attempts"], 2)
-        self.assertEqual(pg.waits, [1200])
+        self.assertEqual(pg.waits, [1000])
+
+    def test_poll_catches_late_row(self):
+        # Row for the word appears only on the 4th attempt (the
+        # run-39115522198 shape: row absent 9s after typing began).
+        pg = FakePage([[], [], [],
+                       [{"src": "semantle", "text": "1\nnutrient\n-0.67\n9999+"}]])
+        got, probe = R._semantic_dom_scores(pg, "nutrient")
+        self.assertEqual(got, "-0.67")
+        self.assertEqual(probe["attempts"], 4)
+        self.assertEqual(pg.waits, [1000] * 3)
 
     def test_no_retry_when_row_matched_without_decimal(self):
         pg = FakePage([[{"src": "semantle", "text": "1\nnutrient\n9999+"}]])
@@ -114,15 +126,15 @@ class TestDomScoresDiagnostics(unittest.TestCase):
         self.assertEqual(probe["attempts"], 1)
         self.assertEqual(pg.waits, [])
 
-    def test_no_retry_when_word_absent_but_rows_present(self):
-        # Rows exist but none for this word: matched_row None, so one
-        # bounded re-read (the row may render late), then give up.
-        pg = FakePage([[{"src": "semantle", "text": "1\ncombat\n6.38\n9999+"}],
-                       [{"src": "semantle", "text": "1\ncombat\n6.38\n9999+"}]])
+    def test_poll_exhausts_when_word_never_appears(self):
+        # Rows exist but none for this word: matched_row None, so the
+        # poll runs to the 10-attempt cap (the row may render late),
+        # then gives up. 9 waits of 1000ms between the 10 attempts.
+        pg = FakePage([[{"src": "semantle", "text": "1\ncombat\n6.38\n9999+"}]])
         got, probe = R._semantic_dom_scores(pg, "nutrient")
         self.assertIsNone(got)
-        self.assertEqual(probe["attempts"], 2)
-        self.assertEqual(pg.waits, [1200])
+        self.assertEqual(probe["attempts"], 10)
+        self.assertEqual(pg.waits, [1000] * 9)
 
     def test_evaluate_throw_sets_error(self):
         pg = FakePage([], raise_on={"main"})
