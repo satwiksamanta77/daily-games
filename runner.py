@@ -2677,8 +2677,11 @@ def _semantic_parse_dom_rows(rows, word):
             probe["matched_row"] = t[:160]
             # First decimal AFTER the word token: the similarity.
             # (Guess number is an integer before the word; proximity
-            # is an integer or text after it.)
-            decs = _re.findall(r"[-+]?\d+\.\d+", t[m.end():])
+            # is an integer or text after it.) The sign class also
+            # accepts U+2212 MINUS SIGN (Semantle may render it) and
+            # normalizes it to ASCII "-" so float() downstream works.
+            decs = _re.findall(r"[-+\u2212]?\d+\.\d+", t[m.end():])
+            decs = [d.replace("\u2212", "-") for d in decs]
             probe["numbers"] = decs
             if decs:
                 return decs[0], probe
@@ -2707,10 +2710,34 @@ def _semantic_dom_scores(page, word):
     _semantic_parse_dom_rows. Returns (score_or_None, probe) — None
     with the probe means the DOM exposes no per-guess score; the
     caller must say so honestly, never fake one.
+
+    Fix-loop iter 31 (ANALYSIS29 BUG 2): Semantle still returned None
+    for every guess while the Similarity column was visibly rendered,
+    and the caller discarded the probe diagnostics, so the run
+    carried zero evidence of WHICH stage failed. Two changes:
+    (a) this function now also returns per-stage diagnostics —
+    raw selector counts BEFORE the rounded-md/text filters
+    (raw_semantle / raw_contexto) vs kept rows — plus attempts and
+    error, so a later log line can tell "selector matched nothing"
+    apart from "rows matched but filtered" apart from "evaluate
+    threw"; (b) one bounded re-read: if the first attempt finds no
+    score AND no row for this word (matched_row None — the guess row
+    may render just after the first read on the Angular POST
+    round-trip), wait 1200ms and probe once more. A matched row with
+    no decimal is NOT retried (the row is there; re-reading cannot
+    add a decimal). The selector itself was verified against the
+    LIVE Semantle bundle template (main-BDG63Q2B.js, still served):
+    the ngFor guess row is a div with class " dark:border-neutral-300"
+    and NO rounded-md; the recent-guess card (wB template) carries
+    BOTH classes, so the rounded-md exclusion is correct.
     """
-    probe = {"rows_scanned": 0, "matched_row": None, "numbers": []}
-    try:
-        rows = page.evaluate("""() => {
+    probe = {"rows_scanned": 0, "matched_row": None, "numbers": [],
+             "attempts": 0, "raw_semantle": 0, "kept_semantle": 0,
+             "raw_contexto": 0, "kept_contexto": 0, "error": None}
+    for _attempt in (1, 2):
+        probe["attempts"] = _attempt
+        try:
+            rows = page.evaluate("""() => {
           const out = [];
           // Contexto: .guess-history .row-wrapper > .row > .row-word + rank.
           // The rank span shows distance + 1 (the site's own number).
@@ -2736,10 +2763,57 @@ def _semantic_dom_scores(page, word):
           }
           return out;
         }""") or []
-    except Exception as e:
-        probe["error"] = str(e)[:80]
+        except Exception as e:
+            probe["error"] = str(e)[:80]
+            return None, probe
+        # Diagnostics: raw selector counts BEFORE the rounded-md /
+        # text filters, so the log can tell "selector matched nothing"
+        # apart from "rows matched but filtered out".
+        try:
+            diag = page.evaluate("""() => {
+          const semAll = document.querySelectorAll(
+              'app-guesses div[class*="border-neutral-300"]');
+          let semKept = 0;
+          for (const r of semAll) {
+            if ((r.className || '').includes('rounded-md')) continue;
+            if ((r.innerText || '').trim()) semKept++;
+          }
+          const ctxAll = document.querySelectorAll(
+              '.guess-history .row-wrapper');
+          let ctxKept = 0;
+          for (const r of ctxAll) {
+            if (r.querySelector('.row-word')) ctxKept++;
+          }
+          return {semantle_raw: semAll.length,
+                  semantle_kept: semKept,
+                  contexto_raw: ctxAll.length,
+                  contexto_kept: ctxKept};
+        }""") or {}
+        except Exception:
+            diag = {}
+        if not isinstance(diag, dict):
+            diag = {}
+        probe["raw_semantle"] = int(diag.get("semantle_raw") or 0)
+        probe["kept_semantle"] = int(diag.get("semantle_kept") or 0)
+        probe["raw_contexto"] = int(diag.get("contexto_raw") or 0)
+        probe["kept_contexto"] = int(diag.get("contexto_kept") or 0)
+        score, _pparse = _semantic_parse_dom_rows(rows, word)
+        probe["rows_scanned"] = _pparse.get("rows_scanned", 0)
+        probe["matched_row"] = _pparse.get("matched_row")
+        probe["numbers"] = _pparse.get("numbers", [])
+        if score is not None:
+            return score, probe
+        # Bounded re-read (see docstring): only when no row for this
+        # word was found at all — a matched row with no decimal cannot
+        # gain one by re-reading, and a found score already returned.
+        if _attempt == 1 and probe["matched_row"] is None:
+            try:
+                page.wait_for_timeout(1200)
+            except Exception:
+                pass
+            continue
         return None, probe
-    return _semantic_parse_dom_rows(rows, word)
+    return None, probe
 
 
 def _betweenle_counters(page):
@@ -4541,7 +4615,7 @@ def _semantic_probe_path(answer, width=6, extra=()):
     return out, steps
 
 
-def _semantic_guess_accepted(page, word, before_txt):
+def _semantic_guess_accepted(page, word, before_txt, gid=None):
     """Did the site actually score `word`, or did it reject it?
 
     A word outside the game's dictionary is refused ("not a valid word") and
@@ -4566,8 +4640,25 @@ def _semantic_guess_accepted(page, word, before_txt):
     # The caller already settled after Enter before calling this.
     try:
         dom_score, _probe = _semantic_dom_scores(page, word)
-    except Exception:
-        dom_score, _probe = None, {}
+    except Exception as e:
+        dom_score, _probe = None, {"error": f"caller: {str(e)[:80]}"}
+    # Fix-loop iter 31: NEVER discard the probe diagnostics again
+    # (ANALYSIS29: Semantle returned None 4/4 with zero evidence of
+    # which stage failed because the caller dropped _probe). Log the
+    # per-stage diagnostics on EVERY probe so the log alone diagnoses
+    # the next failure: rows_scanned (kept rows) vs raw_* (selector
+    # matches before filters) vs matched_row vs error vs attempts.
+    if gid is not None:
+        _p = _probe or {}
+        _dbg(gid, f"score probe: word={word!r} score={dom_score!r} "
+                  f"rows_scanned={_p.get('rows_scanned')} "
+                  f"raw_semantle={_p.get('raw_semantle')} "
+                  f"kept_semantle={_p.get('kept_semantle')} "
+                  f"raw_contexto={_p.get('raw_contexto')} "
+                  f"kept_contexto={_p.get('kept_contexto')} "
+                  f"matched_row={_p.get('matched_row')!r} "
+                  f"error={_p.get('error')!r} "
+                  f"attempts={_p.get('attempts')}")
     if dom_score is not None:
         return True, dom_score
     m = _re.search(_re.escape(w) + r"[^\n]{0,40}?([\d.]+)\s*%", low)
@@ -4739,7 +4830,7 @@ def solve_semantle(page, ans, gid="semantle"):
         # The score is what a player reads before choosing the next word, so
         # give it real time to appear and then pause on it.
         _settle(page, base=2400)
-        accepted, score = _semantic_guess_accepted(page, w, before)
+        accepted, score = _semantic_guess_accepted(page, w, before, gid=gid)
         if not accepted:
             rejected.add(w)
             _REJECTED[gid] = sorted(rejected)
@@ -4903,7 +4994,7 @@ def solve_contexto(page, ans, gid="contexto"):
         except Exception as e:
             return False, f"guess {w!r} failed: {str(e)[:120]}"
         _settle(page, base=2200)
-        accepted, score = _semantic_guess_accepted(page, w, before)
+        accepted, score = _semantic_guess_accepted(page, w, before, gid=gid)
         if not accepted:
             rejected.add(w)
             _REJECTED[gid] = sorted(rejected)
