@@ -392,12 +392,23 @@ class TestMinibiHeaderScope(unittest.TestCase):
 
     def test_served_js_scopes_header_to_game_header(self):
         # SERVED_JS must exclude dialog/modal/popup/about/overlay
-        # elements from the header probe and include .main-nav.
-        self.assertIn("_inPopup", NS.SERVED_JS)
+        # elements from the LOOSE header probe and include
+        # .main-nav. Iter-20 (ANALYSIS17 §2b/§6.1): the iter-19
+        # blanket `_inPopup` skip (which also excluded
+        # aria-hidden wrappers — i.e. the game header itself while
+        # a win popup is open, 8/9 -> 0/9) is REPLACED by
+        # `_popupTrip` + the strict filter: the own-header
+        # collection applies NO popup skip (each entry records
+        # its popup_trip), and the loose selectors keep only the
+        # strict filter (dialog/modal/popup/about/overlay,
+        # WITHOUT aria-hidden).
+        self.assertIn("_popupTrip", NS.SERVED_JS)
+        self.assertIn("_inPopupStrict", NS.SERVED_JS)
         self.assertIn('[role="dialog"]', NS.SERVED_JS)
         self.assertIn("main-nav", NS.SERVED_JS)
-        self.assertIn("if (_inPopup(e)) continue;", NS.SERVED_JS)
-        self.assertIn("!_inPopup(e)", NS.SERVED_JS)
+        self.assertIn("popup_trip: _trip", NS.SERVED_JS)
+        self.assertNotIn("if (_inPopup(e)) continue;", NS.SERVED_JS)
+        self.assertNotIn("!_inPopup(e)", NS.SERVED_JS)
 
 
 # ---------------------------------------------------------------- fix 4

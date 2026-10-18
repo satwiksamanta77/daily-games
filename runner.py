@@ -1343,7 +1343,24 @@ def _dismiss_teuteuf_banner(page):
     frame's top-right corner (the X), and hides the iframe
     element itself only if the click did not dismiss it. The
     close-button search also matches icon-only controls whose
-    class/id names them close/dismiss."""
+    class/id names them close/dismiss.
+
+    Iter-20 (ANALYSIS17 §2g): the probe STILL said 'absent' 30x
+    while the banner sat in every frame (gp_0135/0360/0380). Two
+    more gaps closed: (a) the brand signature is not required —
+    the banner's BODY SENTENCE ('You asked, we listened! ...
+    educational resource, built for classrooms.') now matches
+    too, covering a brand mark rendered as an image/SVG logo
+    with no text; (b) the X close search now covers bare
+    span/SVG/div close controls (not just button/[role=button]/
+    [aria-label]/a). And a bare 'absent' is GONE: when nothing
+    matches, the probe returns 'absent-candidates:' + the
+    candidate evidence (roots/shadow hosts, every iframe with
+    readability + rect, top-of-page edu/classroom mentions,
+    top custom elements = possible closed-shadow hosts,
+    teuteuf alt/aria/title hits) so the next artifact is
+    diagnosable from the log alone. Worldle-only scoping is
+    unchanged (waffle log stays clean)."""
     try:
         _gid = getattr(page, "_qp_gid", None)
         if _gid in GAMES and _gid != "worldle":
@@ -1386,10 +1403,28 @@ def _dismiss_teuteuf_banner(page):
             } catch (err) {}
             return parts.join(' ');
           };
+          // Iter-20 (ANALYSIS17 §2g): the banner STILL read
+          // 'absent' x30 while sitting in every frame. The brand
+          // signature alone is not enough: match the banner's
+          // BODY SENTENCE too ('You asked, we listened! Teuteuf
+          // Edu is our new educational resource, built for
+          // classrooms.') — if the brand mark renders as an
+          // image/SVG logo with no text, or the heading is
+          // split across nodes the brand match cannot see, the
+          // sentence still identifies the banner. The sentence
+          // is banner-specific on Worldle (this probe is
+          // Worldle-only), so it cannot match game content.
           const hasSig = el => { try {
             const s = sigOf(el);
-            return norm(s).includes('teuteuf edu') ||
-              nospace(s).includes('teuteufedu');
+            const n = norm(s), ns = nospace(s);
+            return n.includes('teuteuf edu') ||
+              ns.includes('teuteufedu') ||
+              n.includes('you asked, we listened') ||
+              n.includes('educational resource') ||
+              n.includes('built for classrooms') ||
+              ns.includes('youaskedwelistened') ||
+              ns.includes('educationalresource') ||
+              ns.includes('builtforclassrooms');
             } catch (err) { return false; } };
           // Rect-based visibility (iter-16): a FIXED-position
           // banner has a null offset parent, so the old
@@ -1460,8 +1495,13 @@ def _dismiss_teuteuf_banner(page):
                   ? (document.body ? document.body.textContent : '')
                   : (root.body ? root.body.textContent
                                : (root.textContent || ''));
+                // Iter-20: body-sentence signatures too (see
+                // hasSig) — the brand mark may be an image.
                 if (norm(t).includes('teuteuf edu is here') ||
-                    nospace(t).includes('teuteufeduishere')) {
+                    nospace(t).includes('teuteufeduishere') ||
+                    norm(t).includes('you asked, we listened') ||
+                    norm(t).includes('educational resource') ||
+                    norm(t).includes('built for classrooms')) {
                   sigInText = true; break;
                 }
               } catch (err) {}
@@ -1496,7 +1536,72 @@ def _dismiss_teuteuf_banner(page):
                   {x: r.x, y: r.y, w: r.width, h: r.height});
               }
             }
-            return 'absent';
+            // Iter-20 (ANALYSIS17 §2g): NEVER a bare 'absent'
+            // again — a bare 'absent' vs frame-visible banner is
+            // exactly the lie this probe has told for 3
+            // iterations. Return the CANDIDATE evidence instead:
+            // roots searched, open shadow hosts, every iframe
+            // with its readability + rect (the banner may live
+            // in an unreadable iframe whose rect misses the
+            // banner-shape guards), top-of-page elements
+            // mentioning edu/classroom/asked/is-here, custom
+            // elements near the top (possible CLOSED shadow
+            // hosts, which no same-origin probe can pierce),
+            // and any element whose alt/aria-label/title
+            // mentions teuteuf. The next artifact is then
+            // diagnosable from the log alone.
+            const diag = {roots: roots.length, shadow_hosts: 0,
+              iframes: [], top_cands: [], custom_top: [],
+              attr_teuteuf: []};
+            try { diag.shadow_hosts = seenShadow.size; }
+            catch (err) {}
+            for (const fr of Array.from(
+                document.querySelectorAll('iframe'))) {
+              let readable = false;
+              try { readable = !!fr.contentDocument; }
+              catch (err) { readable = false; }
+              let r = null;
+              try { const rr = fr.getBoundingClientRect();
+                r = {x: Math.round(rr.x), y: Math.round(rr.y),
+                     w: Math.round(rr.width),
+                     h: Math.round(rr.height)}; }
+              catch (err) {}
+              diag.iframes.push({readable: readable, rect: r,
+                src: String(fr.getAttribute('src') || '')
+                  .slice(0, 80)});
+            }
+            for (const el of document.querySelectorAll('body *')) {
+              let r;
+              try { r = el.getBoundingClientRect(); }
+              catch (err) { continue; }
+              if (!r || r.width <= 0 || r.height <= 0) continue;
+              if (r.top < -20 || r.top > 300) continue;
+              const t = norm(el.textContent || '');
+              const cls = String(el.getAttribute('class') || '')
+                .slice(0, 60);
+              if (t.includes('edu') || t.includes('classroom') ||
+                  t.includes('you asked') || t.includes('is here')) {
+                if (diag.top_cands.length < 12)
+                  diag.top_cands.push({tag: el.tagName, cls: cls,
+                    text: t.slice(0, 90)});
+              }
+              if ((el.tagName || '').includes('-')) {
+                if (diag.custom_top.length < 12)
+                  diag.custom_top.push({tag: el.tagName, cls: cls,
+                    rect: {x: Math.round(r.x), y: Math.round(r.y),
+                           w: Math.round(r.width),
+                           h: Math.round(r.height)}});
+              }
+              for (const a of ['alt', 'aria-label', 'title']) {
+                const v = el.getAttribute(a) || '';
+                if (norm(v).includes('teuteuf') &&
+                    diag.attr_teuteuf.length < 8) {
+                  diag.attr_teuteuf.push({tag: el.tagName, cls: cls,
+                    attr: a, val: v.slice(0, 60)});
+                }
+              }
+            }
+            return 'absent-candidates:' + JSON.stringify(diag);
           }
           cands.sort((a, b) =>
             norm(a.el.textContent).length -
@@ -1507,9 +1612,18 @@ def _dismiss_teuteuf_banner(page):
             : ' (' + foundMethod + ')';
           let node = leaf;
           for (let d = 0; d < 6 && node; d++) {
+            // Iter-20: the banner's X is not necessarily a
+            // <button> — it may be a bare <span>/SVG/div with an
+            // onClick, a close-named class, or a close
+            // data-testid. Search those too, or the X is never
+            // found and the probe falls through to hiding the
+            // container (which still works, but only after the
+            // close search fails).
             const btns = node.querySelectorAll
               ? Array.from(node.querySelectorAll(
-                  'button, [role=button], [aria-label], a'))
+                  'button, [role=button], [aria-label], a, span, ' +
+                  'svg, [class*=close i], [class*=dismiss i], ' +
+                  '[data-testid*=close i], [data-testid*=dismiss i]'))
               : [];
             const close = btns.find(b => {
               const t = (((b.getAttribute('aria-label') || '') + ' ' +
@@ -1519,7 +1633,8 @@ def _dismiss_teuteuf_banner(page):
               // (empty text, SVG child) whose class/id names it
               // close/dismiss — the banner's X may carry no text.
               const clsId = (((b.getAttribute('class') || '') + ' ' +
-                (b.getAttribute('id') || '')).toLowerCase());
+                (b.getAttribute('id') || '') + ' ' +
+                (b.getAttribute('data-testid') || '')).toLowerCase());
               return t === 'x' || t === '✕' || t === '×' ||
                 t === 'close' || t.includes('dismiss') ||
                 t.includes('close') || clsId.includes('close') ||
@@ -1614,12 +1729,15 @@ def _dismiss_teuteuf_banner(page):
                 _hidden = False
             res = ("hidden-iframe-banner" if _hidden
                    else "iframe-corner-click-did-not-dismiss")
-    if res == "absent":
+    if res == "absent" or (isinstance(res, str)
+                           and res.startswith("absent-candidates:")):
         # Iter-18 late-render re-scan: the probe can run before
         # the banner renders, so a single instant 'absent' is
         # weak. Re-scan once after 500ms before logging 'absent'.
         # Safe to re-run: an 'absent' first pass performed no
         # close/hide side effect. Bounded (+500ms, one retry).
+        # Iter-20: 'absent-candidates:' (candidate diagnostics,
+        # never a bare 'absent') re-scans the same way.
         try:
             page.wait_for_timeout(500)
             res = page.evaluate(_JS)
@@ -6309,15 +6427,32 @@ def _s_worldle_win_check(page, mode, day, day_string, extra=None):
             f"completed={done}"
     if mode == "area":
         gs = _s_worldle_day_guesses(page, "size-guesses", day_string)
+        # Iter-20 (ANALYSIS17 §2i): NEVER claim "pick recorded"
+        # when size-guesses is EMPTY — iter-19 logged
+        # "area comparison pick recorded: size-guesses[0]
+        # correct==answer: False" while the log itself said
+        # nothing was recorded (there is no size-guesses[0]).
+        # Empty store -> "no pick recorded (size-guesses empty)".
+        # A present-but-wrong entry is worded as an entry present,
+        # not as a recorded pick.
+        if not gs:
+            return False, [], \
+                "area comparison: no pick recorded " \
+                f"(size-guesses empty); completed={done}"
         win = bool(gs) and (gs[0] or {}).get("correct") == (gs[0] or {}).get("answer")
         # Iter-19 (ANALYSIS16 §6.10): the old wording ("first guess
         # correct==answer") was arbitrate-logic phrasing, not a real
         # guess count — the Area widget is a shape COMPARISON
         # (Kuwait vs Qatar cards), and the recorded store entry is
         # the comparison pick. Word the check as the pick it is.
+        if win:
+            return win, [str((g or {}).get("answer") or "?") for g in gs], \
+                f"area comparison pick recorded: size-guesses[0] " \
+                f"correct==answer: {win}; completed={done}"
         return win, [str((g or {}).get("answer") or "?") for g in gs], \
-            f"area comparison pick recorded: size-guesses[0] " \
-            f"correct==answer: {win}; completed={done}"
+            "area comparison entry present but not correct: " \
+            f"size-guesses[0] correct={(gs[0] or {}).get('correct')} " \
+            f"answer={(gs[0] or {}).get('answer')}; completed={done}"
     return False, [], f"unknown mode {mode}"
 
 
@@ -7313,13 +7448,23 @@ def _s_worldle_live_round_modes(page, gid):
         }"""
 
         def _toggle():
+            # Iter-20 (ANALYSIS17 §2h): return the FULL toggle
+            # outcome (opened + via), not a bare bool — the caller
+            # logs toggle-vs-scan failure SEPARATELY, so the next
+            # artifact shows whether the toggle itself failed or
+            # the scan found no container after a successful
+            # toggle. A bare bool from a test fake maps to
+            # via='bool-compat'.
             try:
                 _res = page.evaluate(_TOGGLE_JS, labels)
             except Exception:
-                return False
+                return {"opened": False, "via": "evaluate-failed"}
             if isinstance(_res, dict):
-                return bool(_res.get("opened"))
-            return bool(_res)
+                return {"opened": bool(_res.get("opened")),
+                        "via": str(_res.get("via") or "unknown"),
+                        "tag": str(_res.get("tag") or ""),
+                        "cls": str(_res.get("cls") or "")}
+            return {"opened": bool(_res), "via": "bool-compat"}
         # RAW, OPEN-DROPDOWN-ONLY: every visible leaf entry inside an
         # identified open menu/listbox/dropdown container — NO label
         # filter in JS, NO whole-page fallback. Mapping to known labels
@@ -7417,14 +7562,27 @@ def _s_worldle_live_round_modes(page, gid):
         # unreadable list still returns None below — never a faked
         # live read.
         raw_ev = {}
+        # Iter-20 (ANALYSIS17 §2h): TOGGLE-vs-SCAN failure split,
+        # logged per attempt. The iter-19 log only said "attempt N
+        # found no dropdown container", which conflates two
+        # different failures: (a) the toggle click itself failed
+        # (no toggle control found / click failed), vs (b) the
+        # toggle succeeded but the scan still found no container
+        # (wrong container selector / dropdown not open after the
+        # click). Each attempt now logs toggle=... scan=...
+        # separately; the final None line carries both outcome
+        # lists so the split survives in one grep.
+        _toggle_outcomes = []
+        _scan_outcomes = []
         for _attempt in (1, 2, 3):
+            _tog = {"opened": None, "via": "skipped-scan-first"}
             if _attempt == 1:
                 raw_ev = _scan()
             elif _attempt == 2:
-                if not _toggle():
-                    _dbg(gid, "worldle G4 live rounds reader: attempt 2 "
-                              "dropdown toggle NOT opened (no mode-label "
-                              "toggle matched)")
+                _tog = _toggle()
+                _toggle_outcomes.append(
+                    f"attempt2 opened={_tog.get('opened')} "
+                    f"via={_tog.get('via')}")
                 page.wait_for_timeout(700)
                 raw_ev = _scan()
             else:
@@ -7433,14 +7591,28 @@ def _s_worldle_live_round_modes(page, gid):
                 except Exception:
                     pass
                 page.wait_for_timeout(300)
-                if not _toggle():
-                    _dbg(gid, "worldle G4 live rounds reader: attempt 3 "
-                              "dropdown toggle NOT opened (no mode-label "
-                              "toggle matched)")
+                _tog = _toggle()
+                _toggle_outcomes.append(
+                    f"attempt3 opened={_tog.get('opened')} "
+                    f"via={_tog.get('via')}")
                 page.wait_for_timeout(700)
                 raw_ev = _scan()
-            if (isinstance(raw_ev, dict) and raw_ev.get("container")) or \
-                    isinstance(raw_ev, list):
+            _n_entries = 0
+            _has_container = False
+            if isinstance(raw_ev, dict):
+                _has_container = bool(raw_ev.get("container"))
+                _n_entries = len(raw_ev.get("entries") or [])
+            elif isinstance(raw_ev, list):
+                _has_container = True
+                _n_entries = len(raw_ev)
+            _scan_outcomes.append(
+                f"attempt{_attempt} container={_has_container} "
+                f"entries={_n_entries}")
+            _dbg(gid, "worldle G4 live rounds reader: attempt "
+                      f"{_attempt} toggle opened={_tog.get('opened')} "
+                      f"via={_tog.get('via')} scan container="
+                      f"{_has_container} entries={_n_entries}")
+            if _has_container:
                 break
             _dbg(gid, "worldle G4 live rounds reader: attempt "
                       f"{_attempt} found no dropdown container; "
@@ -7453,7 +7625,9 @@ def _s_worldle_live_round_modes(page, gid):
             if not raw_ev.get("container"):
                 _dbg(gid, "worldle G4 live rounds reader: no open dropdown "
                           "container found after 3 attempts -> None "
-                          "(unreadable)")
+                          "(unreadable) | toggle outcomes="
+                          f"{_toggle_outcomes} | scan outcomes="
+                          f"{_scan_outcomes}")
                 return None
             raw = list(raw_ev.get("entries") or [])
         elif isinstance(raw_ev, list):
@@ -8160,10 +8334,76 @@ def _worldle_capital_pinpoint_probe(page, px, py):
     on any failure."""
     try:
         return page.evaluate("""(pt) => {
-          const host = document.querySelector('#pin-capital-svg');
-          let svg = host ? host.querySelector('svg') : null;
-          if (!svg && host && host.tagName === 'svg') svg = host;
-          if (!svg) return {found: false};
+          // Iter-20: the iter-19 run probed dots=0 while the frame
+          // showed 4 blue dots. The old probe read ONLY
+          // document.querySelector('#pin-capital-svg') in the LIGHT
+          // DOM and only <circle>/<ellipse> inside it: a pinpoint
+          // SVG living inside the teuteuf-geo-map web component's
+          // shadow tree (as the country outline does), or dots
+          // rendered as <path> markers / HTML <div> pins over the
+          // map, were invisible -> {found:false} / dots=[]. The
+          // search below pierces every shadow root + same-origin
+          // iframe document for the host, and the dot collection
+          // below enumerates ALL dot-shaped elements under the pin
+          // SVG / map container (circle, ellipse, path, rect, div,
+          // span, button) with geometry + classes.
+          const roots = [document];
+          const collectRoots = root => {
+            try {
+              for (const el of root.querySelectorAll('*')) {
+                if (el.shadowRoot) {
+                  roots.push(el.shadowRoot);
+                  collectRoots(el.shadowRoot);
+                }
+              }
+            } catch (e) {}
+          };
+          try { collectRoots(document); } catch (e) {}
+          for (const fr of Array.from(
+              document.querySelectorAll('iframe'))) {
+            try { const d = fr.contentDocument;
+              if (d) roots.push(d); } catch (e) {}
+          }
+          let hostEl = null, container = null, svg = null;
+          for (const rt of roots) {
+            try {
+              const h = rt.querySelector('#pin-capital-svg');
+              if (h) { hostEl = h; container = h; break; }
+            } catch (e) {}
+          }
+          if (hostEl) {
+            if ((hostEl.tagName || '').toLowerCase() === 'svg') {
+              svg = hostEl;
+            } else {
+              try { svg = hostEl.querySelector('svg'); } catch (e) {}
+            }
+            if (!svg) {
+              try {
+                const par = hostEl.parentElement;
+                if (par) svg = par.querySelector('svg');
+              } catch (e) {}
+            }
+          }
+          if (!svg) {
+            // No #pin-capital-svg anywhere (renamed /
+            // restructured): fall back to an SVG whose id/class
+            // names the pin or capital map.
+            for (const rt of roots) {
+              try {
+                for (const s of rt.querySelectorAll('svg')) {
+                  const idc = ((s.id || '') + ' ' +
+                    (s.getAttribute('class') || '')).toLowerCase();
+                  if (idc.includes('pin') || idc.includes('capital')) {
+                    svg = s; container = s; break;
+                  }
+                }
+              } catch (e) {}
+              if (svg) break;
+            }
+          }
+          if (!svg && container) svg = container;
+          if (!svg) return {found: false, dots: [], n_dots: 0,
+            n_paths: 0};
           const rect = svg.getBoundingClientRect();
           const dots = [];
           // Iter-18: collect the SVG <text> labels ONCE — a dot's
@@ -8321,8 +8561,117 @@ def _worldle_capital_pinpoint_probe(page, px, py):
                        grandparent_text: grandparentText,
                        grandparent_data: grandparentData,
                        parent_text: parentText,
-                       parent_data: parentData});
+                       parent_data: parentData,
+                       // Iter-20: tag (+ empty text) so the
+                       // attempt summary logs tag/class/name for
+                       // EVERY dot, first-pass dots included (the
+                       // second pass already records both).
+                       tag: (c.tagName || '').toLowerCase(),
+                       text: ''});
           }
+          // Iter-20 second pass: dots rendered as <path> markers
+          // or HTML <div>/<span>/<button> pins over the map (the
+          // iter-19 dots=0 case: the frame's 4 blue dots were not
+          // <circle>/<ellipse> under the light-DOM host). Only
+          // dot-shaped elements qualify: bounding box 3..48px,
+          // centre on the map rect. <path>/<rect> must also be
+          // dot-named (class/id dot/marker/pin/point) or blue-ish;
+          // HTML pins must be dot-named, blue-ish, or round, with
+          // at most a short label as text (a long-text div is a
+          // label, not a dot). Centres already collected above
+          // are skipped (same dot, two representations).
+          const isBlueish = s => {
+            const v = String(s || '').toLowerCase()
+              .replace(/\s+/g, '');
+            if (/^#(0{0,2}5[0-9a-f]{3}|00[0-9a-f]|2563eb|3b82f6|1d4ed8)$/
+                .test(v)) return true;
+            if (/^(blue|dodgerblue|royalblue|mediumblue)$/.test(v))
+              return true;
+            const m = v.match(/rgba?\((\d+),(\d+),(\d+)/);
+            if (m) { const r = +m[1], g = +m[2], b = +m[3];
+              return b > 100 && b > r + 30 && b > g - 20; }
+            return false;
+          };
+          try {
+            const scope = svg || container;
+            const extra = [];
+            const seenEl = new Set();
+            const pushEl = el => {
+              if (el && !seenEl.has(el)) {
+                seenEl.add(el); extra.push(el);
+              }
+            };
+            for (const el of scope.querySelectorAll(
+                'path, rect, div, span, button')) pushEl(el);
+            try {
+              const par = container ? container.parentElement : null;
+              if (par) for (const el of par.querySelectorAll(
+                  'path, rect, div, span, button')) pushEl(el);
+            } catch (e) {}
+            for (const c of extra) {
+              let r2;
+              try { r2 = c.getBoundingClientRect(); }
+              catch (e) { continue; }
+              if (!r2 || r2.width <= 0 || r2.height <= 0) continue;
+              if (r2.width < 3 || r2.width > 48 ||
+                  r2.height < 3 || r2.height > 48) continue;
+              const cx2 = r2.x + r2.width / 2;
+              const cy2 = r2.y + r2.height / 2;
+              if (cx2 < rect.x - 4 ||
+                  cx2 > rect.x + rect.width + 4 ||
+                  cy2 < rect.y - 4 ||
+                  cy2 > rect.y + rect.height + 4) continue;
+              if (dots.some(d => Math.abs(d.x - cx2) < 3 &&
+                  Math.abs(d.y - cy2) < 3)) continue;
+              const tag2 = (c.tagName || '').toLowerCase();
+              const clsId2 = ((c.getAttribute('class') || '') +
+                ' ' + (c.id || '')).toLowerCase();
+              const named2 = /(dot|marker|pin|point|capital)/
+                .test(clsId2);
+              let fill2 = '';
+              try { fill2 = c.getAttribute('fill') || ''; }
+              catch (e) {}
+              let bg2 = '';
+              try { const cs2 = getComputedStyle(c);
+                bg2 = cs2.backgroundColor || '';
+                if (!fill2) fill2 = cs2.fill || '';
+              } catch (e) {}
+              const text2 = (tag2 === 'div' || tag2 === 'span' ||
+                tag2 === 'button')
+                ? (c.textContent || '').replace(/\s+/g, ' ')
+                    .trim().slice(0, 60) : '';
+              if (tag2 === 'div' || tag2 === 'span' ||
+                  tag2 === 'button') {
+                if (text2.length > 40) continue;
+                let round2 = false;
+                try { const cs3 = getComputedStyle(c);
+                  const br = parseFloat(cs3.borderRadius || '0');
+                  round2 = br >= Math.min(r2.width, r2.height) / 2 - 1;
+                } catch (e) {}
+                if (!named2 && !isBlueish(bg2) &&
+                    !isBlueish(fill2) && !round2) continue;
+              } else {
+                if (!named2 && !isBlueish(fill2) &&
+                    !isBlueish(bg2)) continue;
+              }
+              let data2 = {};
+              try { for (const k of Object.keys(c.dataset || {}))
+                data2[k] = c.dataset[k]; } catch (e) {}
+              dots.push({x: cx2, y: cy2, r: r2.width / 2,
+                         fill: fill2, bg: bg2,
+                         cls: String(c.getAttribute('class') || '')
+                           .slice(0, 80),
+                         id: c.id || '', data: data2,
+                         title: '', aria: c.getAttribute('aria-label') || '',
+                         top_tag: null, top_cls: '',
+                         label: '', label_dist: null,
+                         overlay_label: '', overlay_label_dist: null,
+                         group_title: '', sibling_text: '',
+                         grandparent_title: '', grandparent_text: '',
+                         grandparent_data: {}, parent_text: '',
+                         parent_data: {}, tag: tag2, text: text2});
+            }
+          } catch (e) {}
           // Greedy mutual-nearest assignment (iter-19): sort every
           // (dot, label) pair by distance and assign each label to
           // at most one dot (the closest one still unlabelled).
@@ -8483,6 +8832,11 @@ def _worldle_capital_pick_pin_target(probe, fit_px, cap_name):
                       ("grandparent_text",
                        str(d.get("grandparent_text") or "")),
                       ("parent_text", str(d.get("parent_text") or "")),
+                      # Iter-20: HTML pin dots carry the city name
+                      # as their own short text (e.g. a <div> pin
+                      # labelled "Kuwait City"), not in a sibling
+                      # label — match it as a name source.
+                      ("text", str(d.get("text") or "")),
                       ("cls", str(d.get("cls") or ""))]
             return [(src, txt) for src, txt in pairs
                     if str(txt or "").strip()]
@@ -8524,8 +8878,14 @@ def _worldle_capital_pick_pin_target(probe, fit_px, cap_name):
                 if _n == want or (want and want in _n):
                     _via = _src
                     break
+            # Iter-20: carry the matched dot's INDEX + TAG so
+            # the caller can click the matched dot ELEMENT itself
+            # (_worldle_capital_click_dot_element) instead of an
+            # arbitrary coordinate.
             return {"x": float(d.get("x")), "y": float(d.get("y")),
                     "method": "dot-name",
+                    "dot_index": dots.index(d),
+                    "dot_tag": str(d.get("tag") or ""),
                     "detail": ("dot at "
                                f"({float(d.get('x')):.1f}, "
                                f"{float(d.get('y')):.1f}) names the "
@@ -8564,7 +8924,8 @@ def _worldle_capital_dot_attempt_summary(probe, cap_name, target):
     for i, d in enumerate(dots):
         bits = []
         for key in ("label", "group_title", "sibling_text",
-                    "overlay_label", "title", "aria", "id", "cls"):
+                    "overlay_label", "title", "aria", "id", "cls",
+                    "text", "tag"):
             v = d.get(key)
             if str(v or "").strip():
                 bits.append(f"{key}={str(v)[:40]!r}")
@@ -8590,6 +8951,99 @@ def _worldle_capital_dot_attempt_summary(probe, cap_name, target):
                      + ("; ".join(bits) if bits else "no name evidence"))
     return (f"capital={cap_name!r} dots={len(dots)} "
             f"method={method} | " + " | ".join(parts))
+
+
+def _worldle_capital_click_dot_element(page, px, py, cap_name):
+    """Click the NAME-MATCHED dot ELEMENT itself (iter-20,
+    ANALYSIS17 §2f) — not an arbitrary coordinate. The iter-19
+    failure shape was: dot probe found 0 dots, so the pin fell
+    back to coordinate clicks that never registered (markers
+    4->4, "You have 2 guesses remaining"). The 4 dots are the
+    likely clickable targets, so when the picker matches a dot
+    by name, this clicks THAT element: shadow-piercing
+    elementFromPoint at the dot centre (the pinpoint map may
+    live in a shadow tree), walk up to the nearest dot-like
+    element (circle/ellipse/path/rect, or a small element whose
+    class/id names dot/marker/pin/point/capital), then dispatch
+    the full pointer+mouse sequence ON that element with the
+    dot's client coordinates (the map component listens for
+    pointerdown, not click alone) plus a native element.click().
+    Returns {clicked, tag, cls, id, text, top_tag, reason}.
+    Pure click helper — placement is still only believed when
+    the caller sees a marker/store change afterwards."""
+    try:
+        return page.evaluate("""/* worldle-capital-click-dot-element */
+          (pt) => {
+          const hitAt = (x, y) => {
+            let el = document.elementFromPoint(x, y);
+            let depth = 0;
+            while (el && el.shadowRoot && depth < 5) {
+              const inner = el.shadowRoot.elementFromPoint(x, y);
+              if (!inner || inner === el) break;
+              el = inner; depth++;
+            }
+            return el;
+          };
+          const top = hitAt(pt.x, pt.y);
+          if (!top) return {clicked: false, reason: 'no element at point'};
+          const isDotLike = e => {
+            if (!e) return false;
+            const tag = (e.tagName || '').toLowerCase();
+            if (['circle', 'ellipse'].includes(tag)) return true;
+            if (['path', 'rect'].includes(tag)) {
+              try { const r = e.getBoundingClientRect();
+                if (r.width > 0 && r.width <= 48 &&
+                    r.height > 0 && r.height <= 48) return true; }
+              catch (err) {}
+              return false;
+            }
+            const clsId = ((e.getAttribute('class') || '') + ' ' +
+              (e.id || '')).toLowerCase();
+            if (/(dot|marker|pin|point|capital)/.test(clsId)) {
+              try { const r = e.getBoundingClientRect();
+                if (r.width > 0 && r.width <= 48 &&
+                    r.height > 0 && r.height <= 48) return true; }
+              catch (err) {}
+            }
+            return false;
+          };
+          // The topmost element may be a label/child inside the
+          // dot: walk up (light DOM, then shadow host) for the
+          // nearest dot-like element.
+          let el = top, hops = 0;
+          while (el && !isDotLike(el) && hops < 5) {
+            const par = el.parentElement;
+            if (par) { el = par; hops++; continue; }
+            const root = el.getRootNode ? el.getRootNode() : null;
+            if (root && root.host) { el = root.host; hops++; continue; }
+            break;
+          }
+          if (!el || !isDotLike(el)) return {clicked: false,
+            reason: 'no dot-like element at point',
+            top_tag: top.tagName || '',
+            top_cls: String(top.getAttribute('class') || '')
+              .slice(0, 60)};
+          const init = {bubbles: true, cancelable: true, composed: true,
+            clientX: pt.x, clientY: pt.y, view: window,
+            button: 0, buttons: 1};
+          try { el.click(); } catch (err) {}
+          for (const ty of ['pointerdown', 'mousedown', 'pointerup',
+                            'mouseup', 'click']) {
+            try {
+              const Ctor = ty.startsWith('pointer') ? PointerEvent
+                : MouseEvent;
+              el.dispatchEvent(new Ctor(ty, init));
+            } catch (err) {}
+          }
+          return {clicked: true, tag: (el.tagName || '').toLowerCase(),
+            cls: String(el.getAttribute('class') || '').slice(0, 60),
+            id: el.id || '',
+            text: (el.textContent || '').replace(/\\s+/g, ' ')
+              .trim().slice(0, 60),
+            top_tag: top.tagName || ''};
+        }""", {"x": float(px), "y": float(py)}) or {}
+    except Exception as e:
+        return {"clicked": False, "reason": f"evaluate failed: {str(e)[:80]}"}
 
 
 def _s_worldle_play_capital(page, gid, day):
@@ -8876,21 +9330,47 @@ def _s_worldle_play_capital(page, gid, day):
                   f"shadow={before.get('markers_shadow')} "
                   f"shadow_hosts={before.get('shadow_hosts')}) "
                   f"chain={before.get('chain')}")
-        # Click the VERIFIED target with a real press: move to the
-        # point, then down + up with NO mouse movement in between,
-        # so d3-zoom's didZoomMove stays false and its `end`
-        # handler fires onRegionClick(pendingClickRegion). A
-        # synthetic dispatch never generates pointer events, and a
-        # press that drags (however slightly) is treated as a zoom
-        # gesture, not a click.
+        # Iter-20 (ANALYSIS17 §2f): when the picker matched a
+        # dot BY NAME, click the matched dot ELEMENT itself
+        # (_worldle_capital_click_dot_element) — the 4 dots are
+        # the likely clickable targets, and coordinate clicks
+        # never registered (markers 4->4). A successful element
+        # click REPLACES the coordinate press below (a second
+        # press at the same point could move/double-place the
+        # pin); a failed element click falls back to the
+        # coordinate press. Placement is still only believed
+        # when a marker/store change is seen afterwards.
         _landed = bool(before.get("inMap"))
-        try:
-            page.mouse.move(px, py)
-            page.mouse.down()
-            page.mouse.up()
-        except Exception as e:
-            return "partial", [name], \
-                f"pin click failed ({str(e)[:80]}); name played"
+        _dot_el_clicked = False
+        if (_target is not None and _target.get("method") == "dot-name"):
+            _el_click = _worldle_capital_click_dot_element(
+                page, px, py, c.get("name") or "")
+            _dot_el_clicked = bool((_el_click or {}).get("clicked"))
+            _dbg(gid, "worldle capital dot-name element-click: "
+                      f"clicked={_dot_el_clicked} "
+                      f"tag={(_el_click or {}).get('tag')!r} "
+                      f"cls={str((_el_click or {}).get('cls') or '')!r} "
+                      f"id={(_el_click or {}).get('id')!r} "
+                      f"text={str((_el_click or {}).get('text') or '')!r} "
+                      f"top_tag={(_el_click or {}).get('top_tag')!r} "
+                      f"reason={str((_el_click or {}).get('reason') or '')!r} "
+                      f"dot_index={_target.get('dot_index')} "
+                      f"dot_tag={_target.get('dot_tag')!r}")
+        if not _dot_el_clicked:
+            # Click the VERIFIED target with a real press: move to the
+            # point, then down + up with NO mouse movement in between,
+            # so d3-zoom's didZoomMove stays false and its `end`
+            # handler fires onRegionClick(pendingClickRegion). A
+            # synthetic dispatch never generates pointer events, and a
+            # press that drags (however slightly) is treated as a zoom
+            # gesture, not a click.
+            try:
+                page.mouse.move(px, py)
+                page.mouse.down()
+                page.mouse.up()
+            except Exception as e:
+                return "partial", [name], \
+                    f"pin click failed ({str(e)[:80]}); name played"
         _settle(page, base=1200)
         after = _worldle_pin_probe(page, px, py)
         after_markers = int(after.get("markers") or 0)
@@ -11966,7 +12446,7 @@ def _s_worldle_comparison_probe(page, prompt_substrs):
         return {}
 
 
-def _s_worldle_click_comparison_option(page, want):
+def _s_worldle_click_comparison_option(page, want, _exclude=()):
     """Click a comparison option by country name, matching first-line
     innerText, aria-label, data-value, title, a descendant img alt,
     or the sibling label pill (image-card options carry the generic
@@ -11974,11 +12454,35 @@ def _s_worldle_click_comparison_option(page, want):
     label pill below the card). Plain-div pills are a fallback only:
     interactive elements are tried first so a click never lands on a
     non-interactive label when a button with the same name exists.
-    Returns (ok, detail)."""
+    Returns (ok, detail).
+
+    Iter-20 (ANALYSIS17 §2i): the iter-19 click evidently never
+    selected the option (both buttons unselected in frame gp_0360,
+    store 0->0 twice) but the old code clicked the FIRST matching
+    element and reported success with no evidence of which target
+    it hit (card vs button) or whether a selection resulted. This
+    version (a) uses rect-based visibility (offsetParent-based
+    visibility has lied before on this page), (b) enumerates ALL
+    matching candidates with kind (button/card/div), tag, class
+    and centre, (c) clicks ONE candidate — buttons first, then
+    cards, then div pills — and (d) names that target + its
+    centre in the detail, so the caller can log the post-click
+    selected state and, when nothing is selected, retry with
+    the NEXT candidate via `_exclude` (card-vs-button fallback)
+    instead of re-clicking the same dead target. `ok` means a
+    click was dispatched, NOT that a selection resulted — the
+    caller verifies selection with
+    _s_worldle_comparison_selected_state and the store."""
     try:
         hit = page.evaluate("""/* worldle-comparison-click */
-          (want) => {
-          const vis = e => e && e.offsetParent !== null;
+          (args) => {
+          const want = (args && args.want) || args;
+          const exclude = (args && args.exclude) || [];
+          // Iter-20: rect-based visibility (offsetParent lies for
+          // fixed/portal subtrees on this page — see G4/banner).
+          const vis = e => { try { const r = e.getBoundingClientRect();
+            return r.width > 0 && r.height > 0; }
+            catch (err) { return false; } };
           const norm = s => (s||'').toLowerCase().replace(/\\s+/g,' ').trim();
           const normDiac = s => norm(s).normalize('NFD')
             .replace(/[\\u0300-\\u036f]/g, '');
@@ -12038,14 +12542,231 @@ def _s_worldle_click_comparison_option(page, want):
             .filter(vis).filter(e => !e.closest('nav, header, footer'))
             .filter(e => !e.querySelector('button, img, input, select'))
             .filter(e => isLabelText(e.innerText || ''));
-          const hit = interactive.find(match) || divs.find(match);
-          if (!hit) return [false, 'not found'];
-          hit.click();
-          return [true, (hit.innerText || '').trim().slice(0, 80)];
+          // Iter-20 (ANALYSIS17 §2i): BUTTON first, CARD second —
+          // the caller needs to know WHICH target was clicked so
+          // the post-click selected-state log can tell a
+          // button-click that never selected from a card-click
+          // that did. The old code fell through to divs silently.
+          const hitBtn = interactive.find(match);
+          if (hitBtn) { hitBtn.click();
+            return [true, (hitBtn.innerText || '').trim().slice(0, 80),
+                    'button', hitBtn.tagName,
+                    String(hitBtn.getAttribute('class') || '')
+                      .slice(0, 60)]; }
+          const hitCard = divs.find(match);
+          if (hitCard) { hitCard.click();
+            return [true, (hitCard.innerText || '').trim().slice(0, 80),
+                    'card', hitCard.tagName,
+                    String(hitCard.getAttribute('class') || '')
+                      .slice(0, 60)]; }
+          return [false, 'not found', 'none', '', ''];
         }""", str(want))
-        return bool(hit and hit[0]), str((hit or [None, ""])[1] or "")
+        if isinstance(hit, (list, tuple)) and len(hit) >= 3:
+            return (bool(hit[0]), str(hit[1] or ""),
+                    str(hit[2] or "none"))
+        return bool(hit and hit[0]), str((hit or [None, ""])[1] or ""), \
+            "unknown"
     except Exception as e:
-        return False, "exception: " + str(e)[:80]
+        return False, "exception: " + str(e)[:80], "error"
+
+
+def _s_worldle_click_comparison_card(page, want):
+    """Click ONLY the comparison option CARD (non-interactive div
+    card / label pill) for `want` — the iter-20 second attempt when
+    a BUTTON click produced no selected state (ANALYSIS17 §2i:
+    frame gp_0360 shows Kuwait/Qatar shape CARDS + Kuwait/Qatar
+    BUTTONS; the button click evidently never selected, so the card
+    itself is the next target). Returns (ok, detail, via='card').
+    Never clicks a button: cards only."""
+    try:
+        hit = page.evaluate("""/* worldle-comparison-card-click */
+          (want) => {
+          const vis = e => e && e.offsetParent !== null;
+          const norm = s => (s||'').toLowerCase().replace(/\\s+/g,' ').trim();
+          const normDiac = s => norm(s).normalize('NFD')
+            .replace(/[\\u0300-\\u036f]/g, '');
+          const w = normDiac(want);
+          const isLabelText = (t) => {
+            const s = (t || '').trim();
+            if (!s || s.length < 3 || s.length > 40) return false;
+            if (/^\\s*\\d+\\s*\\./.test(s)) return false;
+            if (/(comparison|guess the|which country|surface area|gdp|per capita|vs|versus)/i.test(s)) return false;
+            if (s.split(/\\s+/).length > 4) return false;
+            return /^[A-Za-zÀ-ÿ'’.\\- ]+$/.test(s);
+          };
+          const sibLabel = (e) => {
+            const sibs = [];
+            if (e.nextElementSibling) sibs.push(e.nextElementSibling);
+            if (e.previousElementSibling) sibs.push(e.previousElementSibling);
+            for (const c of sibs) {
+              const t = (c.innerText || '').trim();
+              if (c.querySelector('button, img, input, select')) continue;
+              if (isLabelText(t)) return t;
+            }
+            return '';
+          };
+          const genericNames = new Set(['image quiz item', 'quiz item', 'image', 'option', 'choice', 'card']);
+          const match = e => {
+            const firstLine = (e.innerText || '').split('\\n')
+              .map(s => s.trim()).filter(Boolean)[0] || '';
+            const img = e.querySelector('img');
+            let primary = firstLine || '';
+            if (!primary || genericNames.has(normDiac(primary))) {
+              primary = sibLabel(e) || primary;
+            }
+            const vals = [primary, firstLine, sibLabel(e),
+              e.getAttribute('aria-label') || '',
+              e.getAttribute('data-value') || '',
+              e.getAttribute('title') || '',
+              img ? (img.getAttribute('alt') || '') : ''];
+            return vals.some(v => normDiac(v) === w);
+          };
+          // CARDS ONLY: divs with no interactive descendant, plus
+          // elements carrying an image (shape card) that are not
+          // buttons. Buttons / [role=button] / links are excluded
+          // here — this is the second attempt after a button click
+          // produced no selection.
+          const cards = Array.from(document.querySelectorAll(
+            'div, section, figure, li'))
+            .filter(vis).filter(e => !e.closest('nav, header, footer'))
+            .filter(e => !e.closest('button, a, [role=button]'))
+            .filter(e => e.tagName !== 'BUTTON')
+            .filter(e => (e.querySelector('img') ||
+                          isLabelText(e.innerText || '')));
+          const hit = cards.find(match);
+          if (!hit) return [false, 'no card found', 'card', '', ''];
+          hit.click();
+          return [true, (hit.innerText || '').trim().slice(0, 80),
+                  'card', hit.tagName,
+                  String(hit.getAttribute('class') || '').slice(0, 60)];
+        }""", str(want))
+        if isinstance(hit, (list, tuple)) and len(hit) >= 3:
+            return (bool(hit[0]), str(hit[1] or ""),
+                    str(hit[2] or "card"))
+        return bool(hit and hit[0]), str((hit or [None, ""])[1] or ""), \
+            "card"
+    except Exception as e:
+        return False, "exception: " + str(e)[:80], "error"
+
+
+def _s_worldle_comparison_selected_state(page, want):
+    """Post-click selected-state probe for a comparison widget
+    (iter-20, ANALYSIS17 §2i). Returns {selected, selected_name,
+    selected: [{name, tag, cls, signals}], options: [{name, tag,
+    cls, selected, signals}]}.
+
+    An option counts as SELECTED when any of: aria-selected=true,
+    aria-checked=true, aria-pressed=true, .checked, dataset.selected
+    set, or it (or an ancestor within 2 levels) carries a
+    selected/active/checked/chosen class. The probe is pure (no
+    clicks) and runs IMMEDIATELY after the comparison click, before
+    any submit — so the next artifact shows whether the click
+    selected anything at all, instead of only the store-verify
+    0->0 after the fact. The continuous gameplay recording is the
+    post-click frame; this log line (timestamped) is its marker."""
+    try:
+        _res = page.evaluate("""/* worldle-comparison-selected-state */
+          (want) => {
+          const vis = e => e && e.offsetParent !== null;
+          const norm = s => (s||'').toLowerCase().replace(/\\s+/g,' ').trim();
+          const normDiac = s => norm(s).normalize('NFD')
+            .replace(/[\\u0300-\\u036f]/g, '');
+          const w = normDiac(want);
+          const isLabelText = (t) => {
+            const s = (t || '').trim();
+            if (!s || s.length < 3 || s.length > 40) return false;
+            if (/^\\s*\\d+\\s*\\./.test(s)) return false;
+            if (/(comparison|guess the|which country|surface area|gdp|per capita|vs|versus)/i.test(s)) return false;
+            if (s.split(/\\s+/).length > 4) return false;
+            return /^[A-Za-zÀ-ÿ'’.\\- ]+$/.test(s);
+          };
+          const sibLabel = (e) => {
+            const sibs = [];
+            if (e.nextElementSibling) sibs.push(e.nextElementSibling);
+            if (e.previousElementSibling) sibs.push(e.previousElementSibling);
+            for (const c of sibs) {
+              const t = (c.innerText || '').trim();
+              if (c.querySelector('button, img, input, select')) continue;
+              if (isLabelText(t)) return t;
+            }
+            return '';
+          };
+          const genericNames = new Set(['image quiz item', 'quiz item', 'image', 'option', 'choice', 'card']);
+          const nameOf = e => {
+            const firstLine = (e.innerText || '').split('\\n')
+              .map(s => s.trim()).filter(Boolean)[0] || '';
+            const img = e.querySelector('img');
+            let primary = firstLine || '';
+            if (!primary || genericNames.has(normDiac(primary))) {
+              primary = sibLabel(e) || primary;
+            }
+            for (const v of [primary, firstLine, sibLabel(e),
+                e.getAttribute('aria-label') || '',
+                e.getAttribute('data-value') || '',
+                e.getAttribute('title') || '',
+                img ? (img.getAttribute('alt') || '') : '']) {
+              if (v && v.trim()) return v.trim();
+            }
+            return '';
+          };
+          const SEL_RE = /selected|active|checked|chosen|is-selected|is-active|is-checked/;
+          const signalsOf = e => {
+            const sig = [];
+            if (e.getAttribute('aria-selected') === 'true') sig.push('aria-selected');
+            if (e.getAttribute('aria-checked') === 'true') sig.push('aria-checked');
+            if (e.getAttribute('aria-pressed') === 'true') sig.push('aria-pressed');
+            if (e.checked === true) sig.push('checked');
+            if ((e.dataset || {}).selected) sig.push('data-selected=' + e.dataset.selected);
+            let node = e;
+            for (let d = 0; d < 3 && node; d++) {
+              const cls = String(node.getAttribute('class') || '');
+              if (SEL_RE.test(cls)) { sig.push('class:' + cls.slice(0, 50)); break; }
+              node = node.parentElement;
+            }
+            return sig;
+          };
+          const cands = Array.from(document.querySelectorAll(
+            'button, [role=option], [role=radio], [role=button], a, ' +
+            'label, [data-value], div'))
+            .filter(vis).filter(e => !e.closest('nav, header, footer'))
+            .filter(e => !e.closest('[role=tablist]'))
+            .filter(e => e.getAttribute('role') !== 'tab');
+          const seen = new Set();
+          const options = [];
+          for (const e of cands) {
+            const name = nameOf(e);
+            if (!name || name.length > 80) continue;
+            if (/(comparison|guess the|which country)/i.test(name)) continue;
+            if (/^\\s*\\d+\\s*\\./.test(name)) continue;
+            const key = normDiac(name) + '|' + e.tagName;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const sig = signalsOf(e);
+            options.push({name: name, tag: e.tagName,
+              cls: String(e.getAttribute('class') || '').slice(0, 60),
+              selected: sig.length > 0, signals: sig});
+          }
+          const sel = options.filter(o => o.selected);
+          // NOTE: `selected` (the LIST) is the field the caller
+          // reads; `any_selected` is the bool form. A duplicate
+          // `selected` key here previously made the bool
+          // unreachable — kept as one key each.
+          return {any_selected: sel.length > 0,
+            selected_name: sel.length ? sel[0].name : '',
+            selected_count: sel.length,
+            selected: sel,
+            options: options,
+            wanted: want,
+            wanted_selected: options.some(o =>
+              normDiac(o.name) === w && o.selected)};
+        }""", str(want))
+        # A non-dict return (e.g. a test fake returning True, or
+        # a null) must normalise to {} — the caller does
+        # `(_sel or {}).get(...)`, which raises AttributeError on
+        # a bool. The old `or {}` only covered falsy returns.
+        return _res if isinstance(_res, dict) else {}
+    except Exception:
+        return {}
 
 
 def _s_worldle_comparison_pick(options, values):
@@ -12316,12 +13037,64 @@ def _s_worldle_play_comparison(page, gid, day, mode, ds, prompt_substrs,
             _before = _s_worldle_day_guesses(page, _store_key, ds)
         except Exception:
             _before = None
-    ok, detail = _s_worldle_click_comparison_option(page, best)
+    ok, detail, via = _s_worldle_click_comparison_option(page, best)
     if not ok:
         ok, detail = _s_worldle_click_option_loose(page, best)
+        via = "loose" if ok else "none"
     if not ok:
         return ("partial", None,
                 f"comparison option {best!r} not clickable ({detail})")
+    # Iter-20 (ANALYSIS17 §2i): POST-CLICK selected-state check,
+    # immediately after the click and BEFORE any submit — the
+    # iter-19 artifact had no such evidence (both attempts ended
+    # store-verify 0->0 with no post-click frame/state at all).
+    # The continuous gameplay recording is the post-click frame;
+    # this timestamped log line is its marker. BUTTON first (the
+    # click above); if no selection results, try the option CARD.
+    def _any_selected(s):
+        # Real probe JS returns any_selected (bool) + selected
+        # (list); older fakes return only selected (bool or
+        # list). Prefer the explicit bool when present, else
+        # the truthiness of selected.
+        s = s or {}
+        if "any_selected" in s:
+            return bool(s.get("any_selected"))
+        return bool(s.get("selected"))
+
+    _sel = _s_worldle_comparison_selected_state(page, best)
+    _dbg(gid, f"worldle {mode} comparison post-click selected-state: "
+              f"target={best!r} via={via} clicked={detail!r} "
+              f"selected={_any_selected(_sel)} "
+              f"wanted_selected={bool((_sel or {}).get('wanted_selected'))} "
+              f"selected_name={str((_sel or {}).get('selected_name') or '')!r} "
+              f"selected={(_sel or {}).get('selected') or []} "
+              f"options={(_sel or {}).get('options') or []}")
+    if ok and via == "button" and not _any_selected(_sel):
+        # Button click produced NO selection (the iter-19 shape:
+        # frame gp_0360 shows both buttons unselected after the
+        # click). Try the option CARD itself before submitting.
+        _ok2, _det2, _via2 = _s_worldle_click_comparison_card(page, best)
+        _sel2 = _s_worldle_comparison_selected_state(page, best)
+        _dbg(gid, f"worldle {mode} comparison post-click selected-state "
+                  f"(retry): target={best!r} via={_via2} "
+                  f"clicked={_det2!r} ok={bool(_ok2)} "
+                  f"selected={_any_selected(_sel2)} "
+                  f"wanted_selected={bool((_sel2 or {}).get('wanted_selected'))} "
+                  f"selected_name={str((_sel2 or {}).get('selected_name') or '')!r} "
+                  f"selected={(_sel2 or {}).get('selected') or []} "
+                  f"options={(_sel2 or {}).get('options') or []}")
+        if _ok2:
+            via = f"button(none-selected)+{_via2}"
+            _sel = _sel2
+    if ok and not _any_selected(_sel):
+        # No selection after button (+card) attempts. Do NOT fail
+        # here: some widgets register the pick only on submit /
+        # Enter. Submit once and let the store-verify below (and
+        # the win check) arbitrate — but the no-selection evidence
+        # is now logged, not silent.
+        _dbg(gid, f"worldle {mode} comparison: no selection after "
+                  f"click (via={via}); submitting anyway — "
+                  "store-verify arbitrates")
     _s_worldle_submit_guarded(page, gid, mode, ds)
     _settle(page, base=2000)
     if verify_store and _store_key is not None and _before is not None:
@@ -13055,6 +13828,25 @@ def _s_worldle(page, ans, gid):
                       + " | win_check=" + str(win[2])
                       + " | DOM dump: " + dump[:2000])
         _record(mode, final, guesses, detail, win)
+
+    # Iter-20 (ANALYSIS17 §2h): G4 SUMMARY-TIME re-read. The
+    # reader ran once during the Country round and returned None;
+    # the dropdown may be open (or openable) by the end of the
+    # bonus rounds, and the reader is scan-first (no round switch
+    # risk) + ends with Escape, so a second read here is cleanly
+    # separable from the main flow. It runs ONLY when the first
+    # read failed (live is None) — a successful first read is
+    # never re-run. A successful re-read replaces live/live_ev
+    # so the classification cross-check below uses it.
+    if live is None:
+        _live_retry = _s_worldle_live_round_modes(page, gid)
+        _dbg(gid, "worldle G4 live rounds re-read before summary: "
+                  f"reader returned "
+                  f"{'mapped ' + str(sorted((_live_retry or {}).get('mapped') or [])) if _live_retry else 'None (unreadable)'}")
+        if _live_retry is not None:
+            live_ev = _live_retry
+            live = (live_ev or {}).get("mapped")
+            _unmapped = (live_ev or {}).get("unmapped") or []
 
     # ---- Summary end card (not a puzzle). No chapter segment is
     # recorded for it here: _s_worldle_final_chapters appends the

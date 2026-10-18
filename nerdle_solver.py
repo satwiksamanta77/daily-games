@@ -399,6 +399,19 @@ def _nerdle_own_header_from_probe(probe, mode_id=None):
     for ent in (probe.get("own_headers") or []):
         if not isinstance(ent, dict):
             continue
+        # Iter-20 (P0): a GENUINE popup trip (dialog/modal/popup/
+        # about/overlay) is never the game header — drop the
+        # entry even when it carries a logo line (a win popup can
+        # echo the header). An 'aria-hidden' trip is NOT a popup:
+        # the game wrapper itself carries aria-hidden while a win
+        # popup is open, so an aria-hidden-tripped header still
+        # counts (untripped preferred, tripped fallback, below).
+        # A missing trip (legacy probe) is collected — collection
+        # fails OPEN; the number gate still fails closed on a
+        # missing header.
+        _trip = str(ent.get("popup_trip") or "").strip().lower()
+        if _trip in ("dialog", "modal", "popup", "about", "overlay"):
+            continue
         text = str(ent.get("text") or "")
         # Iter-19 (P2, minibi header scope): the site spells the
         # mode "mini-bi" (its About popup reads 'About mini-bi
@@ -427,22 +440,48 @@ def _nerdle_own_header_from_probe(probe, mode_id=None):
                         "prefix": prefix,
                         "tag": str(ent.get("tag") or ""),
                         "cls": str(ent.get("cls") or ""),
-                        "text": m.group(0).strip()})
+                        "text": m.group(0).strip(),
+                        # Iter-20 (P0): the probe records which
+                        # popup selector (if any) trips on this
+                        # entry ('aria-hidden' when the win popup
+                        # is open and the wrapper is hidden).
+                        # Genuine-popup trips are DROPPED below
+                        # (a popup copy of a logo line is never
+                        # the game header); an 'aria-hidden' trip
+                        # still counts — the game wrapper itself
+                        # carries aria-hidden while a win popup
+                        # is open — with untripped entries
+                        # preferred by _pick.
+                        "trip": str(ent.get("popup_trip") or "")})
     if not own:
         return None, None
+    # Prefer an UNTRIPPED match; fall back to a tripped one only
+    # when no untripped match exists (iter-20: the game header
+    # itself trips 'aria-hidden' while a win popup is open).
+    def _pick(pred):
+        for ent in own:
+            if pred(ent) and not ent.get("trip"):
+                return ent
+        for ent in own:
+            if pred(ent):
+                return ent
+        return None
     if want:
         # The mode's own header: prefix == mode, or (classic only)
         # no prefix at all. A different mode's prefix is shared
         # chrome, never the mode's own header.
-        for ent in own:
-            if ent["prefix"] == want:
-                return ent["number"], ent
+        _hit = _pick(lambda e: e["prefix"] == want)
+        if _hit is not None:
+            return _hit["number"], _hit
         if want == "classic":
-            for ent in own:
-                if not ent["prefix"]:
-                    return ent["number"], ent
+            _hit = _pick(lambda e: not e["prefix"])
+            if _hit is not None:
+                return _hit["number"], _hit
         return None, None
-    return own[0]["number"], own[0]
+    _hit = _pick(lambda e: True)
+    if _hit is not None:
+        return _hit["number"], _hit
+    return None, None
 
 
 def _nerdle_header_number_from_probe(probe, mode_id=None):
@@ -478,7 +517,8 @@ def _nerdle_header_number_from_probe(probe, mode_id=None):
         n, ev = _nerdle_own_header_from_probe(probe, mode_id)
         if n is not None and ev is not None:
             raw = (f"tag={ev['tag']} class={ev['cls']} "
-                   f"text={ev['text']!r}")
+                   f"text={ev['text']!r} "
+                   f"popup_trip={ev.get('trip') or 'none'}")
             return n, "own-header", raw
         return None, "own-header-not-found", header_text
 
@@ -757,6 +797,7 @@ _DEBUG_LOG = None   # Path to videos/nerdle/debug_<date>.log
 _REC_T0 = None      # time.time() when the recording/mode loop started
 _FIRST_TYPE_T = None  # seconds from _REC_T0 to the first successful typing
 _TYPE_PRIMED = False  # type_guess first-attempt priming, reset per mode by play_mode (iter-18)
+_PRE_GUESS_DISMISSED = False  # play_mode's pre-guess cookies/modals stage ran for this mode (iter-20)
 SERVED = {}         # mode_id -> served-date evidence (see SERVED_JS)
 PLAYED = {}         # mode_id -> equations ACTUALLY typed/submitted on site
 
@@ -850,22 +891,50 @@ SERVED_JS = """
   // strategies (header-element, hash-element, data-attribute, url,
   // json-blob-or-body) — first plausible number wins — and
   // logs which strategy matched + the raw header text.
-  // Iter-19 (P2, minibi header scope): the header probe must read
-  // the GAME header element, not popup/about text — the minibi
-  // probe returned header_text 'About mini-bi nerdle … | You won!'
-  // because an About/win-popup title element matched the loose
-  // header/title selectors. Exclude any element inside a
-  // dialog/modal/popup/about/overlay container (closest() covers
-  // the element itself), and include the site's own nav bar
-  // (.main-nav) explicitly.
-  const _inPopup = (el) => { try {
-    return !!el.closest('[role="dialog"], [class*="modal" i], ' +
-      '[class*="popup" i], [class*="about" i], [class*="overlay" i], ' +
-      '[aria-hidden="true"]'); } catch (e) { return false; } };
-  const headerEls = Array.from(document.querySelectorAll(
+  // Iter-20 (P0, ANALYSIS17 §2b/§6.1): the iter-19 `_inPopup`
+  // blanket filter REGRESSED the header probe 8/9 -> 0/9: it
+  // skipped every element whose closest() matched dialog/modal/
+  // popup/about/overlay/aria-hidden — and while a win popup is
+  // open the game wrapper itself carries aria-hidden="true"
+  // (standard modal pattern: background content hidden from
+  // assistive tech), so the GAME HEADER was excluded with the
+  // popup. The filter never logged which selector tripped, so
+  // the artifact could not name the cause. Now:
+  // - `_popupTrip(el, includeAriaHidden)` returns the FIRST
+  //   matching selector NAME ('dialog'/'modal'/'popup'/'about'/
+  //   'overlay'/'aria-hidden') or null — the probe logs which
+  //   selector trips instead of a boolean.
+  // - The OWN-HEADER collection applies NO popup filter: its
+  //   pattern (`nerdle\s*\.?\s*#\d+`) is strict — an About/win
+  //   popup title ('About mini-bi nerdle', 'You won!') carries
+  //   no #<digits> logo line, so it cannot pollute own_headers
+  //   — and each entry records its popup_trip so the Python
+  //   side prefers untripped entries while still accepting a
+  //   tripped game header when it is the only match.
+  // - The LOOSE header/title selectors (header_text) and the
+  //   hash_texts fallback keep the strict filter (dialog/modal/
+  //   popup/about/overlay) — that is where About pollution
+  //   actually happened for minibi — but WITHOUT aria-hidden:
+  //   aria-hidden on a wrapper is not a popup.
+  const _POPUP_SELECTORS = [
+    ['dialog', '[role="dialog"]'],
+    ['modal', '[class*="modal" i]'],
+    ['popup', '[class*="popup" i]'],
+    ['about', '[class*="about" i]'],
+    ['overlay', '[class*="overlay" i]'],
+    ['aria-hidden', '[aria-hidden="true"]']];
+  const _popupTrip = (el, includeAriaHidden) => { try {
+    for (const pair of _POPUP_SELECTORS) {
+      if (pair[0] === 'aria-hidden' && !includeAriaHidden) continue;
+      if (el.closest(pair[1])) return pair[0];
+    }
+    return null; } catch (e) { return null; } };
+  const _inPopupStrict = (el) => _popupTrip(el, false) !== null;
+  const _headerCandidates = Array.from(document.querySelectorAll(
     'header, h1, h2, [class*=header i], [id*=header i], ' +
     '[class*=title i], [id*=title i], [class*=main-nav i]'))
-    .filter(e => e && e.offsetParent !== null && !_inPopup(e));
+    .filter(e => e && e.offsetParent !== null);
+  const headerEls = _headerCandidates.filter(e => !_inPopupStrict(e));
   const header_text = headerEls
     .map(e => (e.innerText || '').trim()).filter(Boolean).join(' | ')
     .slice(0, 2000);
@@ -892,7 +961,15 @@ SERVED_JS = """
   const probe_diag = {elements_total: 0, elements_visible_rect: 0,
     elements_offsetparent_visible: 0, header_els_count: headerEls.length,
     logo_selector_matched: false, own_headers_raw_count: 0,
-    hash_line_samples: [], nerdle_text_samples: []};
+    hash_line_samples: [], nerdle_text_samples: [],
+    // Iter-20: which popup selector trips, counted over the
+    // scanned elements; own_headers entries tripped by any
+    // selector; header candidates the OLD (aria-hidden) filter
+    // would have dropped but the strict filter keeps.
+    popup_trips: {}, popup_tripped_own_headers: 0,
+    header_els_aria_hidden_skipped: _headerCandidates.filter(
+      e => _popupTrip(e, false) === null &&
+        _popupTrip(e, true) === 'aria-hidden').length};
   const own_headers = [];
   const _all = Array.from(document.querySelectorAll('body *'));
   probe_diag.elements_total = _all.length;
@@ -921,12 +998,17 @@ SERVED_JS = """
            text: t.split('\\n').join(' ').replace(/  +/g, ' ').trim().slice(0, 120)});
       }
     }
-    // Iter-19 (P2, minibi header scope): skip popup/about
-    // elements for the OWN-HEADER collection (the diagnostics
-    // above stay unfiltered, so a future empty capture is still
-    // diagnosable). The game header is never inside a dialog /
-    // modal / popup / about container; the About/win popup is.
-    if (_inPopup(e)) continue;
+    // Iter-20 (P0): NO popup skip for the OWN-HEADER collection
+    // (see _popupTrip comment above) — record the trip instead,
+    // so the artifact shows which selector trips on the header
+    // and the Python side can prefer untripped entries. The
+    // diagnostics above stay unfiltered, so a future empty
+    // capture is still diagnosable.
+    const _trip = _popupTrip(e, true);
+    if (_trip) {
+      probe_diag.popup_trips[_trip] =
+        (probe_diag.popup_trips[_trip] || 0) + 1;
+    }
     if (!t || t.length > 300) continue;
     // Iter-18 (ANALYSIS15 §1): the logo spans split `nerdle .` and
     // `#1733` onto SEPARATE innerText lines, so the per-line test
@@ -943,9 +1025,13 @@ SERVED_JS = """
       // `nerdle` and matched NOTHING on the nav logo line.
       /([a-z]+\\s+)?nerdle\\s*\\.?\\s*#\\s*\\d{1,6}/i.test(l));
     const joinedHit = /([a-z]+\\s+)?nerdle\\s*\\.?\\s*#\\s*\\d{1,6}/i.test(joined);
-    if ((lines.length || joinedHit) && own_headers.length < 40) own_headers.push(
-      {tag: e.tagName || '', cls: String(e.className || ''),
-       text: joinedHit ? joined : lines.join('\\n')});
+    if ((lines.length || joinedHit) && own_headers.length < 40) {
+      own_headers.push(
+        {tag: e.tagName || '', cls: String(e.className || ''),
+         text: joinedHit ? joined : lines.join('\\n'),
+         popup_trip: _trip || null});
+      if (_trip) probe_diag.popup_tripped_own_headers++;
+    }
   }
   own_headers.sort((a, b) => a.text.length - b.text.length);
   probe_diag.logo_selector_matched = own_headers.length > 0;
@@ -958,9 +1044,11 @@ SERVED_JS = """
     try { const _r = e.getBoundingClientRect();
       visRect = _r.width > 0 && _r.height > 0; } catch (_err) {}
     if (!visRect) continue;
-    // Iter-19 (P2): same popup/about scoping as the header probe —
-    // a win-popup '#<digits>' must never feed the legacy strategies.
-    if (_inPopup(e)) continue;
+    // Iter-20 (P0): strict popup scoping for the hash_texts
+    // fallback (dialog/modal/popup/about/overlay) — a win-popup
+    // '#<digits>' must never feed the legacy strategies — but
+    // WITHOUT aria-hidden (see _popupTrip comment above).
+    if (_inPopupStrict(e)) continue;
     const t = (e.innerText || e.textContent || '').trim();
     if (t && /#\\s*\\d/.test(t) && t.length <= 200) hash_texts.push(t);
   }
@@ -1004,6 +1092,22 @@ def _solutions_played_cover(played, solutions):
         if not any(_row_matches_equation(p, s) for p in played):
             return False
     return True
+
+
+def _unplayed_pool(pool, played):
+    """Site solutions not yet played (iter-20, P0).
+
+    Pure. A pool solution counts as played when any played row
+    matches it via _row_matches_equation (so the DOM-normalized
+    plain-2 form of a superscript equation still counts), NOT
+    by raw string equality — typed_guesses can hold a read-back
+    / seeded form that differs textually from the pool entry.
+    Used by the guess loop's pool-drain backstop: a multi-board
+    mode must never be abandoned with a site solution unplayed.
+    """
+    played = [str(p) for p in (played or [])]
+    return [s for s in (pool or [])
+            if not any(_row_matches_equation(p, s) for p in played)]
 
 
 async def _check_win_verified(page, cols, boards_n, state, played,
@@ -2342,8 +2446,9 @@ async def play_mode(page, mode, script_dir, official=None):
     _nlog(f"=== {mode['name']} ({mode['url']}) ===")
     # Iter-18: reset the type_guess first-attempt priming (popup
     # dismiss + focus) for this mode's page.
-    global _TYPE_PRIMED
+    global _TYPE_PRIMED, _PRE_GUESS_DISMISSED
     _TYPE_PRIMED = False
+    _PRE_GUESS_DISMISSED = False
     eqs = list((official or {}).get(mode["id"]) or [])
     official_eqs = list(eqs)  # target-date official list, BEFORE site merge
     cols = mode["len"]
@@ -2413,13 +2518,19 @@ async def play_mode(page, mode, script_dir, official=None):
         # consecutive sweeps report no action (sweep reports acted=True
         # whenever it dismisses anything, including a splash), waiting
         # 1s only after a sweep that acted.
+        # Iter-20 (P2, leading-wait trim): ONE idle sweep suffices —
+        # a delayed splash/banner is still caught by the escape
+        # loop, the cookies/modals stage, and type_guess's priming
+        # sweep immediately before the first keystroke. The second
+        # consecutive idle sweep was pure re-scan (a full cookie
+        # scan per sweep when ad iframes exist).
         _idle_sweeps = 0
         for _ in range(4):
             _acted = await sweep_popups(page, tag=f":{mode['id']}")
             _stage("sweep")
             if not _acted:
                 _idle_sweeps += 1
-                if _idle_sweeps >= 2:
+                if _idle_sweeps >= 1:
                     break
             else:
                 _idle_sweeps = 0
@@ -2449,6 +2560,9 @@ async def play_mode(page, mode, script_dir, official=None):
         _modals_acted = await dismiss_modals(page, has_grid=True)
         if _cookies_acted or _modals_acted:
             await accept_cookies(page)
+        # Iter-20 (P2): the pre-guess dismissal ran — the loop's
+        # first-iteration sweep may skip (see below).
+        _PRE_GUESS_DISMISSED = True
         _stage("cookies/modals")
         state = await read_state(page, cols, tries=6)
         _stage(f"read_state state={'found' if state else 'empty'}")
@@ -2615,28 +2729,89 @@ async def play_mode(page, mode, script_dir, official=None):
                         list(typed_guesses) + list(played_here), pool):
                     signal = "won"
                     break
-                await sweep_popups(page, tag=f":{mode['id']}")
+                # Iter-20 (P2, leading-wait trim): the loop's own
+                # first-iteration sweep is redundant — play_mode's
+                # pre-guess stage JUST swept + dismissed cookies /
+                # modals, and type_guess's priming re-sweeps
+                # immediately before the first keystroke (after the
+                # solver POST, when a delayed banner can actually
+                # appear). Skip it on iteration 0 only; later
+                # iterations still sweep (popups can appear between
+                # guesses). The skip is stage-logged so the next
+                # artifact proves the trim.
+                if _it == 0 and _PRE_GUESS_DISMISSED:
+                    _nlog(f"[{mode['id']}] loop iter0 sweep skipped "
+                          f"(pre-guess dismissal ran; priming re-sweeps "
+                          f"before typing)")
+                else:
+                    await sweep_popups(page, tag=f":{mode['id']}")
                 unsolved = [i for i, g in enumerate(state) if not grid_solved(g)]
                 if not unsolved:
                     if len(state) >= boards_n:
                         signal = "won"
                         break
                     # more boards may still appear (speed board2)
-                    await page.wait_for_timeout(2500)
-                    fresh = await read_state(page, cols, tries=3)
-                    if fresh and len(fresh) > len(state):
-                        for b in range(len(state), len(fresh)):
-                            usable0[b] = len(fresh[b]["rows"])
-                            hists[b] = []
-                        state = fresh
-                        prev_counts = [eval_count(g) for g in state]
+                    # Iter-20 (P0, ANALYSIS17 §2e/§6.3): iter-19
+                    # speed ABANDONED the mode here — one 2.5s wait
+                    # + one re-read, then a SILENT break, with the
+                    # 2nd site solution ('2+10-6=6') unplayed and
+                    # rows remaining. A single transient read (the
+                    # solved board re-rendering, the 2nd board not
+                    # yet visible) must never end the mode. Retry
+                    # the fresh read up to 3 times, and log the
+                    # exit with the pool state when giving up.
+                    _grew = False
+                    for _retry in range(3):
+                        await page.wait_for_timeout(2500)
+                        _fresh = await read_state(page, cols, tries=3)
+                        if _fresh and len(_fresh) > len(state):
+                            for b in range(len(state), len(_fresh)):
+                                usable0[b] = len(_fresh[b]["rows"])
+                                hists[b] = []
+                            state = _fresh
+                            prev_counts = [eval_count(g) for g in state]
+                            _grew = True
+                            break
+                    if _grew:
                         continue
+                    print(f"[{mode['id']}] no unsolved grid and no "
+                          f"new board after 3 re-reads "
+                          f"(grids={len(state)} boards={boards_n} "
+                          f"pool_unplayed="
+                          f"{_unplayed_pool(pool, list(typed_guesses) + list(played_here))}); "
+                          f"stopping (2nd board never appeared)")
                     break
                 first_open = unsolved[0]
                 rows_left = min(
                     usable0.get(i, len(state[i]["rows"])) - eval_count(state[i])
                     for i in unsolved)
                 if rows_left <= 0:
+                    # Iter-20 (P0): a transient misread (a row
+                    # flashing evaluated mid-animation, a grid
+                    # re-rendering) can report zero rows left.
+                    # Re-read once before abandoning the mode with
+                    # pool solutions unplayed, and log the exit.
+                    _reread = await read_state(page, cols, tries=2)
+                    _rows_after = None
+                    if _reread:
+                        _uns = [i for i, g in enumerate(_reread)
+                                if not grid_solved(g)]
+                        if _uns:
+                            _rows_after = min(
+                                usable0.get(i, len(_reread[i]["rows"]))
+                                - eval_count(_reread[i]) for i in _uns)
+                    if _rows_after is not None and _rows_after > 0:
+                        print(f"[{mode['id']}] rows_left was 0 but "
+                              f"re-read shows {_rows_after} rows — "
+                              f"transient misread, continuing")
+                        state = _reread
+                        prev_counts = [eval_count(g) for g in state]
+                        continue
+                    print(f"[{mode['id']}] rows_left=0 on re-read "
+                          f"(grids={len(state)} "
+                          f"pool_unplayed="
+                          f"{_unplayed_pool(pool, list(typed_guesses) + list(played_here))}); "
+                          f"stopping")
                     break
                 need = len([e for e in eqs if e not in typed_guesses])
                 nxt = None
@@ -2686,8 +2861,53 @@ async def play_mode(page, mode, script_dir, official=None):
                     if not typed_guesses:
                         nxt = FILLERS.get(cols, "12+34=46")
                     else:
-                        print(f"[{mode['id']}] no next guess available, stopping")
-                        break
+                        # Iter-20 (P0, pool-drain backstop): never
+                        # abandon a multi-board mode with a site
+                        # solution unplayed — play the next
+                        # unplayed pool solution instead of
+                        # breaking. (Covers the iter-19 speed
+                        # shape: the loop exited with
+                        # '2+10-6=6' unplayed.) Coverage uses
+                        # _row_matches_equation, not raw string
+                        # equality, so a DOM-normalized read-back
+                        # still counts as played.
+                        _unplayed = _unplayed_pool(
+                            pool, list(typed_guesses) + list(played_here))
+                        if boards_n > 1 and _unplayed:
+                            nxt = _unplayed[0]
+                            print(f"[{mode['id']}] solver + official "
+                                  f"exhausted with site solution "
+                                  f"{nxt!r} unplayed — playing it "
+                                  f"(pool-drain backstop)")
+                        else:
+                            print(f"[{mode['id']}] no next guess available, stopping")
+                            break
+                # Iter-20 (P0, ANALYSIS17 §2e/§6.3): play EACH
+                # site solution. The pool-drain backstop above
+                # only fires when solver + official are EXHAUSTED
+                # — while the solver keeps returning fresh entropy
+                # probes, the loop could burn every row on probes
+                # with a known site solution still unplayed (the
+                # iter-19 shape: probe + 1st site solution, 2nd
+                # never played, per-board verifier correctly
+                # refusing). So: once min_probes probes are typed
+                # or a board is already solved, an unplayed SITE
+                # solution beats another solver probe. This
+                # override only ever replaces a solver probe —
+                # never an official/endgame pick (nxt in pool) —
+                # and never fires when the pool is drained.
+                if (boards_n > 1 and nxt is not None
+                        and nxt not in pool):
+                    _unplayed2 = _unplayed_pool(
+                        pool, list(typed_guesses) + list(played_here))
+                    if (_unplayed2 and (len(typed_guesses) >= min_probes
+                                        or any(grid_solved(g)
+                                               for g in state))):
+                        _nlog(f"[{mode['id']}] site-solution override: "
+                              f"solver probe {nxt!r} deferred, "
+                              f"playing unplayed site solution "
+                              f"{_unplayed2[0]!r}")
+                        nxt = _unplayed2[0]
                 prev = list(prev_counts)
                 # Iter-17 (P1): stage-log the type path — the 22s
                 # silence in iter-16 sits between `solver_suggest
@@ -2703,6 +2923,28 @@ async def play_mode(page, mode, script_dir, official=None):
                 if ok:
                     _mark_first_type()
                 if not ok:
+                    # Iter-20 (P0): ONE bounded re-entry when the
+                    # FAILED guess is a SITE solution — do not
+                    # strand a known solution on a single failed
+                    # entry. type_guess's 3 internal attempts never
+                    # sweep the splash, so a popup that appeared
+                    # mid-guess (e.g. during the solver POST)
+                    # blocks every internal attempt identically;
+                    # this retry sweeps first, then re-enters.
+                    # Bounded: one re-entry, site solutions only.
+                    if nxt in pool:
+                        await sweep_popups(page, tag=f":{mode['id']}")
+                        _nlog(f"[{mode['id']}] site-solution retry "
+                              f"for {nxt!r} (sweep + re-enter once)")
+                        _t_type = time.time()
+                        prev = list(prev_counts)
+                        state, counts, ok = await type_guess(
+                            page, nxt, cols, prev)
+                        _nlog(f"[{mode['id']}] site-solution retry "
+                              f"done ok={ok} "
+                              f"+{time.time() - _t_type:.1f}s")
+                        if ok:
+                            _mark_first_type()
                     # Iter-17 (P0): do NOT abandon the mode on an
                     # ENTRY failure while rows remain — retry the
                     # ENTRY (clear + re-enter via the full
@@ -2714,7 +2956,10 @@ async def play_mode(page, mode, script_dir, official=None):
                     # 2 outer re-entries, superscript equations
                     # only (plain equations have no entry ladder
                     # to retry — their failure is a submit failure).
-                    if any(c in nxt for c in "²³") and rows_left >= 1:
+                    # (Iter-20: re-guarded on `not ok` so a ² site
+                    # solution rescued by the retry above is not
+                    # re-entered a second time.)
+                    if not ok and any(c in nxt for c in "²³") and rows_left >= 1:
                         for _re in range(2):
                             await sweep_popups(page, tag=f":{mode['id']}")
                             _nlog(f"[{mode['id']}] entry retry "
@@ -2863,6 +3108,11 @@ async def play_mode(page, mode, script_dir, official=None):
               f"header_els={_diag.get('header_els_count')} "
               f"logo_matched={_diag.get('logo_selector_matched')} "
               f"own_raw_count={_diag.get('own_headers_raw_count')} "
+              f"popup_trips={_diag.get('popup_trips')} "
+              f"popup_tripped_own="
+              f"{_diag.get('popup_tripped_own_headers')} "
+              f"aria_hidden_only_header_els="
+              f"{_diag.get('header_els_aria_hidden_skipped')} "
               f"hash_lines={str(_diag.get('hash_line_samples') or [])[:800]} "
               f"nerdle_samples="
               f"{str(_diag.get('nerdle_text_samples') or [])[:800]}")
