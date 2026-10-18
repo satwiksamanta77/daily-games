@@ -311,32 +311,53 @@ class TestCapitalPickPinTarget(unittest.TestCase):
         self.assertEqual((got["x"], got["y"]), (1085.0, 285.0))
 
     def test_ambiguous_dot_names_returns_none(self):
+        # Iter-22: ambiguity is DISTINCT values naming the
+        # capital (two contained matches -> None). Identical
+        # values on two dots are GROUP evidence, dropped by the
+        # shared-source rule, and nearest-dot then picks.
         dots = [dict(d) for d in self.DOTS]
-        dots[0] = dict(dots[0], data={"city": "Kuwait City"})
-        dots[1] = dict(dots[1], data={"city": "Kuwait City"})
+        dots[0] = dict(dots[0],
+                       data={"city": "Greater Kuwait City"})
+        dots[1] = dict(dots[1],
+                       data={"city": "Kuwait City metro"})
         self.assertIsNone(R._worldle_capital_pick_pin_target(
             self._probe(dots=dots), self.FIT, "Kuwait City"))
 
     def test_bbox_fit_in_fill_keeps_fit_point(self):
+        # Iter-22: with NO dot near the fit point, the in-fill
+        # branch still returns the fit point (dots moved far
+        # away so nearest-dot does not fire).
+        far = [dict(d, x=d["x"] + 500.0, y=d["y"] + 500.0)
+               for d in self.DOTS]
         got = R._worldle_capital_pick_pin_target(
-            self._probe(in_fill=True), self.FIT, "Kuwait City")
+            self._probe(dots=far, in_fill=True), self.FIT,
+            "Kuwait City")
         self.assertEqual(got["method"], "bbox-fit-in-fill")
         self.assertEqual((got["x"], got["y"]), self.FIT)
 
-    def test_in_fill_search_beats_nearest_dot(self):
-        # Fit point is in a hole; the nearest dot (centre-east,
-        # ~21px away) must NOT be picked — the nearest IN-FILL
-        # point is the target, and the method says so.
+    def test_nearest_dot_beats_in_fill_search(self):
+        # Iter-22 SUPERSEDES the iter-16/17 "never nearest-dot"
+        # rule (ANALYSIS19 §2): the nearest dot (~21px away) IS
+        # the target — an in-fill point not on a dot does not
+        # register on this widget.
         got = R._worldle_capital_pick_pin_target(
             self._probe(corrected={"x": 1060.0, "y": 410.0,
                                    "dist": 17.9}),
             self.FIT, "Kuwait City")
-        self.assertEqual(got["method"], "in-fill-search")
-        self.assertEqual((got["x"], got["y"]), (1060.0, 410.0))
+        self.assertEqual(got["method"], "nearest-dot")
+        self.assertEqual((got["x"], got["y"]), (1090.0, 435.0))
 
     def test_no_verified_target_returns_none(self):
+        # Iter-22: no dot near the fit point + no in-fill /
+        # corrected point -> None.
+        far = [dict(d, x=d["x"] + 500.0, y=d["y"] + 500.0)
+               for d in self.DOTS]
         self.assertIsNone(R._worldle_capital_pick_pin_target(
-            self._probe(), self.FIT, "Kuwait City"))
+            self._probe(dots=far), self.FIT, "Kuwait City"))
+        self.assertIsNone(R._worldle_capital_pick_pin_target(
+            {}, self.FIT, "Kuwait City"))
+        self.assertIsNone(R._worldle_capital_pick_pin_target(
+            {"found": False}, self.FIT, "Kuwait City"))
         self.assertIsNone(R._worldle_capital_pick_pin_target(
             {}, self.FIT, "Kuwait City"))
         self.assertIsNone(R._worldle_capital_pick_pin_target(

@@ -362,8 +362,14 @@ class TestReadbackPlayed(unittest.TestCase):
         self.assertIn("_readback_played(state, prev)", src)
         self.assertIn("READ-BACK MISMATCH", src)
         self.assertIn("read-back=", src)
-        # Suggestion stays in typed_guesses; played_here takes read-back.
-        self.assertIn("played_here.append(_readback)", src)
+        # Suggestion stays in typed_guesses; played_here takes the
+        # read-back-derived form (iter-22, P2: the GAME-EVALUATED
+        # form via _game_evaluated_form — a DOM-flattened
+        # read-back records as the game-evaluated equation, with
+        # the flattened form kept only as a footnote; a true
+        # mismatch still records the board row).
+        self.assertIn("played_here.append(_record)", src)
+        self.assertIn("_game_evaluated_form(_readback, nxt)", src)
 
 
 # ---------------------------------------------------------------- fix 4

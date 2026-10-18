@@ -595,6 +595,36 @@ def _nerdle_speed_matches(site_solutions, official_eqs, boards_n=2):
                    f"API (matched={matched}); both required")
 
 
+def _speed_site_rules_detail(site_solutions, official_eqs, matches,
+                             base_detail):
+    """Speed board-1 site-rules detail (iter-22, P1). Pure.
+
+    Returns (detail, board1_site_rules_bool). When the site served
+    a board-1 solution the API list does not contain (iter-21:
+    site '50-6*7=8' vs API '711/9=79', which corresponds to NO
+    served board), board 1 is site-rules: the strict both-match
+    comparison (`matches`, from _nerdle_speed_matches) is kept
+    for evidence but the detail states plainly that an API match
+    is NOT required for speed board 1 — speed is a site-rules
+    mode like micro/minibi/quad/instant, and the mismatch never
+    gates. When every served solution is in the API list, the
+    base detail stands unchanged with board1_site_rules False.
+    """
+    site = [str(e) for e in (site_solutions or [])]
+    official = [str(e) for e in (official_eqs or [])]
+    unmatched_site = [e for e in site if e not in official]
+    if not unmatched_site:
+        return base_detail, False
+    unmatched_api = [e for e in official if e not in site]
+    return (f"site-rules board-1: served-but-not-in-API="
+            f"{unmatched_site} (the site's own board-1 "
+            f"solution(s); API match NOT required); "
+            f"in-API-but-not-served={unmatched_api} (no "
+            f"served board corresponds); strict "
+            f"both-match={matches} recorded for evidence "
+            f"only, never gating ({base_detail})"), True
+
+
 def classic_puzzle_number(d):
     return (d.date() - NERDLE_START.date()).days + 1
 
@@ -801,6 +831,11 @@ _TYPE_PRIMED = False  # type_guess first-attempt priming, reset per mode by play
 _PRE_GUESS_DISMISSED = False  # play_mode's pre-guess cookies/modals stage ran for this mode (iter-20)
 SERVED = {}         # mode_id -> served-date evidence (see SERVED_JS)
 PLAYED = {}         # mode_id -> equations ACTUALLY typed/submitted on site
+PLAYED_NOTES = {}   # mode_id -> ["<game-evaluated> <= flattened DOM <read-back>"]
+                    # footnotes for rows recorded in game-evaluated
+                    # form (iter-22, P2): the DOM-flattened read-back
+                    # is kept ONLY as a diagnostic footnote, never as
+                    # the recorded equation.
 
 
 def equations_report(played_by_mode, official_by_mode):
@@ -1147,6 +1182,76 @@ def _mode_won_by_state(state, boards_n, mode_id=None):
     return False
 
 
+def _speed_grant_ready(green_rows, covered, all_solved,
+                       advance_present):
+    """The speed grant predicate (iter-22, P0, ANALYSIS19 §3). Pure.
+
+    The site's speed flow grants the win with EXACTLY ONE
+    green-able row: the pre-filled starter row ("2+10-6=6") arrives
+    SUBMITTED as a guess with mixed feedback, never all-green, so
+    demanding 2 green rows (the iter-21 gate) is unreachable. The
+    grant signal the site actually emits is: a single green
+    SOLUTION row + seeded coverage (every site solution accounted
+    for in `played`, including the seeded starter history) + every
+    grid solved + the game offering its advance control (the win
+    popup's "Next up ..." button — clicking it navigates to the
+    hub, which is why the advance must never be re-read as
+    verdict evidence). All four conjuncts are required; the
+    advance signal alone never wins.
+    """
+    return bool(green_rows >= 1 and covered and all_solved
+                and advance_present)
+
+
+async def _speed_advance_present(page):
+    """Probe the win popup's Next/advance button (iter-22, P0).
+
+    Read-only: evaluates SPEED_ADVANCE_JS (popup + Next label),
+    never clicks. Returns (popup_bool, next_label_or_None);
+    (False, None) on probe failure or a non-dict result. Never
+    raises.
+    """
+    try:
+        _found = await page.evaluate(SPEED_ADVANCE_JS)
+    except Exception:
+        return False, None
+    if not isinstance(_found, dict):
+        return False, None
+    return bool(_found.get("popup")), _found.get("next_label")
+
+
+async def _speed_grant_verified(page, cols, state, played, solutions):
+    """Speed win via the game's own grant signal (iter-22, P0).
+
+    True iff _speed_grant_ready on the CURRENT board state plus
+    the probed advance signal. Never clicks: the verdict is
+    computed BEFORE any Next-click. Settle race: the win popup
+    can animate in a beat AFTER the final guess settles (iter-21:
+    the verdict's popup probe read False, then the advance probe
+    moments later found the popup + 'Next up ...'), so when the
+    board is otherwise grant-ready but no advance is visible yet,
+    wait once (1500 ms, matching _speed_try_advance's post-click
+    settle) and re-probe before deciding. The settle fires ONLY
+    in the grant-ready state — never on ordinary iterations, and
+    never as a pacing change to typing. Never raises.
+    """
+    _green = _green_row_count(state)
+    _covered = (not solutions
+                or _solutions_played_cover(played, solutions))
+    _all_solved = bool(state) and all(grid_solved(g) for g in state)
+    if not (_green >= 1 and _covered and _all_solved):
+        return False
+    _popup, _next = await _speed_advance_present(page)
+    if _popup and _next:
+        return True
+    try:
+        await page.wait_for_timeout(1500)
+    except Exception:
+        pass
+    _popup, _next = await _speed_advance_present(page)
+    return bool(_popup and _next)
+
+
 async def _check_win_verified(page, cols, boards_n, state, played,
                               solutions, mode_id=None):
     """Page-win check with multi-board verification (iter-19, P2,
@@ -1217,6 +1322,29 @@ async def _check_win_verified(page, cols, boards_n, state, played,
                   f"{_green} fully-green rows >= {boards_n} boards, "
                   f"all site solutions accounted for")
             return True
+        # (c) Iter-22 (P0, ANALYSIS19 §3): the GAME GRANT. Path
+        # (a) above is unreachable in the real flow (it demands
+        # WIN_JS won, which itself demands 2 green rows, but the
+        # starter row is never green — 1 green row is the
+        # ceiling), and path (b) below demands a win popup the
+        # verdict probe can race (iter-21: popup=False at the
+        # verdict, then the advance probe found popup + 'Next up
+        # ...' moments later). The signal the site actually
+        # emits is a SINGLE green solution row + seeded coverage
+        # + the game offering its advance control. A win popup
+        # is NOT demanded here: the advance offer (win popup +
+        # Next button) is the grant, and _speed_grant_verified
+        # never clicks — the verdict is computed BEFORE any
+        # Next-click. 2 green rows are NEVER demanded by this
+        # path; path (a) remains only as a legacy sufficient
+        # condition for boards that genuinely show 2 green rows.
+        if await _speed_grant_verified(page, cols, state, played,
+                                       solutions):
+            print(f"[nerdle] speed win VERIFIED (game grant): "
+                  f"single green solution row (green_rows={_green}) "
+                  f"+ seeded coverage + all grids solved + game "
+                  f"offered its advance control")
+            return True
         # (b) The game granted the win (popup present): accept the
         # popup as the verdict signal ONLY with every grid solved
         # + coverage. The popup alone never wins.
@@ -1230,9 +1358,16 @@ async def _check_win_verified(page, cols, boards_n, state, played,
                   f"popup present + all grids solved + all site "
                   f"solutions accounted for")
             return True
+        # Advance signal for the UNVERIFIED line (read-only probe):
+        # whether the game is offering its advance control right
+        # now — the artifact must show the grant signal's state,
+        # not just popup=False.
+        _adv_popup, _adv_next = await _speed_advance_present(page)
         print(f"[nerdle] speed win UNVERIFIED: page reports won={won} "
               f"but single-grid flow not satisfied (green_rows={_green} "
               f"boards={boards_n} covered={_covered} popup={_popup} "
+              f"advance_popup={_adv_popup} "
+              f"advance_next={_adv_next!r} "
               f"all_solved={_all_solved}) "
               f"— continuing")
         return False
@@ -1427,8 +1562,19 @@ async def _speed_try_advance(page, cols, prev_state):
     keep playing), "no-next" (win popup has no Next button —
     single-grid flow, game granted the win), "no-popup" (no win
     popup at all), "no-new-board" (Next clicked but no new board
-    appeared — single-grid flow confirmed). Never raises.
+    appeared, still on the game page — single-grid flow
+    confirmed), "navigated-away" (Next clicked AND the page
+    navigated away — no grids + URL changed, the iter-21 hub
+    navigation: the game granted the win and the advance left
+    the board). Callers must NEVER re-read the verdict against
+    a navigated-away page: on "navigated-away" the PRE-advance
+    verdict stands (won in the verified branch, unwon in the
+    unverified branch). Never raises.
     """
+    try:
+        _url_before = page.url
+    except Exception:
+        _url_before = None
     try:
         _found = await page.evaluate(SPEED_ADVANCE_JS)
     except Exception as _e:
@@ -1465,6 +1611,22 @@ async def _speed_try_advance(page, cols, prev_state):
               f"(grids {len(prev_state or [])} -> {len(_new)}) — "
               f"continuing play")
         return "advanced", _new
+    # Iter-22 (P0, ANALYSIS19 §3): the Next click navigated away
+    # (no grids + URL changed = the hub, not a board) — the
+    # post-click re-read ran against the navigated-away page and
+    # must never be used as verdict evidence. Report it as its
+    # own outcome so callers keep the PRE-advance verdict.
+    try:
+        _url_after = page.url
+    except Exception:
+        _url_after = None
+    if not _new and _url_before and _url_after \
+            and _url_after != _url_before:
+        print(f"[speed] advance: Next clicked and page navigated "
+              f"away ({_url_before!r} -> {_url_after!r}, no grids) "
+              f"— hub navigation, NOT a new board; pre-advance "
+              f"verdict stands")
+        return "navigated-away", (prev_state or [])
     print("[speed] advance: Next clicked but no new board appeared "
           "(single-grid flow confirmed)")
     return "no-new-board", (_new or prev_state)
@@ -2163,6 +2325,36 @@ def _row_matches_equation(row_text, eq):
     return row == cand.replace("²", "2").replace("³", "3")
 
 
+def _game_evaluated_form(readback, suggestion):
+    """Which form to RECORD for a submitted row (iter-22, P2).
+
+    Pure. Returns (record_form, flattened_footnote_or_None).
+
+    - The read-back matches the suggestion EXACTLY -> record the
+      suggestion (== read-back), no footnote.
+    - The read-back matches ONLY via DOM normalization (the DOM
+      stores the exponent as a plain 2 in a superscript-styled
+      cell, so the maxi win reads back as "12+67+8=76" for the
+      game-evaluated "1²+67+8=76") -> record the GAME-EVALUATED
+      suggestion form, and keep the flattened DOM form ONLY as a
+      diagnostic footnote (returned second). Recording the
+      flattened form (the iter-21 behavior) made result.json
+      claim the bot played "12+67+8=76", which the game never
+      evaluated — the game evaluated "1²+67+8=76".
+    - No match even normalized (a TRUE entry/submit divergence,
+      e.g. the midi 1-1+5=5 -> 5+1-1=5 reorder) -> record the
+      READ-BACK (the board's truth), no footnote; the caller logs
+      the mismatch loudly, as before.
+    """
+    if readback is None or suggestion is None:
+        return readback if readback is not None else suggestion, None
+    if str(readback) == str(suggestion):
+        return suggestion, None
+    if _row_matches_equation(readback, suggestion):
+        return suggestion, str(readback)
+    return readback, None
+
+
 async def _grid_superscript_count(page, ch, cols=None):
     """Count occurrences of `ch` (²/³) in the grid's row texts.
 
@@ -2602,7 +2794,17 @@ async def _verify_row_or_retype(page, eq, cols):
               f"{eq!r} (unverified — proceeding)")
         return False
     if _row_matches_equation(_row, eq):
-        print(f"[type] pre-Enter row check: row={_row!r} matches {eq!r}")
+        # Iter-22 (P2): NEVER print "matches" for two textually
+        # different strings — the comparison normalizes (²->2,
+        # ³->3), so row='12+67+8=76' vs eq='1²+67+8=76' is a
+        # NORMALIZED match (DOM-flattened form), not string
+        # equality. Log it as normalized-match with both forms.
+        if _row == eq:
+            print(f"[type] pre-Enter row check: row={_row!r} matches {eq!r}")
+        else:
+            print(f"[type] pre-Enter row check: row={_row!r} "
+                  f"normalized-match {eq!r} (DOM-flattened ²->2/³->3; "
+                  f"not string equality)")
         return True
     print(f"[type] pre-Enter row MISMATCH typed={eq!r} row={_row!r} — "
           "clear + retype whole row")
@@ -2629,8 +2831,15 @@ async def _verify_row_or_retype(page, eq, cols):
         _st2 = []
     _row2 = _in_progress_row_text(_st2)
     if _row2 is not None and _row_matches_equation(_row2, eq):
-        print(f"[type] pre-Enter row check after retype: row={_row2!r} "
-              f"matches {eq!r}")
+        # Iter-22 (P2): same normalized-match wording as above —
+        # never claim string equality for a normalizing comparison.
+        if _row2 == eq:
+            print(f"[type] pre-Enter row check after retype: row={_row2!r} "
+                  f"matches {eq!r}")
+        else:
+            print(f"[type] pre-Enter row check after retype: row={_row2!r} "
+                  f"normalized-match {eq!r} (DOM-flattened ²->2/³->3; "
+                  f"not string equality)")
         return True
     print(f"[type] pre-Enter row STILL mismatched after retype "
           f"typed={eq!r} row={_row2!r} — submitting board row as-is "
@@ -2901,18 +3110,57 @@ _NERDLE_CLEAR_JS = """(keys) => {
 }"""
 
 
+async def _nerdle_wait_hydrated(page):
+    """Wait for the app to boot before reading game state (iter-22,
+    P0, ANALYSIS19 §3).
+
+    The site writes its gameState DURING hydration, after
+    domcontentloaded: in iter-21 the restore gate ran immediately
+    after goto and read keys=[] guesses=0 ("gameState cleared:
+    none present"), yet the load dump seconds later showed
+    gameState WITH guesses=["2+10-6=6"] — the restore/clear ran
+    before (or without seeing) hydration, so the "clear" was a
+    no-op and the `guesses=0` read was false. The grid rendering
+    is the boot signal: wait for div.pb-grid (1500 ms cap, same
+    as the post-reload wait) + one 400 ms settle, then probe.
+    Returns the post-hydration probe ({} on probe failure).
+    Never raises.
+    """
+    try:
+        await page.wait_for_selector("div.pb-grid", timeout=1500)
+    except Exception:
+        pass
+    try:
+        await page.wait_for_timeout(400)
+    except Exception:
+        pass
+    try:
+        return await page.evaluate(_NERDLE_RESTORE_PROBE_JS) or {}
+    except Exception:
+        return {}
+
+
 async def _nerdle_fresh_board(page, mode):
     """Probe the restore gate, clear site game state, reload fresh.
 
     Logs which storage keys were present/cleared and the board state on
     load (keys, guess count, won-ish text) so the next artifact proves
     whether the fresh-board reset held. Returns the post-reload probe.
+
+    Iter-22 (P0, ANALYSIS19 §3): BOTH probes are post-hydration
+    (see _nerdle_wait_hydrated) — the pre-hydration read lied
+    (keys=[] guesses=0 while the site had not yet written its
+    seeded gameState). And the clear is never claimed to have
+    emptied the board when the site re-seeds on boot: if the
+    post-reload probe shows gameState/guesses again after a
+    clear+reload, that is logged as site-provided seeded state
+    (the clear held; the site re-wrote it on boot), NOT as a
+    restore — the seeded rows are board history, handled by the
+    seeded_history mechanism, never mistaken for a replay.
     """
-    try:
-        before = await page.evaluate(_NERDLE_RESTORE_PROBE_JS)
-    except Exception:
-        before = {}
-    _nlog(f"[{mode['id']}] restore gate on load: keys={before.get('keys')} "
+    before = await _nerdle_wait_hydrated(page)
+    _nlog(f"[{mode['id']}] restore gate on load (post-hydration): "
+          f"keys={before.get('keys')} "
           f"guesses={before.get('guesses')} hasSolution={before.get('hasSolution')} "
           f"wonText={before.get('wonText')}")
     try:
@@ -2924,20 +3172,22 @@ async def _nerdle_fresh_board(page, mode):
         try:
             await page.goto(mode["url"], wait_until="domcontentloaded",
                             timeout=45000)
-            # Iter-19 (P2, leading-wait trim): the fixed 1500ms
-            # post-reload wait was pure idle whenever the grid was
-            # already present. Wait for the grid (same 1500ms cap)
-            # and proceed the moment it appears.
-            try:
-                await page.wait_for_selector("div.pb-grid", timeout=1500)
-            except Exception:
-                await page.wait_for_timeout(400)
         except Exception as _e:
             _nlog(f"[{mode['id']}] fresh-board reload failed: {str(_e)[:100]}")
-    try:
-        after = await page.evaluate(_NERDLE_RESTORE_PROBE_JS)
-    except Exception:
-        after = {}
+        after = await _nerdle_wait_hydrated(page)
+        if (after.get("keys") or after.get("guesses")) and cleared:
+            # The site re-seeded gameState on boot (speed's
+            # guesses=["2+10-6=6"]): the clear held, the site
+            # re-wrote it — do NOT claim an empty board.
+            _nlog(f"[{mode['id']}] gameState RE-HYDRATED after reload: "
+                  f"keys={after.get('keys')} guesses={after.get('guesses')} "
+                  f"(site-provided seeded state, NOT a restore — "
+                  f"the clear held, the site re-seeded on boot)")
+    else:
+        try:
+            after = await page.evaluate(_NERDLE_RESTORE_PROBE_JS)
+        except Exception:
+            after = {}
     _nlog(f"[{mode['id']}] board after reset: keys={after.get('keys')} "
           f"guesses={after.get('guesses')} wonText={after.get('wonText')}")
     return after
@@ -2966,6 +3216,14 @@ async def play_mode(page, mode, script_dir, official=None):
     except TypeError:
         pass
     seeded_history = []
+    # Iter-22 (P2): per-mode DOM-flattening footnotes, reset per
+    # mode like PLAYED is (assigned, not appended across modes).
+    PLAYED_NOTES[mode["id"]] = []
+    # Iter-22 (P0): set when speed's Next-click navigated away to
+    # the hub. The post-loop / final win checks must then NOT
+    # re-read against the navigated-away page — the pre-advance
+    # verdict stands.
+    _speed_navigated_away = False
     eqs = list((official or {}).get(mode["id"]) or [])
     official_eqs = list(eqs)  # target-date official list, BEFORE site merge
     cols = mode["len"]
@@ -3164,13 +3422,27 @@ async def play_mode(page, mode, script_dir, official=None):
                     typed = 1
                     # Iter-17: record the row READ BACK from the board,
                     # not the suggestion (ANALYSIS13 §10).
+                    # Iter-22 (P2): record the GAME-EVALUATED form
+                    # (see _game_evaluated_form) — a DOM-flattened
+                    # read-back ("12+67+8=76") records as the
+                    # game-evaluated "1²+67+8=76", with the
+                    # flattened form kept only as a footnote.
                     _rb = None
                     try:
                         _fresh_rb = await read_state(page, cols, tries=2)
                         _rb = _last_evaluated_text(_fresh_rb)
                     except Exception:
                         _rb = None
-                    PLAYED[mode["id"]] = [_rb or eqs[0]]
+                    _record, _flat = _game_evaluated_form(_rb, eqs[0])
+                    PLAYED[mode["id"]] = [_record]
+                    if _flat is not None:
+                        PLAYED_NOTES.setdefault(mode["id"], []).append(
+                            f"{_record} <= flattened DOM {_flat}")
+                        _nlog(f"[{mode['id']}] instant read-back "
+                              f"normalized-match: board={_rb!r} "
+                              f"suggestion={eqs[0]!r} — recording "
+                              f"game-evaluated {_record!r}; flattened "
+                              f"form kept only as a footnote")
                     _nlog(f"[{mode['id']}] guess 1: {eqs[0]} "
                           f"(instant hint solve; submitted; "
                           f"read-back={_rb!r})")
@@ -3272,6 +3544,19 @@ async def play_mode(page, mode, script_dir, official=None):
                             state = _adv_state
                             prev_counts = [eval_count(g) for g in state]
                             continue
+                        # Iter-22 (P0): every other outcome falls
+                        # through to signal="won" — the verdict
+                        # above was computed BEFORE the advance,
+                        # and the pre-advance verdict stands. In
+                        # particular "navigated-away" (Next
+                        # clicked -> hub) is NEVER re-read as
+                        # verdict evidence: the post-advance page
+                        # is not the board.
+                        if _adv == "navigated-away":
+                            _nlog(f"[{mode['id']}] advance navigated "
+                                  f"away (hub); pre-advance verdict "
+                                  f"stands (won) — no re-read "
+                                  f"against the navigated-away page")
                     signal = "won"
                     break
                 # Iter-20 (P2, leading-wait trim): the loop's own
@@ -3304,6 +3589,23 @@ async def play_mode(page, mode, script_dir, official=None):
                     # NOT claimed here; the advance only rescues
                     # play when a new board actually appears.)
                     if mode["id"] == "speed":
+                        # Iter-22 (P0, ANALYSIS19 §3): verify
+                        # BEFORE advancing. The loop-top check ran
+                        # BEFORE the sweep; the win popup can
+                        # animate in during the sweep (iter-21:
+                        # verdict popup=False, then the advance
+                        # probe found popup + 'Next up ...'
+                        # moments later). If the game has granted
+                        # the win by now, claim it WITHOUT
+                        # clicking Next — the click would navigate
+                        # to the hub and destroy the board the
+                        # verdict was computed on.
+                        if await _check_win_verified(
+                                page, cols, boards_n, state,
+                                list(typed_guesses) + list(played_here),
+                                pool, mode_id=mode["id"]):
+                            signal = "won"
+                            break
                         _adv, _adv_state = await _speed_try_advance(
                             page, cols, state)
                         if _adv == "advanced":
@@ -3313,6 +3615,20 @@ async def play_mode(page, mode, script_dir, official=None):
                             state = _adv_state
                             prev_counts = [eval_count(g) for g in state]
                             continue
+                        if _adv == "navigated-away":
+                            # The advance navigated to the hub:
+                            # do NOT re-read against the
+                            # navigated-away page (the 3 re-reads
+                            # below would read the hub). The
+                            # pre-advance verdict (unverified)
+                            # stands — the mode ends unwon.
+                            _speed_navigated_away = True
+                            print(f"[{mode['id']}] advance navigated "
+                                  f"away (hub); pre-advance verdict "
+                                  f"stands (unverified) — no re-read "
+                                  f"against the navigated-away page; "
+                                  f"stopping")
+                            break
                     # more boards may still appear (speed board2)
                     # Iter-20 (P0, ANALYSIS17 §2e/§6.3): iter-19
                     # speed ABANDONED the mode here — one 2.5s wait
@@ -3574,8 +3890,27 @@ async def play_mode(page, mode, script_dir, official=None):
                     _nlog(f"[{mode['id']}] guess {typed}: read-back "
                           f"unavailable, recording suggestion {nxt!r}")
                 else:
-                    played_here.append(_readback)
-                    if _readback != nxt:
+                    # Iter-22 (P2): record the GAME-EVALUATED form
+                    # (see _game_evaluated_form). A DOM-flattened
+                    # read-back ("12+67+8=76" for the maxi win)
+                    # records as the game-evaluated "1²+67+8=76",
+                    # with the flattened form kept ONLY as a
+                    # diagnostic footnote in PLAYED_NOTES. A true
+                    # mismatch (no normalized match, e.g. the
+                    # midi reorder) still records the board row
+                    # and logs loudly, as before.
+                    _record, _flat = _game_evaluated_form(_readback, nxt)
+                    played_here.append(_record)
+                    if _flat is not None:
+                        PLAYED_NOTES.setdefault(mode["id"], []).append(
+                            f"{_record} <= flattened DOM {_flat}")
+                        _nlog(f"[{mode['id']}] guess {typed}: "
+                              f"read-back={_readback!r} normalized-match "
+                              f"suggestion={nxt!r} (DOM-flattened "
+                              f"²->2/³->3) — recording game-evaluated "
+                              f"form {_record!r}; flattened form kept "
+                              f"only as a diagnostic footnote")
+                    elif _readback != nxt:
                         _nlog(f"[{mode['id']}] guess {typed}: "
                               f"READ-BACK MISMATCH suggestion={nxt!r} "
                               f"board={_readback!r} (recording board row)")
@@ -3600,7 +3935,10 @@ async def play_mode(page, mode, script_dir, official=None):
                 _nlog(f"[{mode['id']}] guess {typed}: {nxt} "
                       f"rows_left~{rows_left - 1} hist={len(hists.get(first_open, []))}")
             PLAYED[mode["id"]] = list(played_here)
-            if not signal:
+            # Iter-22 (P0): after a hub navigation the pre-advance
+            # verdict stands — never re-read the win against the
+            # navigated-away page.
+            if not signal and not _speed_navigated_away:
                 fresh = await read_state(page, cols, tries=3)
                 if _mode_won_by_state(fresh, boards_n, mode["id"]):
                     signal = "won"
@@ -3657,14 +3995,31 @@ async def play_mode(page, mode, script_dir, official=None):
                 _site_only.append(_e)
         _matches = None
         _speed_detail = ""
+        _speed_board1_site_rules = False
         if _site_only and official_eqs:
             if mode["id"] == "speed":
                 # Iter-14 P3: BOTH speed equations must match — an
                 # ANY-overlap matches=True (1/2) is not day proof and
                 # speed is not counted in the matches rollup on a
                 # partial (see _nerdle_speed_matches).
+                # Iter-22 (P1, ANALYSIS19 §3): board 1 is
+                # SITE-RULES, like micro/minibi/quad/instant —
+                # the site's board-1 solution ('50-6*7=8') is the
+                # site's own board, and the API list's first
+                # equation ('711/9=79') corresponds to NO board
+                # the site served. An API match is NOT required
+                # for speed board 1: the strict both-match
+                # comparison below is recorded for evidence only
+                # and never gates (the number gate already treats
+                # speed as site-rules / warning-only). The detail
+                # names the unmatched equations on both sides so
+                # the next artifact shows the site-rules fact
+                # instead of a bare "partial; both required".
                 _matches, _speed_detail = _nerdle_speed_matches(
                     _site_only, official_eqs, boards_n)
+                (_speed_detail,
+                 _speed_board1_site_rules) = _speed_site_rules_detail(
+                    _site_only, official_eqs, _matches, _speed_detail)
             else:
                 _matches = any(e in official_eqs for e in _site_only)
         # Iter-14 P0: header number from the multi-strategy probe
@@ -3714,6 +4069,10 @@ async def play_mode(page, mode, script_dir, official=None):
             "matches_target_official": _matches}
         if _speed_detail:
             SERVED[mode["id"]]["speed_match"] = _speed_detail
+        # Iter-22 (P1): speed board-1 is site-rules (see above).
+        if mode["id"] == "speed":
+            SERVED[mode["id"]]["board1_site_rules"] = \
+                _speed_board1_site_rules
         _nlog(f"[{mode['id']}] served page_local={_served.get('page_local')} "
               f"gameState_dateish={_served.get('dateish')} "
               f"site_solutions={_site_only} matches_target_official={_matches} "
@@ -3732,7 +4091,10 @@ async def play_mode(page, mode, script_dir, official=None):
             _nlog(f"[{mode['id']}] shot saved: {_shot_p}")
         except Exception as _e:
             _nlog(f"[{mode['id']}] shot failed: {str(_e)[:120]}")
-        if not signal:
+        # Iter-22 (P0): after a hub navigation the pre-advance
+        # verdict stands — never re-read the win against the
+        # navigated-away page.
+        if not signal and not _speed_navigated_away:
             try:
                 # Iter-19 (P2): final win check goes through the
                 # same multi-board verification — a bare WIN_JS
@@ -4306,6 +4668,13 @@ async def main():
     _res_doc = {"game": "nerdle", "date": date_key, "solved": all_solved,
          "modes": [{"id": mid, "typed": t, "expected": e, "signal": s,
                     "equations_played": list(PLAYED.get(mid) or []),
+                    # Iter-22 (P2): the DOM-flattened read-back
+                    # forms survive ONLY as footnotes here (e.g.
+                    # "1²+67+8=76 <= flattened DOM 12+67+8=76");
+                    # equations_played itself holds game-evaluated
+                    # forms.
+                    "equations_played_notes": list(
+                        PLAYED_NOTES.get(mid) or []),
                     "equations_official": list(
                         (official or {}).get(mid) or [])}
                    for mid, t, e, s in results],

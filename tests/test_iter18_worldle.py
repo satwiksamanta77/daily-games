@@ -175,44 +175,57 @@ class TestCapitalDotNameViaLabel(unittest.TestCase):
         self.assertEqual(got["method"], "dot-name")
 
     def test_ambiguous_labels_return_none(self):
-        # Two dots labelled with the capital: ambiguous -> None,
-        # never a coin-flip click on a possibly-wrong candidate.
+        # Iter-22: ambiguity is DISTINCT values naming the
+        # capital. (Identical labels on two dots are GROUP
+        # evidence, dropped by the shared-source rule.)
         dots = [dict(d) for d in self.DOTS]
-        dots[0] = dict(dots[0], label="Kuwait City", label_dist=12.0)
-        dots[2] = dict(dots[2], label="Kuwait City", label_dist=18.0)
+        dots[0] = dict(dots[0], label="Greater Kuwait City",
+                       label_dist=12.0)
+        dots[2] = dict(dots[2], label="Kuwait City metro",
+                       label_dist=18.0)
         self.assertIsNone(R._worldle_capital_pick_pin_target(
             self._probe(dots=dots), self.FIT, "Kuwait City"))
 
-    def test_one_group_wrapping_all_dots_is_ambiguous(self):
+    def test_one_group_wrapping_all_dots_falls_back_to_nearest_dot(
+            self):
         # One <g> wrapping ALL dots gives every dot the same
-        # parent_text: the ambiguity rule must refuse, not pick
-        # the first dot.
+        # parent_text: shared-source rule drops it (group
+        # evidence, not dot evidence), and iter-22 nearest-dot
+        # then picks the dot near the projected point.
         dots = [dict(d, parent_text="Kuwait City Riyadh Doha")
                 for d in self.DOTS]
-        self.assertIsNone(R._worldle_capital_pick_pin_target(
-            self._probe(dots=dots), self.FIT, "Kuwait City"))
-
-    def test_unnamed_dots_still_fall_back_to_in_fill(self):
-        # No dot names the capital: behaviour is UNCHANGED —
-        # in-fill land point, NOT nearest-dot (iter-16 guard).
         got = R._worldle_capital_pick_pin_target(
-            self._probe(in_fill=True), self.FIT, "Kuwait City")
+            self._probe(dots=dots), self.FIT, "Kuwait City")
+        self.assertEqual(got["method"], "nearest-dot")
+        self.assertEqual((got["x"], got["y"]), (1090.0, 435.0))
+
+    def test_unnamed_far_dots_fall_back_to_in_fill(self):
+        # No dot names the capital AND no dot is near the fit
+        # point: the in-fill land point (iter-22: only when no
+        # dot is near).
+        far = [dict(d, x=d["x"] + 500.0, y=d["y"] + 500.0)
+               for d in self.DOTS]
+        got = R._worldle_capital_pick_pin_target(
+            self._probe(dots=far, in_fill=True), self.FIT,
+            "Kuwait City")
         self.assertEqual(got["method"], "bbox-fit-in-fill")
         self.assertEqual((got["x"], got["y"]), self.FIT)
 
-    def test_in_fill_search_still_beats_nearest_dot(self):
-        # Iter-17 guard, unchanged: fit point in a hole, nearest
-        # dot ~21px away must NOT be picked.
+    def test_nearest_dot_beats_in_fill_search(self):
+        # Iter-22 SUPERSEDES the iter-17 guard (ANALYSIS19 §2):
+        # the nearest dot ~21px away IS the target.
         got = R._worldle_capital_pick_pin_target(
             self._probe(corrected={"x": 1060.0, "y": 410.0,
                                    "dist": 17.9}),
             self.FIT, "Kuwait City")
-        self.assertEqual(got["method"], "in-fill-search")
-        self.assertEqual((got["x"], got["y"]), (1060.0, 410.0))
+        self.assertEqual(got["method"], "nearest-dot")
+        self.assertEqual((got["x"], got["y"]), (1090.0, 435.0))
 
     def test_no_verified_target_returns_none(self):
+        far = [dict(d, x=d["x"] + 500.0, y=d["y"] + 500.0)
+               for d in self.DOTS]
         self.assertIsNone(R._worldle_capital_pick_pin_target(
-            self._probe(), self.FIT, "Kuwait City"))
+            self._probe(dots=far), self.FIT, "Kuwait City"))
 
 
 class TestPinLadderOrder(unittest.TestCase):

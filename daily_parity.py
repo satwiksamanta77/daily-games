@@ -542,6 +542,23 @@ def generate_mode_card(out_path, game, mode_name, subtitle=""):
     return out_path
 
 
+def _facts_row_height(n, top=520, bottom_limit=None, gap=12):
+    """Pure: breakdown-card row height that fits ALL n rows
+    (iter-22, ANALYSIS19 §6 wart): the old card drew a fixed
+    88px row for rows[:5], so a 6-row Waffle card clipped the
+    6th row (TRYST) off the bottom edge while claiming "6
+    guesses played". Row height now shrinks to fit all N rows
+    above the footer (bottom_limit = H-110, same as
+    generate_reveal), min 36px so text stays legible for the
+    largest realistic N. Returns (card_h, gap)."""
+    if bottom_limit is None:
+        bottom_limit = H - 110
+    n = max(1, int(n))
+    avail = bottom_limit - top - (n - 1) * gap
+    card_h = min(88, max(36, avail // n))
+    return int(card_h), int(gap)
+
+
 def generate_facts(out_path, game, date_str, answer, steps,
                  kind=None, palette=None, scoring=True,
                  guesses_played=None, final_answers=1,
@@ -591,9 +608,16 @@ def generate_facts(out_path, game, date_str, answer, steps,
         _center(d, val, f["xl"], x + 270, 372)
         _center(d, lab, f["xs"], x + 270, 440)
         x += 578
+    # Iter-22: fit ALL N rows (no rows[:5] slice) — the
+    # Waffle card clipped its 6th row (TRYST) off the bottom
+    # edge. Row height auto-shrinks via _facts_row_height so
+    # every row lands above the footer; text is vertically
+    # centred in the (possibly shrunk) row instead of at a
+    # fixed +26 offset tuned for 88px rows.
     y = 520
-    for s in rows[:5]:
-        box = [70, y, W - 70, y + 88]
+    _row_h, _row_gap = _facts_row_height(len(rows))
+    for s in rows:
+        box = [70, y, W - 70, y + _row_h]
         _card(img, d, box, radius=18)
         d = ImageDraw.Draw(img)
         # Iter-19: NO [:24] / [:70] slices — same truncation class
@@ -601,21 +625,25 @@ def generate_facts(out_path, game, date_str, answer, steps,
         g = str(s.get("guess", "")).upper()
         clue = (_clue_line(s.get("pattern", ""), kind=kind)
                 if scoring else "")
-        d.text((110, y + 26), f"{s.get('turn', '?')}.", fill=GREEN, font=f["b"])
+        _ty = y + max(6, _row_h // 2 - 14)
+        d.text((110, _ty), f"{s.get('turn', '?')}.", fill=GREEN,
+               font=f["b"])
         gi = _parse_ints(g) if kind == "colors" else None
         if gi:
             gx = 190
             for ii in gi[:8]:
                 hx = palette[ii] if palette and 0 <= ii < len(palette) \
                     else None
-                _swatch(d, gx, y + 20, 44, hx, label=ii)
+                _swatch(d, gx, y + max(4, (_row_h - 44) // 2), 44,
+                        hx, label=ii)
                 gx += 54
         else:
             gf = _fit_font(d, g, f["b"], 620)
-            d.text((190, y + 26), g, fill=TEXT, font=gf)
+            d.text((190, _ty), g, fill=TEXT, font=gf)
         cf = _fit_font(d, clue, f["s"], W - 900)
-        d.text((860, y + 30), clue, fill=MUTED, font=cf)
-        y += 104
+        d.text((860, y + max(6, _row_h // 2 - 12)), clue, fill=MUTED,
+               font=cf)
+        y += _row_h + _row_gap
     img.convert("RGB").save(out_path, "PNG", optimize=True)
     return stats
 

@@ -456,23 +456,26 @@ class TestCapitalDotsIter21(unittest.TestCase):
         self.assertEqual((got["x"], got["y"]), (1090.0, 435.0))
 
     def test_verified_fit_point_snaps_to_dot_centre(self):
-        # Iter-21: the bbox-fit point is in-fill AND coincides
-        # with a dot (within 12px) — click the dot's centre,
-        # not the nearby coordinate.
+        # Iter-21 snap, superseded by iter-22 nearest-dot
+        # (ANALYSIS19 §2): the dot 7px from the projected
+        # point is now picked by nearest-dot, same target.
         dots = [_dot(1095.0, 440.0), _dot(1010.0, 440.0)]
         probe = {"found": True, "dots": dots, "n_paths": 0,
                  "n_dots": 2, "in_fill": True, "corrected": None}
         got = R._worldle_capital_pick_pin_target(
             probe, (1090.0, 435.0), "Kuwait City")
-        self.assertEqual(got["method"], "bbox-fit-in-fill-dot-centre")
+        self.assertEqual(got["method"], "nearest-dot")
         self.assertEqual((got["x"], got["y"]), (1095.0, 440.0))
         self.assertEqual(got["dot_index"], 0)
 
     def test_far_dot_never_snapped(self):
-        # The iter-16 anti-pattern, pinned: a dot 140px-ish away
-        # from the verified point must NOT be clicked. Snap is
-        # coincidence-only (<=12px), never nearest-dot.
-        dots = [_dot(1090.0, 435.0), _dot(1010.0, 440.0)]
+        # The iter-16 anti-pattern, pinned: a dot ~140px+
+        # away from the verified point must NOT be clicked.
+        # Iter-22: the radius is 60px, so the fixture dot is
+        # placed genuinely far (the old fixture's dot was
+        # 21px away — inside the iter-22 nearest-dot radius,
+        # i.e. the ANALYSIS19 Kuwait City case).
+        dots = [_dot(1300.0, 700.0), _dot(1010.0, 440.0)]
         probe = {"found": True, "dots": dots, "n_paths": 0,
                  "n_dots": 2, "in_fill": True, "corrected": None}
         got = R._worldle_capital_pick_pin_target(
@@ -481,17 +484,23 @@ class TestCapitalDotsIter21(unittest.TestCase):
         self.assertEqual((got["x"], got["y"]), self.FIT)
 
     def test_in_fill_search_snaps_to_dot_centre(self):
+        # Iter-22: the dot 21px from the projected point is
+        # picked by nearest-dot before in-fill-search runs.
         dots = [_dot(1090.0, 435.0), _dot(1010.0, 440.0)]
         probe = {"found": True, "dots": dots, "n_paths": 0,
                  "n_dots": 2, "in_fill": False,
                  "corrected": {"x": 1092.0, "y": 437.0, "dist": 5.0}}
         got = R._worldle_capital_pick_pin_target(
             probe, self.FIT, "Kuwait City")
-        self.assertEqual(got["method"], "in-fill-search-dot-centre")
+        self.assertEqual(got["method"], "nearest-dot")
         self.assertEqual((got["x"], got["y"]), (1090.0, 435.0))
 
     def test_in_fill_search_no_snap_when_far(self):
-        dots = [_dot(1090.0, 435.0)]
+        # Iter-22: the dot is genuinely far from the
+        # projected point (outside the 60px radius), so
+        # nearest-dot does not fire and in-fill-search
+        # returns the corrected point unsnapped.
+        dots = [_dot(1300.0, 700.0)]
         probe = {"found": True, "dots": dots, "n_paths": 0,
                  "n_dots": 1, "in_fill": False,
                  "corrected": {"x": 1000.0, "y": 400.0, "dist": 80.0}}

@@ -514,10 +514,20 @@ class TestLeadingWaitTrim(unittest.TestCase):
         self.assertIn("return False", dm)
 
     def test_fresh_board_waits_for_grid_not_fixed_sleep(self):
+        # Iter-22 (P0): the hydration wait moved into the
+        # _nerdle_wait_hydrated helper (grid render + 400 ms
+        # settle) so BOTH restore-gate probes read post-hydration
+        # state; _nerdle_fresh_board calls the helper. The
+        # contract is unchanged: wait for the grid, never a
+        # fixed 1500 ms sleep.
         fb = _fn_src(SRC_NERDLE, "async def _nerdle_fresh_board",
                      "async def play_mode")
-        self.assertIn('wait_for_selector("div.pb-grid"', fb)
+        self.assertIn("_nerdle_wait_hydrated(page)", fb)
         self.assertNotIn("wait_for_timeout(1500)", fb)
+        helper = _fn_src(SRC_NERDLE, "async def _nerdle_wait_hydrated",
+                         "async def _nerdle_fresh_board")
+        self.assertIn('wait_for_selector("div.pb-grid"', helper)
+        self.assertNotIn("wait_for_timeout(1500)", helper)
 
     def test_branches_without_loop_still_sweep(self):
         # The legacy + instant-no-state branches never enter the

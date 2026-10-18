@@ -1415,15 +1415,44 @@ def batterup(d=None):
     # File D (published ~01:04 UTC on day D) carries it, and file D+1 still
     # does. NEVER look back to an earlier day: that silently returned the
     # PREVIOUS day's player (Jeff McNeil played for a Goldschmidt board).
+    # Iter-22 (P1, ANALYSIS19 §4): the old code raised "not published
+    # yet" with ZERO fetch evidence — no URL, no status, no body
+    # fingerprint, no server timestamp — so a correct defer (staggered
+    # CDN flip) was indistinguishable from a stale-read bug. Every
+    # fetch below now logs its URL + HTTP status + body fingerprint
+    # (sha256 prefix + byte length) + server Date header + the
+    # game_date values the file actually carries, and the defer
+    # message embeds that evidence. The DEFER DECISION itself is
+    # unchanged (safe direction); only its evidence is now real.
+    import hashlib as _hl
+    _evidence = []
     for key in (d.isoformat(),
                 (d + timedelta(days=1)).isoformat()):
+        _url = f"{_BATTER_CDN}/games_batterup{key}.json"
         try:
-            r = requests.get(f"{_BATTER_CDN}/games_batterup{key}.json",
-                             headers=hdr, timeout=30)
+            r = requests.get(_url, headers=hdr, timeout=30)
+            _body = r.content or b""
+            _fp = (f"sha256={_hl.sha256(_body).hexdigest()[:16]} "
+                   f"bytes={len(_body)}")
+            _server_ts = r.headers.get("Date", "?") if hasattr(r, "headers") else "?"
+            _dates = []
+            try:
+                j = r.json()
+                games = j.get("games") if isinstance(j, dict) else j
+                if isinstance(games, list):
+                    _dates = sorted({str(g.get("game_date"))
+                                     for g in games
+                                     if isinstance(g, dict)
+                                     and g.get("game_date")})
+            except Exception:
+                games = None
+            _line = (f"url={_url} status={r.status_code} {_fp} "
+                     f"server_date={_server_ts} games_dates={_dates} "
+                     f"target_entry={'yes' if d.isoformat() in _dates else 'no'}")
+            print(f"[batterup] publish check: {_line}")
+            _evidence.append(_line)
             if not r.ok:
                 continue
-            j = r.json()
-            games = j.get("games") if isinstance(j, dict) else j
             if not isinstance(games, list):
                 continue
             entry = next((g for g in games
@@ -1434,13 +1463,16 @@ def batterup(d=None):
                         "date": d.isoformat(), "via": "cdn",
                         "game_number": entry.get("game_number")}
         except Exception as e:
-            print(f"[batterup] cdn {key} failed: {str(e)[:100]}")
+            _line = f"url={_url} fetch_failed={str(e)[:100]}"
+            print(f"[batterup] publish check: {_line}")
+            _evidence.append(_line)
             continue
     # Before the CDN file for day D exists (observed ~03:30 UTC for the
     # 2026-10-16 file; earlier docs said ~01:04 UTC) that window belongs
     # to the morning batch - fail loudly, never guess.
     raise SystemExit(f"batterup: day {d.isoformat()} not published yet "
-                     f"(CDN flips ~01:04 UTC)")
+                     f"(CDN flips ~01:04 UTC); publish-check evidence: "
+                     f"{' | '.join(_evidence) if _evidence else 'no fetch attempted'}")
     try:
         snap = json.loads(
             (ZAI / "src/lib/data/batterup-answers.json").read_text("utf-8"))

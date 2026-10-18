@@ -226,7 +226,12 @@ class TestAreaClickTargetsIter20(unittest.TestCase):
             page, "Kuwait")
         self.assertTrue(ok)
         self.assertEqual(via, "button")
-        self.assertEqual(detail, "Kuwait")
+        # Iter-22: detail names the clicked element's
+        # tag/class (rect/coords when the 8-item return is
+        # given), not just its innerText.
+        self.assertTrue(detail.startswith("Kuwait"))
+        self.assertIn("tag=BUTTON", detail)
+        self.assertIn("cls=some-cls", detail)
 
     def test_click_legacy_two_item_fake_maps_via_unknown(self):
         # Pre-iter-20 fakes return [ok, detail] only.
@@ -243,6 +248,8 @@ class TestAreaClickTargetsIter20(unittest.TestCase):
             page, "Kuwait")
         self.assertTrue(ok)
         self.assertEqual(via, "card")
+        self.assertTrue(detail.startswith("Kuwait"))
+        self.assertIn("tag=DIV", detail)
 
     def test_selected_state_normalises_non_dict(self):
         # A fake returning True (or None) must NOT crash the

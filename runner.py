@@ -1380,7 +1380,23 @@ def _dismiss_teuteuf_banner(page):
     has an open shadow root, so a banner in a CLOSED shadow
     root is attributable to a host element instead of
     invisible. The banner stays non-blocking; a no-match is
-    logged as unverified, never as a dismissal."""
+    logged as unverified, never as a dismissal.
+
+    Iter-22 (ANALYSIS19 §4): the probe STILL said
+    'unverified-no-element-match' ~20x with the banner
+    frame-visible. The remaining blind spot is a CLOSED
+    shadow root on a PLAIN (non-custom) host: closed content
+    is invisible to textContent/innerText/shadowRoot
+    enumeration, and a plain div/section host never appears
+    in custom_top. The diagnostics now add a HOLLOW-BOX
+    list (top-of-page elements with non-zero rect but EMPTY
+    textContent = shadow hosts, with elementFromPoint at
+    the box centre = the host), and Python dismisses via
+    coordinates — a real mouse click on the banner's
+    top-right X — with re-verification: believed only when
+    the hollow box is gone on re-probe. Fix or drop, never
+    lie: a still-present hollow box is logged as NOT
+    dismissed."""
     try:
         _gid = getattr(page, "_qp_gid", None)
         if _gid in GAMES and _gid != "worldle":
@@ -1631,7 +1647,8 @@ def _dismiss_teuteuf_banner(page):
             if (!cands.length) {
             const diag = {roots: roots.length, shadow_hosts: 0,
               iframes: [], top_cands: [], custom_top: [],
-              attr_teuteuf: [], custom_hosts: []};
+              attr_teuteuf: [], custom_hosts: [],
+              hollow_boxes: []};
             try { diag.shadow_hosts = seenShadow.size; }
             catch (err) {}
             for (const fr of Array.from(
@@ -1694,6 +1711,59 @@ def _dismiss_teuteuf_banner(page):
                 }
               }
             }
+            // Iter-22 (ANALYSIS19 §4): HOLLOW-BOX diagnostic.
+            // A banner in a CLOSED shadow root on a PLAIN
+            // (non-custom) host is invisible to every pass
+            // above: closed content is invisible to
+            // textContent/innerText/shadowRoot enumeration, and
+            // a plain div/section host never appears in
+            // custom_top. Its signature is a HOLLOW BOX: a
+            // top-of-page element with a non-zero rect but
+            // EMPTY textContent (shadow content does not count
+            // toward the host's textContent) — a rendered box
+            // with nothing in the light DOM to render. The
+            // widest hollow boxes are the banner candidates;
+            // elementFromPoint at the box centre returns the
+            // host for closed shadow (hit-testing pierces
+            // shadow trees even when the DOM API cannot), so
+            // the host at the centre is recorded too.
+            try {
+              const hollow = [];
+              for (const el of document.querySelectorAll('body *')) {
+                const tag = (el.tagName || '').toUpperCase();
+                if (['SCRIPT', 'STYLE', 'LINK', 'META', 'TITLE',
+                     'HEAD', 'NOSCRIPT', 'TEMPLATE',
+                     'SLOT'].includes(tag)) continue;
+                let r;
+                try { r = el.getBoundingClientRect(); }
+                catch (err) { continue; }
+                if (!r || r.width < 200 || r.height < 20 ||
+                    r.height > 320) continue;
+                if (r.top < -20 || r.top > 300) continue;
+                if ((el.textContent || '').trim() !== '') continue;
+                const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+                let hostAtCentre = null;
+                try {
+                  const hit = document.elementFromPoint(cx, cy);
+                  if (hit) hostAtCentre = {tag: hit.tagName,
+                    cls: String(hit.getAttribute('class') || '')
+                      .slice(0, 60),
+                    id: hit.id || ''};
+                } catch (err) {}
+                hollow.push({tag: el.tagName,
+                  cls: String(el.getAttribute('class') || '')
+                    .slice(0, 60),
+                  id: el.id || '',
+                  rect: {x: Math.round(r.x), y: Math.round(r.y),
+                         w: Math.round(r.width),
+                         h: Math.round(r.height)},
+                  children: el.childElementCount || 0,
+                  host_at_centre: hostAtCentre});
+              }
+              hollow.sort((a, b) =>
+                (b.rect.w * b.rect.h) - (a.rect.w * a.rect.h));
+              diag.hollow_boxes = hollow.slice(0, 8);
+            } catch (err) {}
             return 'unverified-no-element-match:' +
               JSON.stringify(diag);
             }
@@ -1865,10 +1935,92 @@ def _dismiss_teuteuf_banner(page):
                 _hidden = False
             res = ("hidden-iframe-banner" if _hidden
                    else "iframe-corner-click-did-not-dismiss")
-    if res == "absent" or (isinstance(res, str)
+    # Iter-22 (ANALYSIS19 §4): HOLLOW-BOX coordinate X.
+    # When the diagnostics name a hollow box (top-of-page,
+    # non-zero rect, EMPTY textContent = closed-shadow host),
+    # dismiss via coordinates: a real mouse click on the
+    # banner's top-right X (elementFromPoint at the banner
+    # centre returns the host for closed shadow, and real
+    # hit-testing pierces the shadow tree). Re-verify
+    # afterwards: the click is only BELIEVED when the
+    # hollow box is gone on re-probe (or the probe now
+    # finds + closes the banner); a still-present hollow
+    # box is logged as NOT dismissed, never claimed.
+    _hollow_handled = False
+    if isinstance(res, str) and res.startswith(
+            "unverified-no-element-match:"):
+        _hollow = []
+        try:
+            import json as _json
+            _diag = _json.loads(
+                res[len("unverified-no-element-match:"):])
+            _hollow = _diag.get("hollow_boxes") or []
+        except Exception:
+            _hollow = []
+        if _hollow:
+            _box = _hollow[0]
+            _rect = _box.get("rect") or {}
+            try:
+                _hx = float(_rect.get("x", 0)) \
+                    + float(_rect.get("w", 0)) - 16
+                _hy = float(_rect.get("y", 0)) + 16
+            except (TypeError, ValueError):
+                _hx, _hy = 0.0, 0.0
+            try:
+                _dbg(getattr(page, "_qp_gid", "banner"),
+                     "teuteuf edu banner: hollow-box candidate "
+                     f"{_box} — clicking X at ({_hx:.0f}, {_hy:.0f})")
+            except Exception:
+                pass
+            try:
+                page.mouse.click(_hx, _hy)
+                page.wait_for_timeout(500)
+                _res2 = page.evaluate(_JS)
+            except Exception:
+                _res2 = "hollow-box-click-failed"
+            if isinstance(_res2, str) and not _res2.startswith(
+                    ("unverified-no-element-match:",
+                     "absent-candidates:")):
+                res = (str(_res2) + " (via hollow-box coordinate X)")
+            elif isinstance(_res2, str):
+                _still = []
+                try:
+                    import json as _json
+                    _diag2 = _json.loads(
+                        _res2[len("unverified-no-element-match:"):]
+                        if _res2.startswith(
+                            "unverified-no-element-match:")
+                        else "{}")
+                    _still = _diag2.get("hollow_boxes") or []
+                except Exception:
+                    _still = []
+                _gone = True
+                for _b in _still:
+                    _r2 = _b.get("rect") or {}
+                    try:
+                        if abs(float(_r2.get("x", -999))
+                               - float(_rect.get("x", 0))) < 4 \
+                                and abs(float(_r2.get("y", -999))
+                                        - float(_rect.get("y", 0))) < 4:
+                            _gone = False
+                    except (TypeError, ValueError):
+                        pass
+                if _gone:
+                    res = ("closed-hollow-box-via-coordinate-X "
+                           "(hollow box gone on re-probe; banner "
+                           "dismissal unverified by text probe)")
+                else:
+                    res = ("hollow-box-X-click-did-not-dismiss "
+                           "(hollow box still present; banner NOT "
+                           "claimed dismissed)")
+            else:
+                res = ("hollow-box-X-click-result-unreadable "
+                       "(banner NOT claimed dismissed)")
+            _hollow_handled = True
+    if not _hollow_handled and (res == "absent" or (isinstance(res, str)
                            and (res.startswith("absent-candidates:")
                                 or res.startswith(
-                                    "unverified-no-element-match:"))):
+                                    "unverified-no-element-match:")))):
         # Iter-18 late-render re-scan: the probe can run before
         # the banner renders, so a single instant 'absent' is
         # weak. Re-scan once after 500ms before logging 'absent'.
@@ -7068,25 +7220,38 @@ def _s_worldle_prompt_texts(page):
             if "?" in s][:20]
 
 
-def _s_worldle_click_option_loose(page, want):
+def _s_worldle_click_option_loose(page, want, container=None):
     """Click a visible option whose text equals `want` (normalized) or
     contains it — fallback when exact-match click fails (e.g. option
     text carries a suffix). Returns (ok, detail)."""
     try:
-        hit = page.evaluate("""(want) => {
+        hit = page.evaluate("""(args) => {
+          const want = (args && args.want) || args;
+          const container = (args && args.container) || null;
+          const inContainer = e => {
+            if (!container || !container.rect) return true;
+            try {
+              const r = e.getBoundingClientRect();
+              const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+              const cr = container.rect;
+              return cx >= cr.x - 8 && cx <= cr.x + cr.w + 8 &&
+                     cy >= cr.y - 8 && cy <= cr.y + cr.h + 8;
+            } catch (err) { return false; }
+          };
           const vis = e => e && e.offsetParent !== null;
           const norm = s => (s||'').toLowerCase().replace(/\\s+/g,' ').trim();
           const els = Array.from(document.querySelectorAll(
             'button, [role=option], [role=button], [role=menuitem], ' +
             'a, label, li')).filter(vis).filter(
-            e => !e.closest('nav, header, footer'));
+            e => !e.closest('nav, header, footer'))
+            .filter(inContainer);
           const w = norm(want);
           const hit = els.find(e => norm(e.innerText) === w) ||
             els.find(e => norm(e.innerText).includes(w));
           if (!hit) return [false, 'not found'];
           hit.click();
           return [true, (hit.innerText || '').trim().slice(0, 80)];
-        }""", str(want))
+        }""", {"want": str(want), "container": container})
         return bool(hit and hit[0]), str((hit or [None, ""])[1] or "")
     except Exception as e:
         return False, "exception: " + str(e)[:80]
@@ -7097,9 +7262,40 @@ def _s_worldle_switch_dropdown_only(page, gid, mode, day_string):
     Returns True iff game_round == mode after the dropdown click.
     Used by the offered-set rule: a mode whose dropdown switch fails
     AND which is absent from the live round list is VERIFIED ABSENT
-    and must not be rescued by the reload fallback."""
+    and must not be rescued by the reload fallback.
+
+    Iter-22 (ANALYSIS19 §3a): for Area, the store alone is NOT
+    enough — the iter-21 visible-round check lived ONLY in
+    _s_worldle_switch_mode, which the main loop never calls when
+    this function returns True, so attempt 1 "switched" to Area
+    while the SPA still showed PopulationCurrency (ZERO
+    `worldle switch area` lines). This function now runs the
+    visible-round verification on the NORMAL switch path too:
+    store == area + visible Area UI NOT verified -> False
+    (with a logged reason), so the main loop falls through to
+    _s_worldle_switch_mode (Next-round recovery + reload
+    fallback). probe_ran=False (probe never executed, legacy
+    fakes) falls back to the store check, never blocks."""
     label = _WORLDLE_MODE_LABELS.get(mode, mode)
+
+    def _area_visible_ok():
+        # Returns True / False / None (probe never ran).
+        _vis = _s_worldle_visible_area_ui(page)
+        if not _vis.get("probe_ran"):
+            return None
+        if not _vis.get("visible"):
+            _dbg(gid, "worldle switch area (dropdown-only): "
+                      "store says area but visible-round gate "
+                      "failed; NOT claimed "
+                      f"(reason={_vis.get('reason')})")
+            return False
+        return True
+
     if mode != "summary" and _s_worldle_current_mode(page) == mode:
+        if mode == "area":
+            _ok = _area_visible_ok()
+            # None = probe never ran -> store-only (legacy).
+            return True if _ok is not False else False
         return True
     try:
         labels = list(_WORLDLE_MODE_LABELS.values())
@@ -7151,14 +7347,25 @@ def _s_worldle_switch_dropdown_only(page, gid, mode, day_string):
                 _close_modals(page, _force=True)
                 _settle(page, base=1200)
                 if _s_worldle_current_mode(page) == mode:
+                    if mode == "area" and \
+                            _area_visible_ok() is False:
+                        return False
                     return True
                 _settle(page, base=1500)
                 if _s_worldle_current_mode(page) == mode:
+                    if mode == "area" and \
+                            _area_visible_ok() is False:
+                        return False
                     return True
     except Exception as e:
         _dbg(gid, "worldle switch " + str(mode)
              + ": dropdown-only failed: " + str(e)[:90])
-    return _s_worldle_current_mode(page) == mode
+    if _s_worldle_current_mode(page) == mode:
+        if mode == "area":
+            _ok = _area_visible_ok()
+            return True if _ok is not False else False
+        return True
+    return False
 
 
 # ---- runtime interaction helpers (all defensive: no identifiable control
@@ -7368,8 +7575,18 @@ def _s_worldle_visible_area_ui(page):
     the comparison click landed on the wrong round's DOM and the
     store-verify went 0->0. This probe checks the VISIBLE round:
     an Area prompt actually rendered (comparison "larger surface
-    area" / number "surface area of ...", rect-visible, outside
-    nav/header/footer chrome) or the selected tab naming Area.
+    area" / number "surface area of ...", TRULY visible: rect
+    intersecting the viewport + opacity > 0 + no hidden ancestor
+    + active-panel membership, outside nav/header/footer chrome).
+    Iter-22 (ANALYSIS19 §3b): rect > 0 alone passed on a
+    PopulationCurrency-visible page because the SPA keeps the
+    inactive Area panel mounted with a non-zero rect. The
+    selected tab alone NEVER makes the round visible. Returns
+    {visible, signals, prompt_visible, selected_tab, prompt_text,
+    next_round_visible, container, reason, rejected,
+    rejection_reasons, probe_ran}; `container` is the
+    verified-visible Area container for the comparison click
+    restriction, and `reason` names why the gate failed.
     Returns {visible, signals, prompt_visible, selected_tab,
     prompt_text, next_round_visible, probe_ran}. A non-dict probe
     result (legacy test fakes returning True) maps to visible via
@@ -7384,30 +7601,141 @@ def _s_worldle_visible_area_ui(page):
     unverified round)."""
     try:
         res = page.evaluate("""/* worldle-visible-area */ () => {
-          const vis = e => { try { const r = e.getBoundingClientRect();
-            return r.width > 0 && r.height > 0; }
-            catch (err) { return false; } };
           const norm = s => (s || '').toLowerCase()
             .replace(/\\s+/g, ' ').trim();
+          const vw = window.innerWidth || 0;
+          const vh = window.innerHeight || 0;
+          // Iter-22 (ANALYSIS19 §3b): rect > 0 is NOT visible.
+          // The SPA keeps the inactive Area panel mounted with a
+          // non-zero rect, so the iter-21 gate passed on a
+          // PopulationCurrency-visible page. An element is
+          // TRULY VISIBLE only when: its rect intersects the
+          // viewport, its computed opacity > 0, it is not
+          // display:none / visibility:hidden, and NO ancestor
+          // is aria-hidden / hidden / display:none / opacity 0.
+          // A rejected prompt candidate is COUNTED with its
+          // reason (rejected / rejection_reasons) instead of
+          // silently passing or silently failing.
+          const trulyVisible = el => {
+            try {
+              const r = el.getBoundingClientRect();
+              if (!(r.width > 0 && r.height > 0))
+                return {ok: false, why: 'zero-rect'};
+              if (r.bottom <= 0 || r.top >= vh ||
+                  r.right <= 0 || r.left >= vw)
+                return {ok: false, why: 'off-viewport'};
+              const cs = getComputedStyle(el);
+              if (cs.display === 'none')
+                return {ok: false, why: 'display-none'};
+              if (cs.visibility === 'hidden' ||
+                  cs.visibility === 'collapse')
+                return {ok: false, why: 'visibility-hidden'};
+              if (parseFloat(cs.opacity || '1') <= 0)
+                return {ok: false, why: 'opacity-0'};
+              let node = el.parentElement;
+              while (node && node.tagName !== 'BODY') {
+                if (node.getAttribute &&
+                    node.getAttribute('aria-hidden') === 'true')
+                  return {ok: false, why: 'aria-hidden-ancestor'};
+                if (node.hasAttribute && node.hasAttribute('hidden'))
+                  return {ok: false, why: 'hidden-ancestor'};
+                try {
+                  const ncs = getComputedStyle(node);
+                  if (ncs.display === 'none')
+                    return {ok: false, why: 'hidden-ancestor'};
+                  if (ncs.visibility === 'hidden')
+                    return {ok: false, why: 'hidden-ancestor'};
+                  if (parseFloat(ncs.opacity || '1') <= 0)
+                    return {ok: false, why: 'opacity-0-ancestor'};
+                } catch (e) {}
+                node = node.parentElement;
+              }
+              return {ok: true, why: ''};
+            } catch (e) {
+              return {ok: false, why: 'exception'};
+            }
+          };
           const signals = [];
-          let promptVisible = false, promptText = '';
+          let promptVisible = false, promptText = '', promptEl = null;
+          let rejected = 0;
+          const rejectionReasons = {};
           for (const el of document.querySelectorAll('body *')) {
             if (el.closest && el.closest('nav, header, footer'))
               continue;
-            if (!vis(el)) continue;
             const t = norm(el.textContent || '');
-            if (t.includes('larger surface area') ||
-                t.includes('surface area of')) {
-              promptVisible = true;
-              promptText = t.slice(0, 140);
-              signals.push('area-prompt-visible');
-              break;
+            if (!(t.includes('larger surface area') ||
+                  t.includes('surface area of'))) continue;
+            const v = trulyVisible(el);
+            if (!v.ok) {
+              rejected++;
+              rejectionReasons[v.why] =
+                (rejectionReasons[v.why] || 0) + 1;
+              continue;
+            }
+            promptVisible = true;
+            promptText = t.slice(0, 140);
+            promptEl = el;
+            signals.push('area-prompt-visible');
+            break;
+          }
+          // Active-panel membership: when the prompt lives in a
+          // tabpanel whose id is NOT the selected tab's
+          // aria-controls target, the panel is inactive even
+          // if every ancestor passes trulyVisible (the SPA can
+          // stack panels without hiding attributes).
+          let panelActive = true;
+          if (promptEl) {
+            const panel = promptEl.closest('[role=tabpanel]');
+            if (panel && panel.id) {
+              const selTab = document.querySelector(
+                '[aria-selected="true"]');
+              if (selTab) {
+                const ctl = selTab.getAttribute('aria-controls');
+                if (ctl && ctl !== panel.id) {
+                  panelActive = false;
+                  signals.push('prompt-in-inactive-panel');
+                }
+              }
+            }
+          }
+          // Verified-visible Area CONTAINER: the smallest truly
+          // visible holder containing THIS prompt element plus
+          // >=2 option-like descendants. The comparison click
+          // is restricted to this container (iter-22 §3c) — a
+          // body-wide or prompt-only container would let the
+          // click land on the stale hidden panel again.
+          let container = null;
+          if (promptEl && panelActive) {
+            const holders = Array.from(document.querySelectorAll(
+              'section, form, div'))
+              .filter(e => trulyVisible(e).ok)
+              .filter(e => e.contains(promptEl))
+              .filter(e => (norm(e.innerText || '')
+                .includes('larger surface area') ||
+                norm(e.innerText || '')
+                .includes('surface area of')))
+              .filter(e => e.querySelectorAll(
+                'button, [role=option], [role=radio], ' +
+                '[role=button], a, label, [data-value]').length >= 2);
+            holders.sort((a, b) =>
+              (a.innerText || '').length - (b.innerText || '').length);
+            const picked = holders[0] ||
+              promptEl.closest('section, form, div');
+            if (picked && picked !== document.body) {
+              const r = picked.getBoundingClientRect();
+              container = {tag: picked.tagName,
+                cls: String(picked.getAttribute('class') || '')
+                  .slice(0, 80),
+                id: picked.id || '',
+                rect: {x: Math.round(r.x), y: Math.round(r.y),
+                       w: Math.round(r.width),
+                       h: Math.round(r.height)}};
             }
           }
           let selectedTab = '';
           for (const el of document.querySelectorAll(
               '[aria-selected=true], [aria-current=true]')) {
-            if (!vis(el)) continue;
+            if (!trulyVisible(el).ok) continue;
             const t = norm(el.textContent || '');
             if (t) { selectedTab = t; break; }
           }
@@ -7416,25 +7744,44 @@ def _s_worldle_visible_area_ui(page):
           let nextRoundVisible = false;
           for (const el of document.querySelectorAll(
               'button, [role=button], a')) {
-            if (!vis(el)) continue;
+            if (!trulyVisible(el).ok) continue;
             if (norm(el.textContent || '') === 'next round') {
               nextRoundVisible = true; break;
             }
           }
           if (nextRoundVisible) signals.push('next-round-visible');
-          return {visible: promptVisible ||
-                    selectedTab.includes('area'),
+          // The selected tab alone NEVER makes the round
+          // visible: a selected 'Area' tab with no truly-visible
+          // Area prompt is exactly the iter-21 failure shape
+          // (tab selected, panel not rendered).
+          const visible = promptVisible && panelActive;
+          let reason = '';
+          if (!visible) {
+            reason = 'no truly-visible Area prompt ' +
+              '(rejected=' + rejected + ' reasons=' +
+              JSON.stringify(rejectionReasons) +
+              (panelActive ? '' : '; prompt in inactive panel') +
+              "; selected_tab='" + selectedTab + "')";
+          }
+          return {visible: visible,
                   signals: signals,
                   prompt_visible: promptVisible,
                   prompt_text: promptText,
                   selected_tab: selectedTab,
-                  next_round_visible: nextRoundVisible};
+                  next_round_visible: nextRoundVisible,
+                  container: container,
+                  reason: reason,
+                  rejected: rejected,
+                  rejection_reasons: rejectionReasons};
+        }
         }""")
     except Exception:
         return {"visible": False, "signals": [],
                 "prompt_visible": False, "selected_tab": "",
                 "prompt_text": "", "next_round_visible": False,
-                "probe_ran": False,
+                "probe_ran": False, "container": None,
+                "reason": "evaluate failed",
+                "rejected": 0, "rejection_reasons": {},
                 "error": "evaluate failed"}
     if isinstance(res, dict):
         return {"visible": bool(res.get("visible")),
@@ -7444,16 +7791,27 @@ def _s_worldle_visible_area_ui(page):
                 "prompt_text": str(res.get("prompt_text") or ""),
                 "next_round_visible":
                     bool(res.get("next_round_visible")),
-                "probe_ran": True}
+                "probe_ran": True,
+                "container": (res.get("container")
+                              if isinstance(res.get("container"), dict)
+                              else None),
+                "reason": str(res.get("reason") or ""),
+                "rejected": res.get("rejected") or 0,
+                "rejection_reasons": (res.get("rejection_reasons")
+                                      or {})}
     if res is True:
         return {"visible": True, "signals": ["bool-compat"],
                 "prompt_visible": False, "selected_tab": "",
                 "prompt_text": "", "next_round_visible": False,
-                "probe_ran": True}
+                "probe_ran": True, "container": None,
+                "reason": "bool-compat", "rejected": 0,
+                "rejection_reasons": {}}
     return {"visible": False, "signals": ["non-dict-probe-result"],
             "prompt_visible": False, "selected_tab": "",
             "prompt_text": "", "next_round_visible": False,
-            "probe_ran": False}
+            "probe_ran": False, "container": None,
+            "reason": "non-dict-probe-result", "rejected": 0,
+            "rejection_reasons": {}}
 
 
 def _s_worldle_click_next_round(page):
@@ -7878,6 +8236,115 @@ def _s_worldle_live_round_modes(page, gid):
               bestScore = score; best = m; bestLeaves = leaves;
             }
           }
+          // Iter-22 (ANALYSIS19 §5): ANCHORED scan. The
+          // toggle OPENS (opened=True) but every markup /
+          // content pass still finds no container, because the
+          // menu's container is a CUSTOM element with no role
+          // and no dropdown/menu/popover/popper class. Instead
+          // of guessing the container's markup, ANCHOR to the
+          // toggle that just opened the menu: its
+          // aria-controls target, its nearest sibling menu,
+          // or the ancestor at elementsFromPoint just below
+          // the toggle (the open menu's on-screen position).
+          // The anchored container is scored by CONTENT
+          // (leaves mapping to round labels) like every other
+          // pass, and its tag/class/role + leaves are returned
+          // as `anchored` on success AND failure, so the next
+          // artifact names the menu's actual container.
+          let anchored = null;
+          try {
+            const leavesOf = m => Array.from(m.querySelectorAll(
+              'button, [role=option], [role=menuitem], ' +
+              '[role=menuitemradio], a, li, span, div, p'))
+              .filter(vis).filter(e => !hasTextChild(e));
+            const scoreOf = leaves => leaves.filter(lf =>
+              labelKeys.has(keyOf(
+                lf.innerText || lf.textContent || ''))).length;
+            const describeEl = (el, via) => {
+              try {
+                const r = el.getBoundingClientRect();
+                return {tag: el.tagName,
+                  cls: String(el.getAttribute('class') || '')
+                    .slice(0, 60),
+                  role: el.getAttribute('role') || '',
+                  rect: {x: Math.round(r.x), y: Math.round(r.y),
+                         w: Math.round(r.width),
+                         h: Math.round(r.height)},
+                  via: via};
+              } catch (err) { return {tag: el.tagName, via: via}; }
+            };
+            const toggles = Array.from(document.querySelectorAll(
+              '[aria-expanded="true"], [aria-haspopup="true"]'))
+              .filter(vis);
+            for (const t of toggles) {
+              const candsA = [];
+              const aid = t.getAttribute('aria-controls');
+              if (aid) {
+                const el = document.getElementById(aid);
+                if (el) candsA.push([el, 'aria-controls']);
+              }
+              const inner = t.querySelector(
+                '[role=menu], [role=listbox]');
+              if (inner) candsA.push([inner, 'toggle-descendant']);
+              if (t.parentElement) {
+                for (const sib of t.parentElement.children) {
+                  if (sib === t) continue;
+                  const stag = (sib.tagName || '');
+                  if ((sib.matches &&
+                       sib.matches('[role=menu], [role=listbox], ' +
+                         '[class*=menu i], [class*=dropdown i]')) ||
+                      stag.includes('-'))
+                    candsA.push([sib, 'sibling']);
+                }
+              }
+              if (t.nextElementSibling)
+                candsA.push([t.nextElementSibling, 'next-sibling']);
+              try {
+                const tr = t.getBoundingClientRect();
+                const hit = document.elementFromPoint(
+                  tr.x + tr.width / 2, tr.y + tr.height + 12);
+                if (hit) {
+                  let node = hit, found = false;
+                  for (let d = 0; d < 6 && node; d++) {
+                    const ntag = (node.tagName || '');
+                    const ncls = node.getAttribute ?
+                      String(node.getAttribute('class') || '') : '';
+                    if (node !== t &&
+                        ((node.matches && node.matches(
+                          '[role=menu], [role=listbox]')) ||
+                         ntag.includes('-') ||
+                         /menu|dropdown|popover|popper|listbox/i
+                           .test(ncls))) {
+                      candsA.push([node, 'elementsFromPoint-ancestor']);
+                      found = true; break;
+                    }
+                    node = node.parentElement;
+                  }
+                  if (!found) candsA.push([hit, 'elementsFromPoint']);
+                }
+              } catch (err) {}
+              for (const pair of candsA) {
+                const el = pair[0], via = pair[1];
+                if (!el || /^(BODY|HTML)$/.test(el.tagName)) continue;
+                if (!vis(el)) continue;
+                const leaves = leavesOf(el);
+                const score = scoreOf(leaves);
+                const info = describeEl(el, via);
+                info.leaves = leaves.length; info.score = score;
+                info.sample = leaves.slice(0, 3).map(lf =>
+                  norm(lf.innerText || lf.textContent || '')
+                    .slice(0, 40));
+                if (!anchored || score > anchored.score)
+                  anchored = info;
+                if (score >= 3 && leaves.length >= 3 &&
+                    leaves.length <= 60) {
+                  best = el; bestScore = score; bestLeaves = leaves;
+                }
+                if (bestScore >= 3) break;
+              }
+              if (bestScore >= 3) break;
+            }
+          } catch (err) {}
           // Iter-21 (ANALYSIS18 §6.7): the toggle OPENS
           // (opened=True) but the scan finds no container —
           // the container selector (role/class/aria) does not
@@ -7932,7 +8399,15 @@ def _s_worldle_live_round_modes(page, gid):
               let fbEls = [];
               try { fbEls = Array.from(rt.querySelectorAll(
                 'div, ul, section, nav, menu, aside, form, ' +
-                '[role=menu], [role=listbox], [role=dialog]')); }
+                '[role=menu], [role=listbox], [role=dialog]'))
+                // Iter-22: CUSTOM-ELEMENT containers. The
+                // fallback tag list EXCLUDED custom elements,
+                // so a <…-menu> host with no role/class never
+                // enumerated. Hyphen-tagged elements are
+                // scored by CONTENT the same way (dedup via
+                // fbSeen below).
+                .concat(Array.from(rt.querySelectorAll('*'))
+                  .filter(e => (e.tagName || '').includes('-'))); }
               catch (err) {}
               for (const m of fbEls) {
                 if (fbSeen.has(m)) continue;
@@ -7963,9 +8438,11 @@ def _s_worldle_live_round_modes(page, gid):
           }
           if (!best || bestScore < 3)
             return {entries: [], container: false,
-                    diag: diagCands.slice(0, 5)};
+                    diag: diagCands.slice(0, 5),
+                    anchored: anchored};
           for (const e of bestLeaves) push(e.innerText);
-          return {entries: out, container: true};
+          return {entries: out, container: true,
+                  anchored: anchored};
         }"""
 
         def _scan():
@@ -8058,6 +8535,16 @@ def _s_worldle_live_round_modes(page, gid):
                     _dbg(gid, "worldle G4 live rounds reader: "
                               "opened-menu container dump (top "
                               f"scored): {str(_diag)[:1500]}")
+                # Iter-22: the ANCHORED container (from the
+                # toggle) is logged even on failure — its
+                # tag/class/role + leaves name the menu's
+                # actual container when every other pass
+                # found nothing.
+                _anch = raw_ev.get("anchored")
+                if _anch:
+                    _dbg(gid, "worldle G4 live rounds reader: "
+                              "anchored container (from toggle): "
+                              f"{str(_anch)[:800]}")
                 return None
             raw = list(raw_ev.get("entries") or [])
         elif isinstance(raw_ev, list):
@@ -9098,6 +9585,44 @@ def _worldle_capital_pinpoint_probe(page, px, py):
               let fill2 = '';
               try { fill2 = c.getAttribute('fill') || ''; }
               catch (e) {}
+              // Iter-22 (ANALYSIS19 §2): resolve <use> href
+              // targets' fill + <g> descendants' fill. A
+              // <use>'s OWN computed fill is its own (usually
+              // black/default) while the blue lives on the
+              // referenced symbol/child — the old code tested
+              // the element's own fill only, so a blue <use>
+              // dot failed BOTH the name and the blue-ish
+              // filters. The resolved fill OVERRIDES the own
+              // fill for <use>/<g> (their own fill is not the
+              // rendered colour); other tags keep their own.
+              let resolved2 = '';
+              try {
+                if (tag2 === 'use') {
+                  const hrefU = c.getAttribute('href') ||
+                    c.getAttribute('xlink:href') || '';
+                  const idU = hrefU.replace(/^#/, '');
+                  const tgtU = idU ? document.getElementById(idU)
+                    : null;
+                  if (tgtU) {
+                    resolved2 = tgtU.getAttribute('fill') || '';
+                    if (!resolved2) {
+                      try { const cfU = getComputedStyle(tgtU).fill;
+                        if (cfU && cfU !== 'none') resolved2 = cfU;
+                      } catch (e2) {}
+                    }
+                    if (!resolved2) {
+                      const chU = tgtU.querySelector &&
+                        tgtU.querySelector('[fill]');
+                      if (chU) resolved2 = chU.getAttribute('fill') || '';
+                    }
+                  }
+                } else if (tag2 === 'g') {
+                  const chG = c.querySelector &&
+                    c.querySelector('[fill]');
+                  if (chG) resolved2 = chG.getAttribute('fill') || '';
+                }
+              } catch (e) {}
+              if (resolved2) fill2 = resolved2;
               let bg2 = '';
               try { const cs2 = getComputedStyle(c);
                 bg2 = cs2.backgroundColor || '';
@@ -9126,6 +9651,7 @@ def _worldle_capital_pinpoint_probe(page, px, py):
                 data2[k] = c.dataset[k]; } catch (e) {}
               dots.push({x: cx2, y: cy2, r: r2.width / 2,
                          fill: fill2, bg: bg2,
+                         resolved_fill: resolved2,
                          cls: String(c.getAttribute('class') || '')
                            .slice(0, 80),
                          id: c.id || '', data: data2,
@@ -9226,6 +9752,336 @@ def _worldle_capital_pinpoint_probe(page, px, py):
         return {}
 
 
+def _worldle_capital_probe_diagnostics(page):
+    """Diagnostics for the pinpoint probe (iter-22, ANALYSIS19
+    §2): per-tag candidate counts + rejection reasons + the
+    marker-counter elements (tag/class/id/fill/resolved-fill/
+    rect/parent) so a future `dots=0` is diagnosable instead
+    of an aggregate. Runs as a SECOND evaluate over the same
+    DOM (the main probe's own enumeration is unchanged); the
+    caller merges its result into the probe dict before the
+    picker/summary log, and diffs marker elements against
+    the probe's dots. Pure probe (no clicks). Returns {} on
+    any failure; a non-dict fake result maps to {}."""
+    try:
+        res = page.evaluate("""/* worldle-capital-probe-diagnostics */
+          () => {
+          const roots = [document];
+          const collectRoots = root => {
+            try { for (const el of root.querySelectorAll('*')) {
+              if (el.shadowRoot) {
+                roots.push(el.shadowRoot);
+                collectRoots(el.shadowRoot);
+              }
+            } } catch (e) {}
+          };
+          try { collectRoots(document); } catch (e) {}
+          for (const fr of Array.from(
+              document.querySelectorAll('iframe'))) {
+            try { const d = fr.contentDocument;
+              if (d) roots.push(d); } catch (e) {}
+          }
+          let svg = null;
+          for (const rt of roots) {
+            try {
+              const h = rt.querySelector('#pin-capital-svg');
+              if (h) {
+                svg = (h.tagName || '').toLowerCase() === 'svg' ? h
+                  : (h.querySelector('svg') || h);
+                break;
+              }
+            } catch (e) {}
+          }
+          if (!svg) {
+            for (const rt of roots) {
+              try { for (const s of rt.querySelectorAll('svg')) {
+                const idc = ((s.id || '') + ' ' +
+                  (s.getAttribute('class') || '')).toLowerCase();
+                if (idc.includes('pin') || idc.includes('capital')) {
+                  svg = s; break;
+                }
+              } } catch (e) {}
+              if (svg) break;
+            }
+          }
+          const rect = svg ? svg.getBoundingClientRect() : null;
+          const perTag = {}, rejected = {};
+          const bump = (obj, k) => { obj[k] = (obj[k] || 0) + 1; };
+          const isBlueish = s => {
+            const v = String(s || '').toLowerCase()
+              .replace(/\\s+/g, '');
+            if (/^#(0{0,2}5[0-9a-f]{3}|00[0-9a-f]|2563eb|3b82f6|1d4ed8)$/
+                .test(v)) return true;
+            if (/^(blue|dodgerblue|royalblue|mediumblue)$/.test(v))
+              return true;
+            const m = v.match(/rgba?\\((\\d+),(\\d+),(\\d+)/);
+            if (m) { const r = +m[1], g = +m[2], b = +m[3];
+              return b > 100 && b > r + 30 && b > g - 20; }
+            return false;
+          };
+          // Resolved fill: a <use>'s OWN computed fill is its
+          // own (usually black/default) while the blue lives on
+          // the referenced symbol/child; a <g>'s fill lives on
+          // its descendants. Same resolution as the main probe.
+          const resolvedFill = el => {
+            try {
+              const tag = (el.tagName || '').toLowerCase();
+              if (tag === 'use') {
+                const href = el.getAttribute('href') ||
+                  el.getAttribute('xlink:href') || '';
+                const id = href.replace(/^#/, '');
+                const tgt = id ? document.getElementById(id) : null;
+                if (tgt) {
+                  if (tgt.getAttribute('fill')) return tgt.getAttribute('fill');
+                  try { const cf = getComputedStyle(tgt).fill;
+                    if (cf && cf !== 'none') return cf; } catch (e) {}
+                  const ch = tgt.querySelector && tgt.querySelector('[fill]');
+                  if (ch) return ch.getAttribute('fill') || '';
+                }
+                return '';
+              }
+              if (tag === 'g') {
+                const ch = el.querySelector && el.querySelector('[fill]');
+                if (ch) return ch.getAttribute('fill') || '';
+              }
+            } catch (e) {}
+            return '';
+          };
+          const seen = new Set();
+          const dotTags = 'circle, ellipse, path, rect, use, g, ' +
+            'div, span, button, image';
+          for (const rt of roots) {
+            let els = [];
+            try { els = Array.from(rt.querySelectorAll(dotTags)); }
+            catch (e) {}
+            for (const el of els) {
+              if (seen.has(el)) continue;
+              seen.add(el);
+              const tag = (el.tagName || '').toLowerCase();
+              bump(perTag, tag);
+              let r;
+              try { r = el.getBoundingClientRect(); }
+              catch (e) { bump(rejected, 'rect-exception'); continue; }
+              if (!r || r.width <= 0 || r.height <= 0) {
+                bump(rejected, 'zero-rect'); continue; }
+              if (r.width < 3 || r.width > 48 ||
+                  r.height < 3 || r.height > 48) {
+                bump(rejected, 'size-out-of-range'); continue; }
+              if (rect) {
+                const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+                if (cx < rect.x - 4 || cx > rect.x + rect.width + 4 ||
+                    cy < rect.y - 4 || cy > rect.y + rect.height + 4) {
+                  bump(rejected, 'off-map'); continue; }
+              }
+              const clsId = ((el.getAttribute('class') || '') + ' ' +
+                (el.id || '')).toLowerCase();
+              const href = ((el.getAttribute('href') || '') + ' ' +
+                (el.getAttribute('xlink:href') || '')).toLowerCase();
+              const named = /(dot|marker|pin|point|capital)/
+                .test(clsId) || /(dot|marker|pin|point|capital)/
+                .test(href);
+              let fill = '';
+              try { fill = el.getAttribute('fill') || ''; } catch (e) {}
+              let bg = '';
+              try { const cs = getComputedStyle(el);
+                bg = cs.backgroundColor || '';
+                if (!fill) fill = cs.fill || '';
+              } catch (e) {}
+              const res = resolvedFill(el);
+              if (res) fill = res;
+              const text = (tag === 'div' || tag === 'span' ||
+                tag === 'button')
+                ? (el.textContent || '').replace(/\\s+/g, ' ')
+                    .trim().slice(0, 60) : '';
+              if ((tag === 'div' || tag === 'span' ||
+                   tag === 'button') && text.length > 40) {
+                bump(rejected, 'long-text'); continue; }
+              if (!named && !isBlueish(fill) && !isBlueish(bg)) {
+                bump(rejected, 'not-named-not-blue'); continue; }
+              bump(rejected, 'accepted-as-dot-candidate');
+            }
+          }
+          // The markers counter's own elements, dumped raw:
+          // the 4 frame-visible dots ARE in this set when the
+          // probe says dots=0, so the diff names the filter
+          // that rejected them.
+          const markerSel = 'svg circle, svg ellipse, svg use, ' +
+            'svg [class*=marker i], svg [class*=pin i], ' +
+            '.leaflet-marker-icon, .maplibregl-marker, ' +
+            '[data-marker], [class*=marker i], [class*=pin i]';
+          const markerEls = [];
+          const mSeen = new Set();
+          for (const rt of roots) {
+            let els = [];
+            try { els = Array.from(rt.querySelectorAll(markerSel)); }
+            catch (e) {}
+            for (const el of els) {
+              if (mSeen.has(el)) continue;
+              mSeen.add(el);
+              if (markerEls.length >= 12) break;
+              let r = null;
+              try { const rr = el.getBoundingClientRect();
+                r = {x: Math.round(rr.x), y: Math.round(rr.y),
+                     w: Math.round(rr.width),
+                     h: Math.round(rr.height)}; } catch (e) {}
+              let fill = '', computed = '';
+              try { fill = el.getAttribute('fill') || ''; } catch (e) {}
+              try { computed = getComputedStyle(el).fill || ''; }
+              catch (e) {}
+              const par = el.parentElement;
+              markerEls.push({tag: (el.tagName || '').toLowerCase(),
+                cls: String(el.getAttribute('class') || '')
+                  .slice(0, 80),
+                id: el.id || '', fill: fill,
+                computed_fill: computed,
+                resolved_fill: resolvedFill(el),
+                rect: r,
+                parent_tag: par ? (par.tagName || '').toLowerCase() : '',
+                parent_cls: par ? String(
+                  par.getAttribute('class') || '').slice(0, 60) : ''});
+            }
+          }
+          return {per_tag: perTag, rejected: rejected,
+                  marker_elements: markerEls,
+                  marker_count: markerEls.length,
+                  svg_found: !!svg};
+        }""") or {}
+    except Exception:
+        return {}
+    if not isinstance(res, dict):
+        return {}
+    return {"diag": {"per_tag": res.get("per_tag") or {},
+                     "rejected": res.get("rejected") or {}},
+            "marker_elements": list(res.get("marker_elements") or []),
+            "marker_count": res.get("marker_count"),
+            "svg_found": bool(res.get("svg_found"))}
+
+
+def _worldle_capital_nearest_dot(dots, fit_px, max_dist=60.0):
+    """Pure: the dot nearest `fit_px` (the projected city
+    coordinates), or None (iter-22, ANALYSIS19 §2).
+
+    Returns (dot, distance) when exactly one dot is nearest
+    within `max_dist` px. Two dots tied within 5px at the
+    minimum distance are AMBIGUOUS -> None (no coin-flip
+    click). A dot beyond `max_dist` is never returned: the
+    iter-16 worry (a dot ~140px from a bad fit point, a
+    different city) is outside the radius by construction.
+    The caller uses this to decide whether a path-piece
+    retarget is even allowed: a dot within `max_dist` means
+    the click stays on the dot, never on a path centre."""
+    import math as _m
+    try:
+        fx, fy = float(fit_px[0]), float(fit_px[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+    scored = []
+    for d in (dots or []):
+        if not isinstance(d, dict):
+            continue
+        try:
+            dx, dy = float(d.get("x")), float(d.get("y"))
+        except (TypeError, ValueError):
+            continue
+        scored.append((_m.hypot(dx - fx, dy - fy), d))
+    if not scored:
+        return None
+    scored.sort(key=lambda t: t[0])
+    best_dist, best = scored[0]
+    if best_dist > float(max_dist):
+        return None
+    if len(scored) > 1 and abs(scored[1][0] - best_dist) <= 5.0:
+        return None
+    return (best, best_dist)
+
+
+def _worldle_capital_probe_diag_summary(probe):
+    """Pure: one-line diagnostics summary for a pinpoint probe
+    (iter-22, ANALYSIS19 §2): per-tag candidate counts +
+    rejection reasons + the marker-counter elements + the
+    marker-vs-dot diff. An aggregate `dots=0` line is never
+    again the whole story."""
+    probe = probe if isinstance(probe, dict) else {}
+    diag = probe.get("diag") or {}
+    per_tag = diag.get("per_tag") or {}
+    rejected = diag.get("rejected") or {}
+    markers = probe.get("marker_elements") or []
+    dots = [d for d in (probe.get("dots") or [])
+            if isinstance(d, dict)]
+    marker_bits = []
+    for m in markers[:6]:
+        try:
+            r = m.get("rect") or {}
+            xy = (f"({float(r.get('x') or 0):.0f},"
+                  f"{float(r.get('y') or 0):.0f} "
+                  f"{float(r.get('w') or 0):.0f}x"
+                  f"{float(r.get('h') or 0):.0f})")
+        except (TypeError, ValueError):
+            xy = "(?,?)"
+        marker_bits.append(
+            f"{m.get('tag') or '?'}#{m.get('id') or ''}."
+            f"{str(m.get('cls') or '')[:30]} fill={m.get('fill')!r} "
+            f"resolved={m.get('resolved_fill')!r} rect={xy} "
+            f"parent={m.get('parent_tag') or ''}."
+            f"{str(m.get('parent_cls') or '')[:30]}")
+    diff = _worldle_capital_marker_dot_diff(markers, dots)
+    return (f"per_tag={per_tag} rejected={rejected} "
+            f"marker_elements({len(markers)})=["
+            + "; ".join(marker_bits) + f"] diff={diff}")
+
+
+def _worldle_capital_marker_dot_diff(marker_elements, dots):
+    """Pure: diff the markers-counter elements against the
+    probe's own dot candidates (iter-22). Returns a short
+    string naming marker elements with no dot within 3px
+    (the probe rejected or never enumerated them) and dots
+    with no marker element nearby."""
+    import math as _m
+    markers = [m for m in (marker_elements or [])
+               if isinstance(m, dict)]
+    dots = [d for d in (dots or []) if isinstance(d, dict)]
+
+    def _centre(m):
+        try:
+            r = m.get("rect") or {}
+            return (float(r.get("x") or 0)
+                    + float(r.get("w") or 0) / 2,
+                    float(r.get("y") or 0)
+                    + float(r.get("h") or 0) / 2)
+        except (TypeError, ValueError):
+            return None
+
+    def _dot_xy(d):
+        try:
+            return (float(d.get("x")), float(d.get("y")))
+        except (TypeError, ValueError):
+            return None
+
+    unmatched_markers = 0
+    for m in markers:
+        c = _centre(m)
+        if c is None:
+            continue
+        if not any(_dot_xy(d) is not None
+                   and _m.hypot(_dot_xy(d)[0] - c[0],
+                                _dot_xy(d)[1] - c[1]) <= 3.0
+                   for d in dots):
+            unmatched_markers += 1
+    unmatched_dots = 0
+    for d in dots:
+        xy = _dot_xy(d)
+        if xy is None:
+            continue
+        if not any(_centre(m) is not None
+                   and _m.hypot(_centre(m)[0] - xy[0],
+                                _centre(m)[1] - xy[1]) <= 3.0
+                   for m in markers):
+            unmatched_dots += 1
+    return (f"markers={len(markers)} dots={len(dots)} "
+            f"markers_without_dot={unmatched_markers} "
+            f"dots_without_marker={unmatched_dots}")
+
+
 def _worldle_capital_pick_pin_target(probe, fit_px, cap_name):
     """Pure: choose the pin-click target from a pinpoint probe
     (iter-17, ANALYSIS13 §5). Returns {x, y, method, detail} or
@@ -9256,12 +10112,25 @@ def _worldle_capital_pick_pin_target(probe, fit_px, cap_name):
     3. in-fill-search: the fit point is in a hole (Kuwait Bay);
        click the nearest in-fill point the grid search found.
 
-    Deliberately NOT "nearest dot to the fit point": the iter-16
-    fit point is ~140px off the NE-coast dot, so nearest-dot
-    would pick a centre dot (a different city) instead of the
-    capital. A dot is clicked ONLY on a name match or as the
-    nearest in-fill point (which is still a land point, and the
-    method is logged as in-fill-search, not dot-name).
+    Iter-22 (ANALYSIS19 §2): the iter-16/21 "never nearest-dot"
+    rule is SUPERSEDED. The frame proves the 4 dots are
+    UNLABELLED candidate locations and the widget only accepts
+    a click ON a dot (markers 4->4 on every off-dot click), so
+    a fit point that is NOT on a dot can never register — the
+    bbox-fit / in-fill points are not clickable targets at all
+    on this widget. Decision order is now:
+    1. dot-name (as before; ambiguous -> None).
+    2. nearest-dot (NEW): the dot NEAREST the projected
+       (fit) point, when it lies within 60px. The 60px radius
+       is the label-assignment radius the probe already uses
+       for "nearby" on this map, and the ANALYSIS19 case is
+       21px (fit (1072.5,422.7) -> mid-right dot (1085,440),
+       the Kuwait City position). Two dots within 5px of each
+       other at the minimum distance are ambiguous -> None
+       (no coin-flip click). A dot 140px away (the iter-16
+       worry) is far outside the radius and is never picked.
+    3. bbox-fit-in-fill / in-fill-search (as before, kept for
+       completeness when NO dot is near the projected point).
 
     Iter-21: when a verified point (fit point in-fill, or the
     in-fill-search corrected point) already COINCIDES with an
@@ -9271,7 +10140,11 @@ def _worldle_capital_pick_pin_target(probe, fit_px, cap_name):
     nearest-dot guess: the point was verified independently,
     and the snap only replaces a near-dot coordinate with
     the dot element itself — the clickable target — instead
-    of a bbox-fit coordinate that can miss the element."""
+    of a bbox-fit coordinate that can miss the element.
+    (Iter-22: the nearest-dot step above now fires first, so
+    the 12px snap survives only for points whose nearest dot
+    is >60px away yet coincides within 12px — unreachable in
+    practice, kept as defense in depth.)"""
     probe = probe if isinstance(probe, dict) else {}
     if not probe.get("found"):
         return None
@@ -9388,6 +10261,24 @@ def _worldle_capital_pick_pin_target(probe, fit_px, cap_name):
                                f"(fill={d.get('fill')!r})")}
         if len(named) > 1:
             return None
+    # Iter-22 (ANALYSIS19 §2): nearest-dot to the PROJECTED
+    # point — the dots are unlabelled, so dot-name cannot match,
+    # and the widget only accepts a click ON a dot. This runs
+    # BEFORE the bbox-fit / in-fill branches: an in-fill point
+    # that is not on a dot does not register either.
+    _near = _worldle_capital_nearest_dot(dots, (fx, fy))
+    if _near is not None:
+        _d, _dist = _near
+        return {"x": float(_d.get("x")), "y": float(_d.get("y")),
+                "method": "nearest-dot",
+                "dot_index": dots.index(_d),
+                "dot_tag": str(_d.get("tag") or ""),
+                "detail": ("nearest dot "
+                           f"({float(_d.get('x')):.1f}, "
+                           f"{float(_d.get('y')):.1f}) is "
+                           f"{_dist:.1f}px from the projected point "
+                           f"({fx:.1f}, {fy:.1f}); dots are unlabelled, "
+                           "widget accepts only a dot click")}
     if probe.get("in_fill"):
         _snapped = _snap_to_dot(
             fx, fy, "bbox-fit-in-fill",
@@ -9456,7 +10347,9 @@ def _worldle_capital_dot_attempt_summary(probe, cap_name, target):
         parts.append(f"dot{i}@{xy}: "
                      + ("; ".join(bits) if bits else "no name evidence"))
     return (f"capital={cap_name!r} dots={len(dots)} "
-            f"method={method} | " + " | ".join(parts))
+            f"method={method} | " + " | ".join(parts)
+            + " || diag: "
+            + _worldle_capital_probe_diag_summary(probe))
 
 
 def _worldle_capital_click_dot_element(page, px, py, cap_name):
@@ -9771,41 +10664,39 @@ def _s_worldle_play_capital(page, gid, day):
                 + (north - lat) / (north - south) * h
         _dbg(gid, f"worldle capital pin {c.get('name')} ({lat},{lon}) "
                   f"-> px=({px:.1f},{py:.1f}) projection={proj or 'equirect(bounds)'}")
-        # Iter-16: retarget the click onto the COUNTRY PIECE PATH
-        # (see _worldle_capital_piece_path). The iter-15 click
-        # landed on bare SVG (top=svg, markers 4->4) because the
-        # bbox-fit point missed the actual outline path, and the
-        # component only fires onRegionClick when pointerdown lands
-        # ON a piece — a bare-SVG pointerdown sets no
-        # pendingClickRegion, so the zoom-end handler does nothing.
-        _piece = _worldle_capital_piece_path(page, px, py)
-        if _piece is not None:
-            _dbg(gid, "worldle capital pin: retargeted onto country "
-                      f"piece path id={_piece.get('id')!r} "
-                      f"region={_piece.get('region')!r} "
-                      f"centre=({_piece.get('cx'):.1f}, "
-                      f"{_piece.get('cy'):.1f}) dist="
-                      f"{_piece.get('dist'):.1f} (hit-test verified); "
-                      f"bbox-fit point was ({px:.1f},{py:.1f})")
-            px, py = float(_piece["cx"]), float(_piece["cy"])
-        else:
-            _dbg(gid, "worldle capital pin: no hit-test-verified "
-                      "country piece path near the bbox-fit point; "
-                      f"keeping bbox-fit point ({px:.1f},{py:.1f}) — "
-                      "live confirmation still needed: the exact "
-                      "piece-path id / region for this country")
-        # Iter-17: pinpoint-map probe + target pick (see
-        # _worldle_capital_pinpoint_probe /
-        # _worldle_capital_pick_pin_target). The iter-16 fit point
-        # for Kuwait City (1072.5, 422.7) probed top=svg — bare
-        # SVG, NOT on the outline (it sits in Kuwait Bay, a hole
-        # in the outline), so pointerdown there can set no
-        # pendingClickRegion. The pick OVERRIDES the click target
-        # only on: a dot that NAMES the capital, a verified
-        # in-fill fit point, or the nearest in-fill point. The
-        # pre-click dot list is also the baseline for the
-        # post-click dot-delta check below.
+        # Iter-22 (ANALYSIS19 §2): PROBE FIRST, retarget LAST
+        # (or never). The iter-16/17 order retargeted onto the
+        # country-piece path centre BEFORE the probe/picker ran,
+        # so the picker saw the RETARGETED point, not the
+        # projected point — and the retarget moved the click
+        # 82.4px east (fit (1072.5,422.7) -> piece centre
+        # (1154.6,415.1)) onto the outline edge, not onto any
+        # dot, hence markers 4->4. The widget only accepts a
+        # click ON a dot, so: run the probe/picker on the
+        # PROJECTED (bbox-fit) point; when the picker returns
+        # ANY target (dot-name / nearest-dot / in-fill), use
+        # it and NEVER retarget; retarget onto a piece centre
+        # ONLY when the picker returns None AND no dot is
+        # near the fit point (nearest-dot already covers the
+        # near-dot case, so this fallback cannot steal a dot
+        # click). The pre-click dot list is also the baseline
+        # for the post-click dot-delta check below.
+        _fit_px, _fit_py = float(px), float(py)
         _pin_probe = _worldle_capital_pinpoint_probe(page, px, py)
+        # Iter-22 diagnostics: per-tag counts + rejection
+        # reasons + the marker-counter elements, merged into
+        # the probe before the picker/summary log, so the
+        # dot-name attempt line carries the diff.
+        try:
+            _diag = _worldle_capital_probe_diagnostics(page)
+        except Exception:
+            _diag = {}
+        if isinstance(_pin_probe, dict) and isinstance(_diag, dict):
+            if _diag.get("diag"):
+                _pin_probe["diag"] = _diag.get("diag")
+            if _diag.get("marker_elements") is not None:
+                _pin_probe["marker_elements"] = _diag.get(
+                    "marker_elements")
         _dots_before = len((_pin_probe or {}).get("dots") or [])
         _target = _worldle_capital_pick_pin_target(
             _pin_probe, (px, py), c.get("name") or "")
@@ -9825,9 +10716,45 @@ def _s_worldle_play_capital(page, gid, day):
                       f"fit-point was ({px:.1f},{py:.1f}); "
                       f"{_target.get('detail')} | pinpoint dots="
                       f"{_dots_before} "
-                      f"(svg={(_pin_probe or {}).get('svg')})")
+                      f"(svg={(_pin_probe or {}).get('svg')}); "
+                      "piece retarget SKIPPED (picker returned a "
+                      "target; the click stays on the picker "
+                      "target, never on a path-piece centre)")
             px, py = float(_target["x"]), float(_target["y"])
         else:
+            # Picker returned None: piece retarget is allowed
+            # ONLY when no dot is near the fit point (else the
+            # picker would have returned nearest-dot). This is
+            # the ANALYSIS19 retarget case, enforced here, not
+            # in a comment: the retarget must not move the click
+            # off a nearby dot.
+            _near_dot = _worldle_capital_nearest_dot(
+                (_pin_probe or {}).get("dots") or [], (px, py))
+            if _near_dot is not None:
+                _dbg(gid, "worldle capital pin target: NO picker "
+                          "target but a dot is near the fit point "
+                          f"({_near_dot[1]:.1f}px); keeping fit point "
+                          f"({px:.1f},{py:.1f}) — piece retarget "
+                          "REFUSED (fit point near a dot candidate)")
+            else:
+                _piece = _worldle_capital_piece_path(page, px, py)
+                if _piece is not None:
+                    _dbg(gid, "worldle capital pin: retargeted onto country "
+                              f"piece path id={_piece.get('id')!r} "
+                              f"region={_piece.get('region')!r} "
+                              f"centre=({_piece.get('cx'):.1f}, "
+                              f"{_piece.get('cy'):.1f}) dist="
+                              f"{_piece.get('dist'):.1f} (hit-test verified); "
+                              f"bbox-fit point was ({px:.1f},{py:.1f}); "
+                              "no dot near the fit point, so the "
+                              "piece fallback cannot steal a dot click")
+                    px, py = float(_piece["cx"]), float(_piece["cy"])
+                else:
+                    _dbg(gid, "worldle capital pin: no hit-test-verified "
+                              "country piece path near the bbox-fit point; "
+                              f"keeping bbox-fit point ({px:.1f},{py:.1f}) — "
+                              "live confirmation still needed: the exact "
+                              "piece-path id / region for this country")
             _dbg(gid, "worldle capital pin target: NO verified "
                       "target (no name-matched dot, fit point not "
                       "in-fill, no in-fill point found); keeping "
@@ -9851,19 +10778,26 @@ def _s_worldle_play_capital(page, gid, day):
         # dot BY NAME, click the matched dot ELEMENT itself
         # (_worldle_capital_click_dot_element) — the 4 dots are
         # the likely clickable targets, and coordinate clicks
-        # never registered (markers 4->4). A successful element
-        # click REPLACES the coordinate press below (a second
-        # press at the same point could move/double-place the
-        # pin); a failed element click falls back to the
-        # coordinate press. Placement is still only believed
-        # when a marker/store change is seen afterwards.
+        # never registered (markers 4->4). Iter-22: the same
+        # element-click applies to nearest-dot and *-dot-centre
+        # targets (they are dot targets too — a coordinate
+        # press at a dot centre is the shape that never
+        # registered). A successful element click REPLACES the
+        # coordinate press below (a second press at the same
+        # point could move/double-place the pin); a failed
+        # element click falls back to the coordinate press.
+        # Placement is still only believed when a marker/store
+        # change is seen afterwards.
         _landed = bool(before.get("inMap"))
         _dot_el_clicked = False
-        if (_target is not None and _target.get("method") == "dot-name"):
+        if (_target is not None and (
+                _target.get("method") in ("dot-name", "nearest-dot")
+                or str(_target.get("method") or "").endswith(
+                    "-dot-centre"))):
             _el_click = _worldle_capital_click_dot_element(
                 page, px, py, c.get("name") or "")
             _dot_el_clicked = bool((_el_click or {}).get("clicked"))
-            _dbg(gid, "worldle capital dot-name element-click: "
+            _dbg(gid, "worldle capital dot element-click: "
                       f"clicked={_dot_el_clicked} "
                       f"tag={(_el_click or {}).get('tag')!r} "
                       f"cls={str((_el_click or {}).get('cls') or '')!r} "
@@ -12963,7 +13897,8 @@ def _s_worldle_comparison_probe(page, prompt_substrs):
         return {}
 
 
-def _s_worldle_click_comparison_option(page, want, _exclude=()):
+def _s_worldle_click_comparison_option(page, want, _exclude=(),
+                                      container=None):
     """Click a comparison option by country name, matching first-line
     innerText, aria-label, data-value, title, a descendant img alt,
     or the sibling label pill (image-card options carry the generic
@@ -12989,12 +13924,45 @@ def _s_worldle_click_comparison_option(page, want, _exclude=()):
     instead of re-clicking the same dead target. `ok` means a
     click was dispatched, NOT that a selection resulted — the
     caller verifies selection with
-    _s_worldle_comparison_selected_state and the store."""
+    _s_worldle_comparison_selected_state and the store.
+
+    Iter-22 (ANALYSIS19 §3c): `container` is the verified-visible
+    Area container (from _s_worldle_visible_area_ui). When given,
+    ONLY candidates whose centre lies inside that container are
+    clickable — the iter-21 click picked the FIRST document-order
+    name match anywhere (a stale hidden-panel button) and flipped
+    the view Area -> PopulationCurrency. The returned `detail`
+    now names the clicked element's tag/class/rect/coordinates
+    (not just its innerText), so the click target is PROVEN in
+    the log instead of `clicked=''`."""
     try:
         hit = page.evaluate("""/* worldle-comparison-click */
           (args) => {
           const want = (args && args.want) || args;
           const exclude = (args && args.exclude) || [];
+          // Iter-22: container restriction — only candidates
+          // whose CENTRE lies inside the verified-visible Area
+          // container (rect from the visible-round probe) may be
+          // clicked. A stale hidden-panel button with the same
+          // name sits OUTSIDE that container and is skipped.
+          const container = (args && args.container) || null;
+          const inContainer = e => {
+            if (!container || !container.rect) return true;
+            try {
+              const r = e.getBoundingClientRect();
+              const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+              const cr = container.rect;
+              return cx >= cr.x - 8 && cx <= cr.x + cr.w + 8 &&
+                     cy >= cr.y - 8 && cy <= cr.y + cr.h + 8;
+            } catch (err) { return false; }
+          };
+          const describe = e => {
+            try {
+              const r = e.getBoundingClientRect();
+              return [r.x, r.y, r.width, r.height,
+                      r.x + r.width / 2, r.y + r.height / 2];
+            } catch (err) { return [0, 0, 0, 0, 0, 0]; }
+          };
           // Iter-20: rect-based visibility (offsetParent lies for
           // fixed/portal subtrees on this page — see G4/banner).
           const vis = e => { try { const r = e.getBoundingClientRect();
@@ -13054,9 +14022,11 @@ def _s_worldle_click_comparison_option(page, want, _exclude=()):
           const interactive = Array.from(document.querySelectorAll(
             'button, [role=option], [role=radio], [role=button], a, ' +
             'label, [data-value]')).filter(vis)
-            .filter(e => !e.closest('nav, header, footer'));
+            .filter(e => !e.closest('nav, header, footer'))
+            .filter(inContainer);
           const divs = Array.from(document.querySelectorAll('div'))
             .filter(vis).filter(e => !e.closest('nav, header, footer'))
+            .filter(inContainer)
             .filter(e => !e.querySelector('button, img, input, select'))
             .filter(e => isLabelText(e.innerText || ''));
           // Iter-20 (ANALYSIS17 §2i): BUTTON first, CARD second —
@@ -13066,38 +14036,84 @@ def _s_worldle_click_comparison_option(page, want, _exclude=()):
           // that did. The old code fell through to divs silently.
           const hitBtn = interactive.find(match);
           if (hitBtn) { hitBtn.click();
+            const d = describe(hitBtn);
             return [true, (hitBtn.innerText || '').trim().slice(0, 80),
                     'button', hitBtn.tagName,
                     String(hitBtn.getAttribute('class') || '')
-                      .slice(0, 60)]; }
+                      .slice(0, 60),
+                    {x: Math.round(d[0]), y: Math.round(d[1]),
+                     w: Math.round(d[2]), h: Math.round(d[3])},
+                    Math.round(d[4]), Math.round(d[5])]; }
           const hitCard = divs.find(match);
           if (hitCard) { hitCard.click();
+            const d = describe(hitCard);
             return [true, (hitCard.innerText || '').trim().slice(0, 80),
                     'card', hitCard.tagName,
                     String(hitCard.getAttribute('class') || '')
-                      .slice(0, 60)]; }
-          return [false, 'not found', 'none', '', ''];
-        }""", str(want))
+                      .slice(0, 60),
+                    {x: Math.round(d[0]), y: Math.round(d[1]),
+                     w: Math.round(d[2]), h: Math.round(d[3])},
+                    Math.round(d[4]), Math.round(d[5])]; }
+          return [false, container ?
+            'no candidate inside verified Area container' :
+            'not found', 'none', '', '', null, null, null];
+        }""", {"want": str(want),
+               "exclude": list(_exclude or []),
+               "container": container})
+        if isinstance(hit, (list, tuple)) and len(hit) >= 8:
+            _rect = hit[5] if isinstance(hit[5], dict) else None
+            _detail = (str(hit[1] or "")
+                       + f" | tag={hit[3] or ''} "
+                       f"cls={str(hit[4] or '')[:60]} "
+                       f"rect={_rect} "
+                       f"centre=({hit[6]}, {hit[7]})")
+            return (bool(hit[0]), _detail, str(hit[2] or "none"))
         if isinstance(hit, (list, tuple)) and len(hit) >= 3:
-            return (bool(hit[0]), str(hit[1] or ""),
-                    str(hit[2] or "none"))
+            _detail = str(hit[1] or "")
+            if len(hit) >= 5 and (hit[3] or hit[4]):
+                _detail += (f" | tag={hit[3] or ''} "
+                            f"cls={str(hit[4] or '')[:60]}")
+            return (bool(hit[0]), _detail, str(hit[2] or "none"))
         return bool(hit and hit[0]), str((hit or [None, ""])[1] or ""), \
             "unknown"
     except Exception as e:
         return False, "exception: " + str(e)[:80], "error"
 
 
-def _s_worldle_click_comparison_card(page, want):
+def _s_worldle_click_comparison_card(page, want, container=None):
     """Click ONLY the comparison option CARD (non-interactive div
     card / label pill) for `want` — the iter-20 second attempt when
     a BUTTON click produced no selected state (ANALYSIS17 §2i:
     frame gp_0360 shows Kuwait/Qatar shape CARDS + Kuwait/Qatar
     BUTTONS; the button click evidently never selected, so the card
     itself is the next target). Returns (ok, detail, via='card').
-    Never clicks a button: cards only."""
+    Never clicks a button: cards only.
+
+    Iter-22 (ANALYSIS19 §3c): same `container` restriction and
+    tag/class/rect/coordinates detail as
+    _s_worldle_click_comparison_option."""
     try:
         hit = page.evaluate("""/* worldle-comparison-card-click */
-          (want) => {
+          (args) => {
+          const want = (args && args.want) || args;
+          const container = (args && args.container) || null;
+          const inContainer = e => {
+            if (!container || !container.rect) return true;
+            try {
+              const r = e.getBoundingClientRect();
+              const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+              const cr = container.rect;
+              return cx >= cr.x - 8 && cx <= cr.x + cr.w + 8 &&
+                     cy >= cr.y - 8 && cy <= cr.y + cr.h + 8;
+            } catch (err) { return false; }
+          };
+          const describe = e => {
+            try {
+              const r = e.getBoundingClientRect();
+              return [r.x, r.y, r.width, r.height,
+                      r.x + r.width / 2, r.y + r.height / 2];
+            } catch (err) { return [0, 0, 0, 0, 0, 0]; }
+          };
           const vis = e => e && e.offsetParent !== null;
           const norm = s => (s||'').toLowerCase().replace(/\\s+/g,' ').trim();
           const normDiac = s => norm(s).normalize('NFD')
@@ -13146,20 +14162,38 @@ def _s_worldle_click_comparison_card(page, want):
           const cards = Array.from(document.querySelectorAll(
             'div, section, figure, li'))
             .filter(vis).filter(e => !e.closest('nav, header, footer'))
+            .filter(inContainer)
             .filter(e => !e.closest('button, a, [role=button]'))
             .filter(e => e.tagName !== 'BUTTON')
             .filter(e => (e.querySelector('img') ||
                           isLabelText(e.innerText || '')));
           const hit = cards.find(match);
-          if (!hit) return [false, 'no card found', 'card', '', ''];
+          if (!hit) return [false, container ?
+            'no card inside verified Area container' :
+            'no card found', 'card', '', '', null, null, null];
           hit.click();
+          const d = describe(hit);
           return [true, (hit.innerText || '').trim().slice(0, 80),
                   'card', hit.tagName,
-                  String(hit.getAttribute('class') || '').slice(0, 60)];
-        }""", str(want))
+                  String(hit.getAttribute('class') || '').slice(0, 60),
+                  {x: Math.round(d[0]), y: Math.round(d[1]),
+                   w: Math.round(d[2]), h: Math.round(d[3])},
+                  Math.round(d[4]), Math.round(d[5])];
+        }""", {"want": str(want), "container": container})
+        if isinstance(hit, (list, tuple)) and len(hit) >= 8:
+            _rect = hit[5] if isinstance(hit[5], dict) else None
+            _detail = (str(hit[1] or "")
+                       + f" | tag={hit[3] or ''} "
+                       f"cls={str(hit[4] or '')[:60]} "
+                       f"rect={_rect} "
+                       f"centre=({hit[6]}, {hit[7]})")
+            return (bool(hit[0]), _detail, str(hit[2] or "card"))
         if isinstance(hit, (list, tuple)) and len(hit) >= 3:
-            return (bool(hit[0]), str(hit[1] or ""),
-                    str(hit[2] or "card"))
+            _detail = str(hit[1] or "")
+            if len(hit) >= 5 and (hit[3] or hit[4]):
+                _detail += (f" | tag={hit[3] or ''} "
+                            f"cls={str(hit[4] or '')[:60]}")
+            return (bool(hit[0]), _detail, str(hit[2] or "card"))
         return bool(hit and hit[0]), str((hit or [None, ""])[1] or ""), \
             "card"
     except Exception as e:
@@ -13563,11 +14597,37 @@ def _s_worldle_play_comparison(page, gid, day, mode, ds, prompt_substrs,
                           "gate not enforced — proceeding on "
                           "comparison-probe evidence")
             else:
+                # Iter-22: a gate failure returns partial WITH a
+                # logged reason (which candidates were rejected
+                # and why), never a bare "not verified".
+                _dbg(gid, "worldle area comparison: visible-round "
+                          "gate FAILED — "
+                          f"reason={_vis.get('reason')}")
                 return ("partial", None,
                         "visible Area UI not verified "
-                        f"(signals={_vis.get('signals')}); comparison "
+                        f"(signals={_vis.get('signals')}; "
+                        f"reason={_vis.get('reason')}); comparison "
                         f"option {best!r} NOT clicked on an unverified "
                         "round")
+    # Iter-22 (ANALYSIS19 §3c): the verified-visible Area
+    # container from the SAME probe that passed the gate above
+    # (never a second probe — the UI could move between
+    # probes). The comparison click is restricted to it; when
+    # the probe never identified one (legacy fakes /
+    # probe_ran=False), container is None and the click runs
+    # unrestricted — but that is LOGGED, never silent, and
+    # production JS always returns a container when the gate
+    # passes.
+    _area_container = None
+    if mode == "area":
+        try:
+            _area_container = (_vis or {}).get("container")
+        except Exception:
+            _area_container = None
+        if _area_container is None:
+            _dbg(gid, "worldle area comparison: visible Area "
+                      "container NOT identified; click runs "
+                      "unrestricted (probe gave no container)")
     # Iter-15 (Area P1): the FULL store list BEFORE the pick, so
     # the "answered" claim can be VERIFIED (iter-14 assumed answered
     # from click+Enter while the store never changed — twice).
@@ -13581,9 +14641,11 @@ def _s_worldle_play_comparison(page, gid, day, mode, ds, prompt_substrs,
             _before = _s_worldle_day_guesses(page, _store_key, ds)
         except Exception:
             _before = None
-    ok, detail, via = _s_worldle_click_comparison_option(page, best)
+    ok, detail, via = _s_worldle_click_comparison_option(
+        page, best, container=_area_container)
     if not ok:
-        ok, detail = _s_worldle_click_option_loose(page, best)
+        ok, detail = _s_worldle_click_option_loose(
+            page, best, container=_area_container)
         via = "loose" if ok else "none"
     if not ok:
         return ("partial", None,
@@ -13617,7 +14679,8 @@ def _s_worldle_play_comparison(page, gid, day, mode, ds, prompt_substrs,
         # Button click produced NO selection (the iter-19 shape:
         # frame gp_0360 shows both buttons unselected after the
         # click). Try the option CARD itself before submitting.
-        _ok2, _det2, _via2 = _s_worldle_click_comparison_card(page, best)
+        _ok2, _det2, _via2 = _s_worldle_click_comparison_card(
+            page, best, container=_area_container)
         _sel2 = _s_worldle_comparison_selected_state(page, best)
         _dbg(gid, f"worldle {mode} comparison post-click selected-state "
                   f"(retry): target={best!r} via={_via2} "
@@ -13639,6 +14702,27 @@ def _s_worldle_play_comparison(page, gid, day, mode, ds, prompt_substrs,
         _dbg(gid, f"worldle {mode} comparison: no selection after "
                   f"click (via={via}); submitting anyway — "
                   "store-verify arbitrates")
+    if mode == "area" and ok:
+        # Iter-22 (ANALYSIS19 §3c): re-verify the visible round
+        # AFTER the click and BEFORE submit. Attempt 2 proved
+        # the click itself can flip the view Area ->
+        # PopulationCurrency; submitting into the flipped view
+        # answers the WRONG round. If the view flipped, the
+        # click did not register: DO NOT submit — return
+        # partial with the reason. probe_ran=False (probe never
+        # executed) does not block: the click + store-verify
+        # below arbitrate, as before.
+        _vis2 = _s_worldle_visible_area_ui(page)
+        if _vis2.get("probe_ran") and not _vis2.get("visible"):
+            _dbg(gid, "worldle area comparison: view FLIPPED after "
+                      "click (no longer visible Area) — NOT "
+                      "submitting into the wrong round "
+                      f"(reason={_vis2.get('reason')})")
+            return ("partial", None,
+                    "comparison click flipped the view off Area "
+                    f"(reason={_vis2.get('reason')}); click did "
+                    "NOT register — NOT submitted into the wrong "
+                    "round")
     _s_worldle_submit_guarded(page, gid, mode, ds)
     _settle(page, base=2000)
     if verify_store and _store_key is not None and _before is not None:

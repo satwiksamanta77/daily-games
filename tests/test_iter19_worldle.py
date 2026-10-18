@@ -214,15 +214,20 @@ class TestCapitalDotNameIter19(unittest.TestCase):
         self.assertEqual((got["x"], got["y"]), (1090.0, 435.0))
         self.assertIn("label", got["detail"])
 
-    def test_shared_label_on_two_dots_still_ambiguous(self):
-        # Two dots carrying the SAME label value: the value is
-        # shared, so neither dot is identified -> None, never a
-        # coin-flip click.
+    def test_shared_label_on_two_dots_falls_back_to_nearest_dot(
+            self):
+        # Iter-22: two dots carrying the SAME label value share
+        # the (source, value) pair, so it is GROUP evidence and
+        # is dropped — neither dot is identified BY NAME — and
+        # nearest-dot then picks the dot near the fit point
+        # (ANALYSIS19 §2 supersedes the iter-19 None).
         dots = [dict(d) for d in self.DOTS]
         dots[0] = dict(dots[0], label="Kuwait City", label_dist=12.0)
         dots[2] = dict(dots[2], label="Kuwait City", label_dist=18.0)
-        self.assertIsNone(R._worldle_capital_pick_pin_target(
-            self._probe(dots=dots), self.FIT, "Kuwait City"))
+        got = R._worldle_capital_pick_pin_target(
+            self._probe(dots=dots), self.FIT, "Kuwait City")
+        self.assertEqual(got["method"], "nearest-dot")
+        self.assertEqual((got["x"], got["y"]), (1090.0, 435.0))
 
     def test_two_distinct_labels_naming_capital_still_ambiguous(self):
         # Distinct CONTAINED values that BOTH name the capital
@@ -238,17 +243,17 @@ class TestCapitalDotNameIter19(unittest.TestCase):
         self.assertIsNone(R._worldle_capital_pick_pin_target(
             self._probe(dots=dots), self.FIT, "Kuwait City"))
 
-    def test_nearest_dot_to_projection_still_forbidden(self):
-        # Unnamed dots + a nearby in-fill point: the picker must
-        # return the in-fill point, NEVER the nearest dot, even
-        # when a dot sits closer to the fit point than the
-        # in-fill point does.
+    def test_nearest_dot_to_projection_now_picked(self):
+        # Iter-22 SUPERSEDES the iter-19 ban (ANALYSIS19 §2):
+        # unnamed dots + a nearby in-fill point -> the nearest
+        # dot IS the target; an in-fill point not on a dot does
+        # not register on this widget.
         got = R._worldle_capital_pick_pin_target(
             self._probe(corrected={"x": 1060.0, "y": 410.0,
                                    "dist": 17.9}),
             self.FIT, "Kuwait City")
-        self.assertEqual(got["method"], "in-fill-search")
-        self.assertEqual((got["x"], got["y"]), (1060.0, 410.0))
+        self.assertEqual(got["method"], "nearest-dot")
+        self.assertEqual((got["x"], got["y"]), (1090.0, 435.0))
 
     def test_attempt_summary_lists_every_dots_evidence(self):
         dots = [dict(d) for d in self.DOTS]

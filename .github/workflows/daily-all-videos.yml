@@ -1809,11 +1809,11 @@ jobs:
         # because the filter only deleted finals. Root cause: the pack
         # zipped per-game dirs wholesale instead of finals-only. Now
         # EVERY mp4 in a solved=False dir is dropped from the staging
-        # copy (finals, gameplay, quarantined files alike), so the pack
-        # is finals (+ solved gameplay) ONLY. The per-game artifacts
-        # themselves are untouched — this deletes from the downloaded
-        # staging copy only. A follow-up verification step fails the
-        # job if any mp4 survives in an unsolved dir (fail-closed).
+        # copy (finals, gameplay, quarantined files alike). The
+        # per-game artifacts themselves are untouched — this deletes
+        # from the downloaded staging copy only. A follow-up
+        # verification step fails the job if any mp4 survives in an
+        # unsolved dir (fail-closed).
         run: |
           python - <<'PYEOF'
           import json, pathlib
@@ -1828,10 +1828,34 @@ jobs:
                       print(f"bundle filter: dropping unsolved video {mp4}")
                       mp4.unlink()
           PYEOF
+      - name: Exclude raw gameplay from the pack (finals-only)
+        # Fix-loop iter 22 (P1, ANALYSIS19 §5): the bundle contract
+        # is FINALS-ONLY. The iter-19 filter dropped every mp4 in
+        # unsolved dirs, but SOLVED games' raw gameplay_1080.mp4
+        # still rode along — and Nerdle's raw (275.6 s vs the
+        # final's 230.3 s) still contains the CUT Speed chapter
+        # (unwon footage inside a solved game's dir), because the
+        # raw is polished BEFORE the unwon chapter is cut. Delete
+        # gameplay_1080.mp4 from EVERY per-game dir in the staging
+        # copy, solved or not, so the pack ships *_final_*.mp4
+        # ONLY. The per-game artifacts themselves are untouched —
+        # they still hold raw + final; only the bundle pack is
+        # finals-only.
+        run: |
+          python - <<'PYEOF'
+          import pathlib
+          root = pathlib.Path("all-artifacts")
+          for raw in sorted(root.glob("video-*/gameplay_1080.mp4")):
+              print(f"bundle filter: dropping raw gameplay {raw} "
+                    f"(finals-only pack)")
+              raw.unlink()
+          PYEOF
       - name: Verify no unsolved video survived the bundle filter
         # Fail-closed: if the filter above ever stops deleting (glob
         # change, new filename), the job fails instead of shipping
-        # unsolved footage as if it were a solved video.
+        # unsolved footage as if it were a solved video. Also
+        # verifies the finals-only contract: no raw gameplay_1080.mp4
+        # may survive in ANY per-game dir, solved or not.
         run: |
           python - <<'PYEOF'
           import json, pathlib, sys
@@ -1850,6 +1874,15 @@ jobs:
                   print(f"  {mp4}")
               sys.exit(1)
           print("bundle filter verified: no mp4 in any solved=False dir")
+          raw = sorted(root.glob("video-*/gameplay_1080.mp4"))
+          if raw:
+              print("bundle filter LEAK: raw gameplay survived "
+                    "(finals-only pack):")
+              for mp4 in raw:
+                  print(f"  {mp4}")
+              sys.exit(1)
+          print("bundle filter verified: no raw gameplay_1080.mp4 "
+                "in any dir (finals-only pack)")
           PYEOF
       - name: Zip into one pack
         run: |
