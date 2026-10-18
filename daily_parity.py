@@ -544,13 +544,21 @@ def generate_mode_card(out_path, game, mode_name, subtitle=""):
 
 def generate_facts(out_path, game, date_str, answer, steps,
                  kind=None, palette=None, scoring=True,
-                 guesses_played=None, final_answers=1):
+                 guesses_played=None, final_answers=1,
+                 extra_stat=None):
     """Solve breakdown: stat cards instead of a wall of text.
 
     scoring=False for games with NO per-letter feedback (Betweenle,
     Framed, Semantle, Contexto): no "green rows" stat and no
     pattern-derived clue lines — only true facts (submitted guesses,
     guess count, final answer).
+
+    extra_stat=(value, label) REPLACES the "green rows" stat with
+    a game-appropriate metric (Waffle: ("11", "swaps used")).
+    Waffle never shows "green rows": the generic per-letter
+    metric is meaningless for a swap puzzle (iter-20 card read
+    "0 green rows" on a real solve), so with no extra_stat a
+    Waffle card drops that stat instead of printing a 0.
 
     guesses_played overrides the step count when the steps are NOT
     the submitted guesses (Framed: one step per mode answer, but
@@ -564,7 +572,11 @@ def generate_facts(out_path, game, date_str, answer, steps,
     rows = list(steps or [])
     ng = int(guesses_played) if guesses_played else (len(rows) or 1)
     stats = [(str(ng), "guesses played")]
-    if scoring:
+    if extra_stat is not None:
+        # Iter-21: game-appropriate metric replaces "green rows"
+        # (Waffle: swaps used, from the solver evidence).
+        stats.append((str(extra_stat[0]), str(extra_stat[1])))
+    elif scoring and str(game or "").lower() != "waffle":
         stats.append((str(sum(1 for s in rows
                          if "G" in str(s.get("pattern", "")).upper())),
                  "green rows"))

@@ -18,6 +18,7 @@ import sys
 import random
 import time
 import subprocess
+import weakref
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -1110,8 +1111,44 @@ def _unplayed_pool(pool, played):
             if not any(_row_matches_equation(p, s) for p in played)]
 
 
+def _green_row_count(state):
+    """Fully-green (all-feedback-2) rows across all grids. Pure.
+
+    Iter-21 (ANALYSIS18 §6.3): speed's 2 "boards" are 2 fully-green
+    rows in ONE grid (the pre-filled starter row + the played
+    answer), not 2 `div.pb-grid` elements — `state` never shows a
+    2nd grid. Counting green rows is how the single-grid flow is
+    reconciled with the 2-board model.
+    """
+    n = 0
+    for g in (state or []):
+        for r in (g.get("rows") or []):
+            if r and all(v == 2 for v in r):
+                n += 1
+    return n
+
+
+def _mode_won_by_state(state, boards_n, mode_id=None):
+    """State-only win: every grid solved, or (speed only) enough
+    fully-green rows in the single-grid flow. Pure.
+
+    Iter-21: for speed, `len(state) >= boards_n` is never true
+    (one grid), so the old state check could never win speed even
+    with both solutions green. The green-row count is the
+    single-grid equivalent — and it is only a state signal; the
+    game-granted win (popup / WIN_JS) is still required by
+    _check_win_verified.
+    """
+    if isinstance(state, list) and state and len(state) >= boards_n \
+            and all(grid_solved(g) for g in state):
+        return True
+    if mode_id == "speed" and isinstance(state, list) and state:
+        return _green_row_count(state) >= boards_n
+    return False
+
+
 async def _check_win_verified(page, cols, boards_n, state, played,
-                              solutions):
+                              solutions, mode_id=None):
     """Page-win check with multi-board verification (iter-19, P2,
     ANALYSIS16 §6.13: speed typed only 1 of 2 site solutions yet
     signal='won' rested on the page wonText).
@@ -1125,27 +1162,313 @@ async def _check_win_verified(page, cols, boards_n, state, played,
     solution pool (answer files + gameState), NOT the merged
     solver pool — padded worker guesses are not solutions and must
     never gate a win.
+
+    Iter-21 (ANALYSIS18 §6.3, speed single-grid flow): for speed
+    ONLY, the 2-board demand is reconciled with the site's actual
+    flow — one grid holding 2 fully-green rows (pre-filled
+    submitted starter + played answer). A speed win is verified
+    when EITHER (a) WIN_JS reports won AND at least `boards_n`
+    fully-green rows exist AND every site solution is accounted
+    for in `played` (which includes the seeded pre-filled starter
+    history), AND every grid in `state` is solved, OR (b) the
+    game's own win popup is present AND every grid in `state` is
+    solved AND every site solution is accounted for. The popup alone never wins: coverage + solved grids are
+    still required, so a win the game did not grant is never
+    claimed. Quad/minibi keep the strict every-grid rule.
     """
     try:
         won = bool(await page.evaluate(
             WIN_JS, {"cols": cols, "boards": boards_n}))
     except Exception:
         return False
+    if boards_n <= 1:
+        return won
+    if isinstance(state, list) and len(state) >= boards_n \
+            and all(grid_solved(g) for g in state):
+        # Iter-19: no page win means no win — even with every
+        # grid solved, WIN_JS must report won.
+        if not won:
+            return False
+        if solutions and not _solutions_played_cover(played, solutions):
+            print(f"[nerdle] multi-board win UNVERIFIED: all grids solved "
+                  f"but not all site solutions played "
+                  f"(played={played} solutions={solutions}) — continuing")
+            return False
+        return True
+    if mode_id == "speed":
+        # WIN_JS does NOT gate the popup path: in the real
+        # single-grid flow the starter row arrives SUBMITTED but
+        # not green (a pre-filled guess, not the solution), so
+        # only ONE row is green when the game grants the win and
+        # WIN_JS (green rows >= boards) is False. The game's own
+        # popup is an INDEPENDENT verdict signal — it is checked
+        # even when WIN_JS misses the win.
+        _covered = (not solutions
+                    or _solutions_played_cover(played, solutions))
+        _green = _green_row_count(state)
+        # Every grid in `state` must be solved: after an advance
+        # reveals a 2nd board, the old win (green rows from board
+        # 1) must NOT re-verify while board 2 is still unsolved
+        # — the loop keeps playing until all boards are solved.
+        _all_solved = bool(state) and all(
+            grid_solved(g) for g in state)
+        if won and _green >= boards_n and _covered and _all_solved:
+            print(f"[nerdle] speed win VERIFIED (single-grid flow): "
+                  f"{_green} fully-green rows >= {boards_n} boards, "
+                  f"all site solutions accounted for")
+            return True
+        # (b) The game granted the win (popup present): accept the
+        # popup as the verdict signal ONLY with every grid solved
+        # + coverage. The popup alone never wins.
+        _popup = False
+        try:
+            _popup = bool(await page.evaluate(WIN_POPUP_JS))
+        except Exception:
+            _popup = False
+        if _popup and _all_solved and _covered:
+            print(f"[nerdle] speed win VERIFIED (game win popup): "
+                  f"popup present + all grids solved + all site "
+                  f"solutions accounted for")
+            return True
+        print(f"[nerdle] speed win UNVERIFIED: page reports won={won} "
+              f"but single-grid flow not satisfied (green_rows={_green} "
+              f"boards={boards_n} covered={_covered} popup={_popup} "
+              f"all_solved={_all_solved}) "
+              f"— continuing")
+        return False
     if not won:
         return False
-    if boards_n <= 1:
-        return True
-    if not (isinstance(state, list) and len(state) >= boards_n
-            and all(grid_solved(g) for g in state)):
-        print(f"[nerdle] multi-board win UNVERIFIED: page reports "
-              f"won but not all {boards_n} grids solved — continuing")
-        return False
-    if solutions and not _solutions_played_cover(played, solutions):
-        print(f"[nerdle] multi-board win UNVERIFIED: all grids solved "
-              f"but not all site solutions played "
-              f"(played={played} solutions={solutions}) — continuing")
-        return False
-    return True
+    print(f"[nerdle] multi-board win UNVERIFIED: page reports "
+          f"won but not all {boards_n} grids solved — continuing")
+    return False
+
+
+WIN_POPUP_JS = """
+// Iter-21 (SPEED_WIN_POPUP): the game's own win popup, as a
+// verdict signal for speed's single-grid flow. Matches a win
+// popup/dialog/modal carrying the game's win text — NOT bare
+// page text (a stale "you won" line elsewhere must not count).
+// Returns true iff such a popup element is visible.
+() => {
+  const re = /you won|won in \\d|great job/i;
+  const vis = (el) => {
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    if (!r || r.width <= 0 || r.height <= 0) return false;
+    try {
+      const cs = getComputedStyle(el);
+      if (cs && (cs.display === 'none' || cs.visibility === 'hidden'))
+        return false;
+    } catch (e) {}
+    return true;
+  };
+  for (const el of document.querySelectorAll(
+      '[role="dialog"], [role="alertdialog"], .modal, .popup, '
+      + '[class*="modal"], [class*="popup"], [class*="Modal"]')) {
+    if (vis(el) && re.test(el.innerText || '')) return true;
+  }
+  return false;
+}
+"""
+
+SPEED_ADVANCE_JS = """
+// Iter-21 (SPEED_ADVANCE): look for a "Next"-style advance
+// button INSIDE the win popup. Returns {popup, next_label} —
+// the label of the first visible Next/Continue button, or null.
+// NEVER matches X/close/share/play-again: advancing is not
+// dismissing, and restarting is not advancing.
+() => {
+  const re = /you won|won in \\d|great job/i;
+  const vis = (el) => {
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    if (!r || r.width <= 0 || r.height <= 0) return false;
+    try {
+      const cs = getComputedStyle(el);
+      if (cs && (cs.display === 'none' || cs.visibility === 'hidden'))
+        return false;
+    } catch (e) {}
+    return true;
+  };
+  let popup = null;
+  for (const el of document.querySelectorAll(
+      '[role="dialog"], [role="alertdialog"], .modal, .popup, '
+      + '[class*="modal"], [class*="popup"], [class*="Modal"]')) {
+    if (vis(el) && re.test(el.innerText || '')) { popup = el; break; }
+  }
+  if (!popup) return {popup: false, next_label: null};
+  const scope = popup;
+  for (const b of scope.querySelectorAll('button, a')) {
+    if (!vis(b)) continue;
+    const t = (b.textContent || '').trim();
+    if (/^(next|continue|next board|play next|next puzzle)\\b/i.test(t))
+      return {popup: true, next_label: t};
+  }
+  return {popup: true, next_label: null};
+}
+"""
+
+SPEED_ADVANCE_CLICK_JS = """
+// Iter-21 (SPEED_ADVANCE): click the Next-style button inside
+// the win popup (same match as SPEED_ADVANCE_JS). Returns the
+// label clicked, or null.
+(label) => {
+  const vis = (el) => {
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    if (!r || r.width <= 0 || r.height <= 0) return false;
+    try {
+      const cs = getComputedStyle(el);
+      if (cs && (cs.display === 'none' || cs.visibility === 'hidden'))
+        return false;
+    } catch (e) {}
+    return true;
+  };
+  const re = /you won|won in \\d|great job/i;
+  for (const el of document.querySelectorAll(
+      '[role="dialog"], [role="alertdialog"], .modal, .popup, '
+      + '[class*="modal"], [class*="popup"], [class*="Modal"]')) {
+    if (!vis(el) || !re.test(el.innerText || '')) continue;
+    for (const b of el.querySelectorAll('button, a')) {
+      if (!vis(b)) continue;
+      if ((b.textContent || '').trim() === label) {
+        b.click();
+        return label;
+      }
+    }
+  }
+  return null;
+}
+"""
+
+SPEED_LOAD_DUMP_JS = """
+// Iter-21 (SPEED_LOAD_DUMP): dump EVERY storage key (not just
+// the 5 restore-gate keys) + all grid states on speed load.
+// The restore gate read keys=[] guesses=0 while the video
+// showed a filled row — the gate reads a DIFFERENT store than
+// the renderer, or the starter row is site-provided rather
+// than restored. This dump names the true store.
+() => {
+  const dumpStore = (store) => {
+    const out = [];
+    try {
+      for (let i = 0; i < store.length; i++) {
+        const k = store.key(i);
+        let v = null;
+        try { v = store.getItem(k); } catch (e) {}
+        out.push({key: k, len: (v || '').length,
+                  preview: (v || '').slice(0, 300)});
+      }
+    } catch (e) {}
+    return out;
+  };
+  const grids = [];
+  for (const g of document.querySelectorAll('div.pb-grid')) {
+    const texts = [];
+    for (const r of g.children) {
+      const cells = [];
+      for (const c of r.children) {
+        if ((c.className || '').toString().includes('keyboard-cell'))
+          cells.push(c);
+      }
+      if (cells.length) texts.push(
+        Array.from(cells).map(
+          (c) => (c.innerText || c.textContent || '').trim()).join(''));
+    }
+    grids.push({rows: texts});
+  }
+  const t = (document.body.innerText || '');
+  return {local: dumpStore(localStorage),
+          session: dumpStore(sessionStorage),
+          grids: grids,
+          win_popup_present: /you won|won in \\d|great job/i.test(t),
+          body_len: t.length};
+}
+"""
+
+
+async def _nerdle_speed_load_dump(page):
+    """Log full storage + grid states on speed load (iter-21).
+
+    Returns the dump dict or None. Never raises: a failed dump
+    is evidence of a probe failure, not a reason to stop play.
+    """
+    try:
+        dump = await page.evaluate(SPEED_LOAD_DUMP_JS)
+    except Exception as _e:
+        print(f"[speed] load dump failed: {str(_e)[:120]}")
+        return None
+    if not isinstance(dump, dict):
+        print("[speed] load dump unavailable (probe returned non-dict)")
+        return None
+    _local = dump.get("local") or []
+    _grids = dump.get("grids") or []
+    print(f"[speed] load dump: localStorage keys="
+          f"{[d.get('key') for d in _local]} "
+          f"sessionStorage keys="
+          f"{[d.get('key') for d in (dump.get('session') or [])]} "
+          f"grids={len(_grids)} "
+          f"grid_rows={[g.get('rows') for g in _grids]} "
+          f"win_popup_present={dump.get('win_popup_present')}")
+    for _d in _local:
+        print(f"[speed] load dump localStorage[{_d.get('key')!r}] "
+              f"len={_d.get('len')} preview={str(_d.get('preview'))[:300]!r}")
+    return dump
+
+
+async def _speed_try_advance(page, cols, prev_state):
+    """Try to advance past speed's win popup via its Next button.
+
+    Iter-21 (ANALYSIS18 §6.3): if board 2 requires advancing past
+    the win popup, a "Next"/"Continue" click does that — the sweep
+    never X-dismisses the win popup, and this helper never clicks
+    X/close/share/play-again either. Returns (outcome, new_state):
+    "advanced" (Next clicked AND a new/reset board appeared —
+    keep playing), "no-next" (win popup has no Next button —
+    single-grid flow, game granted the win), "no-popup" (no win
+    popup at all), "no-new-board" (Next clicked but no new board
+    appeared — single-grid flow confirmed). Never raises.
+    """
+    try:
+        _found = await page.evaluate(SPEED_ADVANCE_JS)
+    except Exception as _e:
+        print(f"[speed] advance probe failed: {str(_e)[:120]}")
+        return "no-popup", prev_state
+    if not isinstance(_found, dict) or not _found.get("popup"):
+        print("[speed] advance: no win popup present")
+        return "no-popup", prev_state
+    _label = _found.get("next_label")
+    if not _label:
+        print("[speed] advance: win popup present, no Next button "
+              "(single-grid flow — game granted the win)")
+        return "no-next", prev_state
+    try:
+        _clicked = await page.evaluate(SPEED_ADVANCE_CLICK_JS, _label)
+    except Exception as _e:
+        print(f"[speed] advance Next click failed: {str(_e)[:120]}")
+        return "no-new-board", prev_state
+    if not _clicked:
+        print("[speed] advance: Next button vanished before click")
+        return "no-new-board", prev_state
+    print(f"[speed] advance: clicked Next button { _clicked!r} — "
+          f"waiting for board 2")
+    try:
+        await page.wait_for_timeout(1500)
+        _new = await read_state(page, cols, tries=3)
+    except Exception:
+        _new = []
+    if _new and (len(_new) > len(prev_state or [])
+                 or any(eval_count(_new[b]) < eval_count(prev_state[b])
+                        for b in range(min(len(_new),
+                                           len(prev_state or []))))):
+        print(f"[speed] advance: NEW board appeared "
+              f"(grids {len(prev_state or [])} -> {len(_new)}) — "
+              f"continuing play")
+        return "advanced", _new
+    print("[speed] advance: Next clicked but no new board appeared "
+          "(single-grid flow confirmed)")
+    return "no-new-board", (_new or prev_state)
+
 
 
 WIN_JS = """
@@ -1513,6 +1836,16 @@ async def sweep_popups(page, tag=""):
 # short aria-label/text containing the char, button text exact /
 # 'x²', data-key/data-char. The short-length guard on the
 # contains-matches keeps a '10²'-style label from matching.
+#
+# Iter-21 (P0, ANALYSIS18 §6.2): the matcher collected ONLY the
+# FIRST DOM-order match and both consumers gave up on it: the
+# click returned false when that one element had a zero rect,
+# never trying the other matches. A hidden/stale/zero-rect
+# duplicate (keyboard re-render between guesses) therefore hid
+# the VISIBLE X² button. Now the matcher collects ALL matches
+# (`_cands`) and every consumer iterates them, clicking / boxing
+# the first VISIBLE + ENABLED one. The candidate dump JS
+# (POWER_BTN_CANDIDATES_JS) lists every match for failure logs.
 _POWER_BTN_MATCH_JS = """
   const norm = (s) => (s || '').trim();
   const isPowerBtn = (b) => {
@@ -1528,38 +1861,160 @@ _POWER_BTN_MATCH_JS = """
       return true;
     return false;
   };
-  const b = Array.from(document.querySelectorAll('button'))
-    .find(isPowerBtn);
+  const _cands = Array.from(document.querySelectorAll('button'))
+    .filter(isPowerBtn);
+  const _candUsable = (b) => {
+    if (!b) return false;
+    if (b.disabled) return false;
+    if ((b.getAttribute('aria-disabled') || '').toLowerCase() === 'true')
+      return false;
+    const r = b.getBoundingClientRect();
+    if (!r || r.width <= 0 || r.height <= 0) return false;
+    try {
+      const cs = getComputedStyle(b);
+      if (cs && (cs.display === 'none' || cs.visibility === 'hidden'))
+        return false;
+    } catch (e) {}
+    return true;
+  };
 """
 
 CLICK_POWER_JS = """
 (ch) => {
 """ + _POWER_BTN_MATCH_JS + """
-  if (!b) return false;
+  // Iter-21: iterate ALL matches — the first DOM-order match may
+  // be a hidden/stale/zero-rect duplicate. Click the first
+  // VISIBLE + ENABLED one.
   // Iter-17: NO offsetParent filter — a position:fixed keyboard bar
   // has offsetParent === null in Chrome, so the old filter could
   // hide the very button being sought (same class of bug as the
   // iter-15 header probe). Re-find fresh on every call, scroll into
   // view, and require a non-empty rect before clicking.
-  try { b.scrollIntoView({block: 'center'}); } catch (e) {}
-  const r = b.getBoundingClientRect();
-  if (!r || r.width <= 0 || r.height <= 0) return false;
-  b.click();
-  return true;
+  for (const b of _cands) {
+    if (!_candUsable(b)) continue;
+    try { b.scrollIntoView({block: 'center'}); } catch (e) {}
+    if (!_candUsable(b)) continue;
+    b.click();
+    return true;
+  }
+  return false;
 }
 """
 
 POWER_BTN_BOX_JS = """
 (ch) => {
 """ + _POWER_BTN_MATCH_JS + """
-  if (!b) return null;
-  try { b.scrollIntoView({block: 'center'}); } catch (e) {}
-  const r = b.getBoundingClientRect();
-  if (!r || r.width <= 0 || r.height <= 0) return null;
-  return {x: r.x + r.width / 2, y: r.y + r.height / 2,
-          w: r.width, h: r.height};
+  // Iter-21: iterate ALL matches (same first-match trap as the
+  // click) — return the first VISIBLE + ENABLED one's centre.
+  for (const b of _cands) {
+    if (!_candUsable(b)) continue;
+    try { b.scrollIntoView({block: 'center'}); } catch (e) {}
+    if (!_candUsable(b)) continue;
+    const r = b.getBoundingClientRect();
+    return {x: r.x + r.width / 2, y: r.y + r.height / 2,
+            w: r.width, h: r.height};
+  }
+  return null;
 }
 """
+
+POWER_BTN_CANDIDATES_JS = """
+// Iter-21 (POWER_BTN_CANDIDATES): every power-key match with the
+// fields that decide clickability — so a failure log names the
+// blocker (hidden duplicate, zero rect, disabled) instead of
+// just clicked=False.
+(ch) => {
+""" + _POWER_BTN_MATCH_JS + """
+  return _cands.map((b) => {
+    const r = b.getBoundingClientRect();
+    let display = null, visibility = null;
+    try {
+      const cs = getComputedStyle(b);
+      display = cs ? cs.display : null;
+      visibility = cs ? cs.visibility : null;
+    } catch (e) {}
+    return {tag: b.tagName,
+            text: (b.textContent || '').trim().slice(0, 24),
+            aria: b.getAttribute('aria-label'),
+            rect: {x: Math.round(r.x), y: Math.round(r.y),
+                   w: Math.round(r.width), h: Math.round(r.height)},
+            disabled: !!b.disabled,
+            aria_disabled: b.getAttribute('aria-disabled'),
+            display: display, visibility: visibility,
+            usable: _candUsable(b)};
+  });
+}
+"""
+
+
+# Equations whose full ²/³ entry ladder already failed once, PER
+# PAGE (iter-21, P2 ladder cap). A full ladder = all four entry
+# methods (js-click + coordinate + clipboard + insert_text) with
+# fresh re-queries, each verified by the tile/sup delta.
+# Re-running the identical ladder after it exhausted is
+# deterministically futile (~27s per type_guess repeat x 4
+# repeats = ~108s burned in iter-20) — the cap makes the second
+# and later attempts fail fast instead. Keyed by (page,
+# equation): a module-global per-equation set would leak across
+# modes AND across tests sharing an equation (a failing test
+# for '1²+67+8=76' would cap every later caller of that
+# equation), so the set lives per page object (WeakKeyDictionary
+# — Playwright Page has no __slots__, so it is weakrefable —
+# auto-cleaned when the page is dropped) and play_mode resets
+# it for its page at mode start (one page serves all 9 modes).
+# Plain (non-superscript) equations never enter the set, so the
+# site-solution retry still rescues them. No `global` statement
+# is used anywhere (type_equation holds no global entry state).
+_POWER_LADDER_FAILED_BY_PAGE = weakref.WeakKeyDictionary()
+
+
+def _ladder_failed_set(page):
+    """The ² ladder-cap set for `page` (iter-21, P2).
+
+    Returns the live per-page set, creating it on first use.
+    Falls back to a fresh (uncapped) set for an unweakrefable
+    page rather than crashing — the cap simply never engages
+    there instead of breaking entry.
+    """
+    try:
+        _s = _POWER_LADDER_FAILED_BY_PAGE.get(page)
+        if _s is None:
+            _s = set()
+            _POWER_LADDER_FAILED_BY_PAGE[page] = _s
+        return _s
+    except TypeError:
+        return set()
+
+
+async def _power_button_candidates(page, ch):
+    """All power-key matches with clickability fields (iter-21).
+
+    Pure probe — never raises, returns [] on failure.
+    """
+    try:
+        cands = await page.evaluate(POWER_BTN_CANDIDATES_JS, ch)
+        if isinstance(cands, list):
+            return cands
+    except Exception:
+        pass
+    return []
+
+
+async def _dump_power_candidates(page, ch):
+    """Log every power-key candidate on entry failure (iter-21).
+
+    The iter-20 log said only `clicked=False` while the X² button
+    was visibly rendered — the next artifact must show WHICH
+    element blocked the click (hidden duplicate, zero rect,
+    disabled) instead. Never raises.
+    """
+    try:
+        cands = await _power_button_candidates(page, ch)
+    except Exception:
+        cands = []
+    print(f"[type] power key {ch!r} candidates ({len(cands)}): "
+          f"{str(cands)[:2000]}")
+    return cands
 
 
 async def _click_power_key(page, ch, attempts=4, wait_ms=200):
@@ -1578,6 +2033,11 @@ async def _click_power_key(page, ch, attempts=4, wait_ms=200):
     settle wait between them. Returns True on the first reported
     click. Verification still happens in type_equation (tile/sup
     delta); this helper only delivers the click.
+
+    Iter-21 (ANALYSIS18 §6.2): each CLICK_POWER_JS evaluation now
+    iterates ALL matches and clicks the first VISIBLE + ENABLED
+    one — a hidden/stale/zero-rect first DOM-order match no
+    longer hides the visible button.
     """
     for _ in range(max(1, attempts)):
         try:
@@ -1953,6 +2413,20 @@ async def type_equation(page, eq, delay=200):
             continue
         if part in "²³":
             _t_part = time.time()
+            # Iter-21 (P2, ANALYSIS18 §7.8 ladder cap): this
+            # equation's FULL ladder already failed once on this
+            # page (all four methods, fresh re-queries,
+            # tile/sup-verified). The iter-20 run burned ~108s
+            # re-running the identical ladder across type_guess
+            # + outer retries. Fail fast: skip the method loop
+            # entirely; the FAILED branch below logs the cap
+            # instead of re-marking/dumping.
+            _ladder_failed = _ladder_failed_set(page)
+            _ladder_capped = eq in _ladder_failed
+            if _ladder_capped:
+                print(f"[type] power key {part!r} ladder cap: full "
+                      f"ladder already failed once for {eq!r} — "
+                      f"skipping re-entry (fail fast)")
             # Iter-18 (ANALYSIS15 §2): the entry verifier is the
             # TILE / SUPERSCRIPT-STYLED-CELL delta between snapshots
             # taken before and after each method — NOT the U+00B2
@@ -1978,8 +2452,9 @@ async def type_equation(page, eq, delay=200):
             after = before
             _after_state = _before_state
             _exhausted = True
-            for _method in ("js-click", "coordinate click",
-                            "clipboard paste", "insert_text"):
+            for _method in (() if _ladder_capped else
+                            ("js-click", "coordinate click",
+                             "clipboard paste", "insert_text")):
                 _delivered = False
                 if _method == "js-click":
                     # Method 1: JS click via _click_power_key —
@@ -2067,11 +2542,22 @@ async def type_equation(page, eq, delay=200):
                       f"U+00B2 count {before}->{after}); trying next "
                       "method")
             if not verified and _exhausted:
-                print(f"[type] power key {part!r} FAILED after all "
-                      "entry methods (js-click + coordinate click + "
-                      "clipboard paste + insert_text); "
-                      f"U+00B2 count {before}->{after} — row will "
-                      "stall; retry ladder must re-enter")
+                if _ladder_capped:
+                    print(f"[type] power key {part!r} still failed "
+                          f"(ladder cap — failure already recorded "
+                          f"for {eq!r}; no re-entry)")
+                else:
+                    # Iter-21: record the full-ladder failure so
+                    # later attempts fail fast (ladder cap), and
+                    # dump EVERY candidate so the artifact names
+                    # the blocker instead of just clicked=False.
+                    _ladder_failed.add(eq)
+                    print(f"[type] power key {part!r} FAILED after all "
+                          "entry methods (js-click + coordinate click + "
+                          "clipboard paste + insert_text); "
+                          f"U+00B2 count {before}->{after} — row will "
+                          "stall; ladder cap engaged (no re-entry)")
+                    await _dump_power_candidates(page, part)
             print(f"[type] stage superscript {part!r} done "
                   f"verified={verified} +{time.time() - _t_part:.1f}s")
             await page.wait_for_timeout(120)
@@ -2120,6 +2606,15 @@ async def _verify_row_or_retype(page, eq, cols):
         return True
     print(f"[type] pre-Enter row MISMATCH typed={eq!r} row={_row!r} — "
           "clear + retype whole row")
+    # Iter-21 ladder cap: the full ² ladder already failed once
+    # for this equation — a clear + retype would just re-run the
+    # identical ladder. Fail fast; the caller still presses Enter
+    # on the board row as-is (read-back records it).
+    if any(c in eq for c in "²³") and eq in _ladder_failed_set(page):
+        print(f"[type] pre-Enter retype SKIPPED (ladder cap): full "
+              f"² ladder already failed for {eq!r} — submitting "
+              f"board row as-is")
+        return False
     try:
         await focus_grid(page)
         for _ in range(cols + 2):
@@ -2284,6 +2779,17 @@ async def type_guess(page, eq, cols, prev):
             return state, counts, ok
     except Exception:
         pass
+    # Iter-21 ladder cap: the full ² ladder already failed once
+    # for this equation (attempt1 + pre-Enter retype, if any).
+    # Retry 2's clear + retype would re-run the identical ladder
+    # (~27s per type_guess repeat in iter-20). Fail fast instead
+    # of re-entering a deterministically failing entry.
+    if any(c in eq for c in "²³") and eq in _ladder_failed_set(page):
+        print(f"[type] {eq} retry2 SKIPPED (ladder cap): full ² "
+              f"ladder already failed once — not re-entering")
+        print(f"[type] stage type_guess done eq={eq!r} ok=False "
+              f"+{time.time() - _t_tg:.1f}s")
+        return state, counts, False
     try:
         await page.keyboard.press("Escape")
     except Exception:
@@ -2449,6 +2955,17 @@ async def play_mode(page, mode, script_dir, official=None):
     global _TYPE_PRIMED, _PRE_GUESS_DISMISSED
     _TYPE_PRIMED = False
     _PRE_GUESS_DISMISSED = False
+    # Iter-21: fresh ² ladder-cap state per mode (one mode's
+    # failure never poisons another mode — one page serves all
+    # 9 modes, so the per-page set is reset here), and the
+    # seeded board history (pre-filled evaluated rows at load)
+    # for win verification — the speed starter row counts toward
+    # the played solutions even though the bot did not type it.
+    try:
+        _POWER_LADDER_FAILED_BY_PAGE[page] = set()
+    except TypeError:
+        pass
+    seeded_history = []
     eqs = list((official or {}).get(mode["id"]) or [])
     official_eqs = list(eqs)  # target-date official list, BEFORE site merge
     cols = mode["len"]
@@ -2566,6 +3083,13 @@ async def play_mode(page, mode, script_dir, official=None):
         _stage("cookies/modals")
         state = await read_state(page, cols, tries=6)
         _stage(f"read_state state={'found' if state else 'empty'}")
+        # Iter-21 (ANALYSIS18 §6.3): on speed load, dump FULL
+        # storage + all grid states — the restore gate read
+        # keys=[] guesses=0 while the video showed a filled row,
+        # so the gate reads a different store than the renderer
+        # (or the starter row is site-provided, not restored).
+        if mode["id"] == "speed":
+            await _nerdle_speed_load_dump(page)
         if not site_eqs:
             try:
                 for body in (await page.evaluate(FETCH_JS) or []):
@@ -2696,6 +3220,13 @@ async def play_mode(page, mode, script_dir, official=None):
                         pass
                     state = await read_state(page, cols) or state
             hists, typed_guesses = _seed_history(state)
+            # Iter-21: the seeded evaluated rows (e.g. speed's
+            # pre-filled SUBMITTED starter row) are board history:
+            # they count toward the played solutions in every
+            # win verification below, including the post-loop and
+            # final checks (which previously saw played_here only
+            # and could never cover the starter).
+            seeded_history = list(typed_guesses)
             # Equations WE typed this run (typed_guesses also holds
             # pre-filled starter rows from load; PLAYED must be ours only).
             played_here = []
@@ -2723,10 +3254,24 @@ async def play_mode(page, mode, script_dir, official=None):
                 # every grid solved + every site solution played.
                 # `pool` is the SITE solution pool (not the merged
                 # solver pool); `typed_guesses + played_here` is
-                # everything submitted so far.
+                # everything submitted so far (seeded starter
+                # history + our guesses).
                 if await _check_win_verified(
                         page, cols, boards_n, state,
-                        list(typed_guesses) + list(played_here), pool):
+                        list(typed_guesses) + list(played_here), pool,
+                        mode_id=mode["id"]):
+                    # Iter-21 (speed): a verified win may hide a
+                    # 2nd board behind the win popup's Next button.
+                    # Advance past it when there is one; the
+                    # single-grid flow (no Next / no new board)
+                    # is the game-granted win.
+                    if mode["id"] == "speed":
+                        _adv, _adv_state = await _speed_try_advance(
+                            page, cols, state)
+                        if _adv == "advanced":
+                            state = _adv_state
+                            prev_counts = [eval_count(g) for g in state]
+                            continue
                     signal = "won"
                     break
                 # Iter-20 (P2, leading-wait trim): the loop's own
@@ -2750,6 +3295,24 @@ async def play_mode(page, mode, script_dir, official=None):
                     if len(state) >= boards_n:
                         signal = "won"
                         break
+                    # Iter-21 (speed): before waiting for a board
+                    # that may never appear in `state`, try
+                    # advancing past the win popup's Next button —
+                    # board 2 may sit behind it. (The win check
+                    # above already failed — e.g. coverage missing
+                    # board 2's solution — so a verified win is
+                    # NOT claimed here; the advance only rescues
+                    # play when a new board actually appears.)
+                    if mode["id"] == "speed":
+                        _adv, _adv_state = await _speed_try_advance(
+                            page, cols, state)
+                        if _adv == "advanced":
+                            for b in range(len(state), len(_adv_state)):
+                                usable0[b] = len(_adv_state[b]["rows"])
+                                hists[b] = []
+                            state = _adv_state
+                            prev_counts = [eval_count(g) for g in state]
+                            continue
                     # more boards may still appear (speed board2)
                     # Iter-20 (P0, ANALYSIS17 §2e/§6.3): iter-19
                     # speed ABANDONED the mode here — one 2.5s wait
@@ -2932,7 +3495,13 @@ async def play_mode(page, mode, script_dir, official=None):
                     # blocks every internal attempt identically;
                     # this retry sweeps first, then re-enters.
                     # Bounded: one re-entry, site solutions only.
-                    if nxt in pool:
+                    # Iter-21 ladder cap: when the full ² ladder
+                    # already failed once for this equation, the
+                    # re-entry would just re-run the identical
+                    # ladder — skip it (fail fast). Plain
+                    # equations never hit the cap, so the
+                    # site-solution retry still rescues them.
+                    if nxt in pool and nxt not in _ladder_failed_set(page):
                         await sweep_popups(page, tag=f":{mode['id']}")
                         _nlog(f"[{mode['id']}] site-solution retry "
                               f"for {nxt!r} (sweep + re-enter once)")
@@ -2945,6 +3514,10 @@ async def play_mode(page, mode, script_dir, official=None):
                               f"+{time.time() - _t_type:.1f}s")
                         if ok:
                             _mark_first_type()
+                    elif nxt in pool and nxt in _ladder_failed_set(page):
+                        _nlog(f"[{mode['id']}] site-solution retry "
+                              f"SKIPPED (ladder cap) for {nxt!r}: "
+                              f"full ² ladder already failed once")
                     # Iter-17 (P0): do NOT abandon the mode on an
                     # ENTRY failure while rows remain — retry the
                     # ENTRY (clear + re-enter via the full
@@ -2959,7 +3532,11 @@ async def play_mode(page, mode, script_dir, official=None):
                     # (Iter-20: re-guarded on `not ok` so a ² site
                     # solution rescued by the retry above is not
                     # re-entered a second time.)
-                    if not ok and any(c in nxt for c in "²³") and rows_left >= 1:
+                    # Iter-21 ladder cap: the entry retries re-run
+                    # the same full ladder that already exhausted
+                    # — skip both when the cap is engaged.
+                    if not ok and any(c in nxt for c in "²³") and rows_left >= 1 \
+                            and nxt not in _ladder_failed_set(page):
                         for _re in range(2):
                             await sweep_popups(page, tag=f":{mode['id']}")
                             _nlog(f"[{mode['id']}] entry retry "
@@ -2974,6 +3551,11 @@ async def play_mode(page, mode, script_dir, official=None):
                             if ok:
                                 _mark_first_type()
                                 break
+                    elif not ok and any(c in nxt for c in "²³") \
+                            and nxt in _ladder_failed_set(page):
+                        _nlog(f"[{mode['id']}] entry retries SKIPPED "
+                              f"(ladder cap) for {nxt!r}: full ² "
+                              f"ladder already failed once")
                     if not ok:
                         print(f"[{mode['id']}] board did not react to {nxt!r}, stopping")
                         break
@@ -3020,20 +3602,22 @@ async def play_mode(page, mode, script_dir, official=None):
             PLAYED[mode["id"]] = list(played_here)
             if not signal:
                 fresh = await read_state(page, cols, tries=3)
-                if fresh and len(fresh) >= boards_n and all(
-                        grid_solved(g) for g in fresh):
+                if _mode_won_by_state(fresh, boards_n, mode["id"]):
                     signal = "won"
                 # Iter-19 (P2): same multi-board verification as
                 # the loop — wonText alone never wins speed/quad/
-                # minibi. played_here holds the read-back rows.
+                # minibi. Coverage sees seeded starter history +
+                # read-back rows (the starter alone never proves
+                # a win, but it counts toward the solutions).
                 elif await _check_win_verified(
-                        page, cols, boards_n, fresh, played_here, pool):
+                        page, cols, boards_n, fresh,
+                        list(seeded_history) + list(played_here), pool,
+                        mode_id=mode["id"]):
                     signal = "won"
 
         if not signal:
             fresh = await read_state(page, cols, tries=3)
-            if fresh and len(fresh) >= boards_n and all(
-                    grid_solved(g) for g in fresh):
+            if _mode_won_by_state(fresh, boards_n, mode["id"]):
                 signal = "won"
         if signal == "won":
             await sweep_popups(page, tag=f":{mode['id']}")
@@ -3153,12 +3737,15 @@ async def play_mode(page, mode, script_dir, official=None):
                 # Iter-19 (P2): final win check goes through the
                 # same multi-board verification — a bare WIN_JS
                 # wonText never wins speed/quad/minibi. Fresh state
-                # + PLAYED read-back rows are the evidence.
+                # + seeded starter history + PLAYED read-back rows
+                # are the evidence (iter-21: the starter counts
+                # toward the played solutions here too).
                 _fresh_final = await read_state(page, cols, tries=2)
-                _played_final = list(PLAYED.get(mode["id"]) or [])
+                _played_final = (list(seeded_history)
+                                 + list(PLAYED.get(mode["id"]) or []))
                 if await _check_win_verified(
                         page, cols, boards_n, _fresh_final,
-                        _played_final, pool):
+                        _played_final, pool, mode_id=mode["id"]):
                     signal = "won"
             except Exception as e:
                 print(f"[{mode['id']}] win check failed: {e}")

@@ -1360,7 +1360,27 @@ def _dismiss_teuteuf_banner(page):
     top custom elements = possible closed-shadow hosts,
     teuteuf alt/aria/title hits) so the next artifact is
     diagnosable from the log alone. Worldle-only scoping is
-    unchanged (waffle log stays clean)."""
+    unchanged (waffle log stays clean).
+
+    Iter-21 (ANALYSIS18 §6.6): the probe STILL said 'absent'
+    30x while the banner sat in every frame. Three more gaps
+    closed: (a) the iframe-shape guards capped width at 1300 /
+    height at 220, excluding a FULL-WIDTH (1920px) banner
+    iframe and a wrapped two-line banner — caps are now 2000 /
+    320 (still <50% viewport height); (b) textContent misses
+    rendered-only text (a shadow-DOM banner surfaced through
+    its host's innerText — textContent never crosses a shadow
+    boundary, innerText does), so a rendered-text pass now
+    runs when body innerText matches a banner signature but
+    no per-element textContent did, with re-verification in
+    the same signal; (c) the no-match label is finally
+    honest — 'unverified-no-element-match:' ("no matching
+    element found by any pass"), NEVER 'absent'. The
+    diagnostics also name every custom host + whether it
+    has an open shadow root, so a banner in a CLOSED shadow
+    root is attributable to a host element instead of
+    invisible. The banner stays non-blocking; a no-match is
+    logged as unverified, never as a dismissal."""
     try:
         _gid = getattr(page, "_qp_gid", None)
         if _gid in GAMES and _gid != "worldle":
@@ -1528,14 +1548,62 @@ def _dismiss_teuteuf_banner(page):
               catch (err) { continue; }
               if (!r || r.width <= 0 || r.height <= 0) continue;
               const vh = window.innerHeight || 0;
-              if (r.height >= 20 && r.height <= 220 &&
-                  r.width >= 200 && r.width <= 1300 &&
+              // Iter-21: the width cap (1300) excluded a
+              // FULL-WIDTH banner iframe (1920px viewport) and
+              // the height cap (220) excluded a wrapped
+              // two-line banner — both are exactly the
+              // banner's shape on a wide viewport. Caps are
+              // now viewport-relative (width <= 2000, height
+              // <= 320, still <50% of viewport height), so a
+              // full-width top banner iframe is reported
+              // instead of a lying 'absent'.
+              if (r.height >= 20 && r.height <= 320 &&
+                  r.width >= 200 && r.width <= 2000 &&
                   r.top >= -20 && r.top <= 260 &&
                   r.height < vh * 0.5) {
                 return 'iframe-banner:' + JSON.stringify(
                   {x: r.x, y: r.y, w: r.width, h: r.height});
               }
             }
+            // Iter-21: RENDERED-TEXT pass. textContent misses
+            // text that only exists as rendered text (e.g. a
+            // shadow-DOM banner surfaced through its host's
+            // innerText — textContent never crosses a shadow
+            // boundary, innerText does). If the whole body's
+            // RENDERED text contains a banner signature while
+            // no per-element textContent matched, search
+            // per-element innerText for the smallest matching
+            // element and run the same close/hide flow on it.
+            // This pass runs ONLY when body innerText matches
+            // (one layout read), never as a blanket scan.
+            try {
+              const bodyInner = norm(document.body ?
+                document.body.innerText : '');
+              if (bodyInner.includes('teuteuf edu') ||
+                  bodyInner.includes('you asked, we listened') ||
+                  bodyInner.includes('educational resource') ||
+                  bodyInner.includes('built for classrooms')) {
+                const innerCands = [];
+                for (const el of document.querySelectorAll('body *')) {
+                  if (!vis(el)) continue;
+                  const it = norm(el.innerText || '');
+                  if (it.includes('teuteuf edu') ||
+                      it.includes('you asked, we listened') ||
+                      it.includes('educational resource') ||
+                      it.includes('built for classrooms'))
+                    innerCands.push({el, method: 'innerText'});
+                }
+                if (innerCands.length) {
+                  innerCands.sort((a, b) =>
+                    norm(a.el.textContent).length -
+                    norm(b.el.textContent).length);
+                  // Reuse the close/hide flow below by
+                  // treating the innerText match as the
+                  // found candidate set.
+                  cands.push(...innerCands);
+                }
+              }
+            } catch (err) {}
             // Iter-20 (ANALYSIS17 §2g): NEVER a bare 'absent'
             // again — a bare 'absent' vs frame-visible banner is
             // exactly the lie this probe has told for 3
@@ -1550,9 +1618,20 @@ def _dismiss_teuteuf_banner(page):
             // and any element whose alt/aria-label/title
             // mentions teuteuf. The next artifact is then
             // diagnosable from the log alone.
+            // Iter-21: the diagnostics return below runs ONLY
+            // when the rendered-text pass ALSO found nothing —
+            // an innerText match above falls through to the
+            // close/hide flow instead of reporting no-match.
+            // And the label is honest: 'unverified-...' means
+            // "no matching element found by any pass", NEVER
+            // "the banner is absent" (frame-visible banners
+            // have disproven that claim for 4 iterations).
+            // 'absent-candidates:' survives in the Python
+            // handler below for legacy callers/fakes.
+            if (!cands.length) {
             const diag = {roots: roots.length, shadow_hosts: 0,
               iframes: [], top_cands: [], custom_top: [],
-              attr_teuteuf: []};
+              attr_teuteuf: [], custom_hosts: []};
             try { diag.shadow_hosts = seenShadow.size; }
             catch (err) {}
             for (const fr of Array.from(
@@ -1591,6 +1670,20 @@ def _dismiss_teuteuf_banner(page):
                     rect: {x: Math.round(r.x), y: Math.round(r.y),
                            w: Math.round(r.width),
                            h: Math.round(r.height)}});
+                // Iter-21: CLOSED-shadow hosts are the one
+                // remaining blind spot (el.shadowRoot null
+                // covers both closed-shadow and no-shadow, so
+                // has_shadow=False is "unsearchable or plain",
+                // not "proven no shadow"). Name every custom
+                // host + its shadow state in the log so a
+                // banner hiding in a closed root is at least
+                // attributable to a host element.
+                if (diag.custom_hosts.length < 12)
+                  diag.custom_hosts.push({tag: el.tagName, cls: cls,
+                    has_shadow: !!el.shadowRoot,
+                    rect: {x: Math.round(r.x), y: Math.round(r.y),
+                           w: Math.round(r.width),
+                           h: Math.round(r.height)}});
               }
               for (const a of ['alt', 'aria-label', 'title']) {
                 const v = el.getAttribute(a) || '';
@@ -1601,7 +1694,9 @@ def _dismiss_teuteuf_banner(page):
                 }
               }
             }
-            return 'absent-candidates:' + JSON.stringify(diag);
+            return 'unverified-no-element-match:' +
+              JSON.stringify(diag);
+            }
           }
           cands.sort((a, b) =>
             norm(a.el.textContent).length -
@@ -1646,6 +1741,37 @@ def _dismiss_teuteuf_banner(page):
               // re-render can restore a DOM-clicked banner) —
               // otherwise hide the container instead of reporting
               // a success that is still on screen.
+              // Iter-21: when the banner was found via the
+              // rendered-text pass, find() (textContent-only)
+              // can never see it — re-verify with the SAME
+              // innerText signal, or a no-op click would be
+              // reported as 'closed'.
+              if (foundMethod === 'innerText') {
+                let gone = false;
+                try {
+                  const bi = norm(document.body ?
+                    document.body.innerText : '');
+                  gone = !(bi.includes('teuteuf edu') ||
+                    bi.includes('you asked, we listened') ||
+                    bi.includes('educational resource') ||
+                    bi.includes('built for classrooms'));
+                } catch (err) { gone = false; }
+                if (gone)
+                  return 'closed-via-button' + suffix;
+                let box = leaf;
+                for (let d2 = 0; d2 < 4 && box && box.parentElement;
+                     d2++) {
+                  const r = box.getBoundingClientRect();
+                  if (r.height > 0 && r.height <= 300) {
+                    box.style.setProperty('display', 'none',
+                      'important');
+                    return 'closed-via-button+hidden-container' +
+                      suffix;
+                  }
+                  box = box.parentElement;
+                }
+                return 'close-clicked-still-present' + suffix;
+              }
               const still = find();
               if (!still.length)
                 return 'closed-via-button' + suffix;
@@ -1722,6 +1848,16 @@ def _dismiss_teuteuf_banner(page):
             res = "iframe-corner-click-failed"
         if res == "absent":
             res = "closed-iframe-via-corner-click"
+        elif isinstance(res, str) and (
+                res.startswith("unverified-no-element-match:")
+                or res.startswith("absent-candidates:")):
+            # Iter-21: the JS probe no longer returns a bare
+            # 'absent' — a no-match diagnostics result after a
+            # corner click means the banner iframe is gone from
+            # the probe's view (absence itself is unverified,
+            # but the iframe-banner signal is cleared).
+            res = ("closed-iframe-via-corner-click "
+                   "(unverified-absence)")
         elif isinstance(res, str) and res.startswith("iframe-banner:"):
             try:
                 _hidden = page.evaluate(_HIDE_IFRAME_JS, _rect)
@@ -1730,7 +1866,9 @@ def _dismiss_teuteuf_banner(page):
             res = ("hidden-iframe-banner" if _hidden
                    else "iframe-corner-click-did-not-dismiss")
     if res == "absent" or (isinstance(res, str)
-                           and res.startswith("absent-candidates:")):
+                           and (res.startswith("absent-candidates:")
+                                or res.startswith(
+                                    "unverified-no-element-match:"))):
         # Iter-18 late-render re-scan: the probe can run before
         # the banner renders, so a single instant 'absent' is
         # weak. Re-scan once after 500ms before logging 'absent'.
@@ -1738,6 +1876,9 @@ def _dismiss_teuteuf_banner(page):
         # close/hide side effect. Bounded (+500ms, one retry).
         # Iter-20: 'absent-candidates:' (candidate diagnostics,
         # never a bare 'absent') re-scans the same way.
+        # Iter-21: 'unverified-no-element-match:' (the honest
+        # replacement label — "no matching element found",
+        # never "the banner is absent") re-scans the same way.
         try:
             page.wait_for_timeout(500)
             res = page.evaluate(_JS)
@@ -7218,6 +7359,132 @@ def _s_worldle_click_image(page, kind, code):
         return False, f"exception: {str(e)[:80]}"
 
 
+def _s_worldle_visible_area_ui(page):
+    """Visible-round evidence for the Area round (fix-loop iter 21,
+    ANALYSIS18 §6.5): the store (`game_round`) is NOT the visible
+    round — the iter-19/20 Area switch "succeeded" with
+    game_round='area' while the SPA never re-rendered the Area UI
+    (frame gp_0342: PopulationCurrency UI, Dinar + Next round), so
+    the comparison click landed on the wrong round's DOM and the
+    store-verify went 0->0. This probe checks the VISIBLE round:
+    an Area prompt actually rendered (comparison "larger surface
+    area" / number "surface area of ...", rect-visible, outside
+    nav/header/footer chrome) or the selected tab naming Area.
+    Returns {visible, signals, prompt_visible, selected_tab,
+    prompt_text, next_round_visible, probe_ran}. A non-dict probe
+    result (legacy test fakes returning True) maps to visible via
+    bool-compat, mirroring the G4 toggle convention; a None
+    result means the probe never ran (legacy fakes that do not
+    script the new probe — production JS always returns a dict,
+    so the gate is enforced on every real run) and is reported
+    as probe_ran=False so callers can fall back to the
+    comparison-probe evidence instead of blocking on a probe
+    that never executed. A failed evaluate is visible=False
+    (fail closed — never click a comparison option on an
+    unverified round)."""
+    try:
+        res = page.evaluate("""/* worldle-visible-area */ () => {
+          const vis = e => { try { const r = e.getBoundingClientRect();
+            return r.width > 0 && r.height > 0; }
+            catch (err) { return false; } };
+          const norm = s => (s || '').toLowerCase()
+            .replace(/\\s+/g, ' ').trim();
+          const signals = [];
+          let promptVisible = false, promptText = '';
+          for (const el of document.querySelectorAll('body *')) {
+            if (el.closest && el.closest('nav, header, footer'))
+              continue;
+            if (!vis(el)) continue;
+            const t = norm(el.textContent || '');
+            if (t.includes('larger surface area') ||
+                t.includes('surface area of')) {
+              promptVisible = true;
+              promptText = t.slice(0, 140);
+              signals.push('area-prompt-visible');
+              break;
+            }
+          }
+          let selectedTab = '';
+          for (const el of document.querySelectorAll(
+              '[aria-selected=true], [aria-current=true]')) {
+            if (!vis(el)) continue;
+            const t = norm(el.textContent || '');
+            if (t) { selectedTab = t; break; }
+          }
+          if (selectedTab.includes('area'))
+            signals.push('selected-tab-area');
+          let nextRoundVisible = false;
+          for (const el of document.querySelectorAll(
+              'button, [role=button], a')) {
+            if (!vis(el)) continue;
+            if (norm(el.textContent || '') === 'next round') {
+              nextRoundVisible = true; break;
+            }
+          }
+          if (nextRoundVisible) signals.push('next-round-visible');
+          return {visible: promptVisible ||
+                    selectedTab.includes('area'),
+                  signals: signals,
+                  prompt_visible: promptVisible,
+                  prompt_text: promptText,
+                  selected_tab: selectedTab,
+                  next_round_visible: nextRoundVisible};
+        }""")
+    except Exception:
+        return {"visible": False, "signals": [],
+                "prompt_visible": False, "selected_tab": "",
+                "prompt_text": "", "next_round_visible": False,
+                "probe_ran": False,
+                "error": "evaluate failed"}
+    if isinstance(res, dict):
+        return {"visible": bool(res.get("visible")),
+                "signals": list(res.get("signals") or []),
+                "prompt_visible": bool(res.get("prompt_visible")),
+                "selected_tab": str(res.get("selected_tab") or ""),
+                "prompt_text": str(res.get("prompt_text") or ""),
+                "next_round_visible":
+                    bool(res.get("next_round_visible")),
+                "probe_ran": True}
+    if res is True:
+        return {"visible": True, "signals": ["bool-compat"],
+                "prompt_visible": False, "selected_tab": "",
+                "prompt_text": "", "next_round_visible": False,
+                "probe_ran": True}
+    return {"visible": False, "signals": ["non-dict-probe-result"],
+            "prompt_visible": False, "selected_tab": "",
+            "prompt_text": "", "next_round_visible": False,
+            "probe_ran": False}
+
+
+def _s_worldle_click_next_round(page):
+    """Click the visible 'Next round' advance control (iter-21
+    Area visible-round recovery): when the store says Area but
+    the visible UI is still a completed earlier round, its
+    'Next round' button advances the SPA to the next round's UI
+    (the frame gp_0342 UI shows exactly this control). Returns
+    True iff such a button was clicked. Pure click — the caller
+    re-verifies the visible round afterwards."""
+    try:
+        return bool(page.evaluate("""/* worldle-next-round-click */
+          () => {
+          const vis = e => { try { const r = e.getBoundingClientRect();
+            return r.width > 0 && r.height > 0; }
+            catch (err) { return false; } };
+          const norm = s => (s || '').toLowerCase()
+            .replace(/\\s+/g, ' ').trim();
+          for (const el of document.querySelectorAll(
+              'button, [role=button], a')) {
+            if (!vis(el)) continue;
+            if (norm(el.textContent || '') === 'next round') {
+              el.click(); return true;
+            }
+          }
+          return false;
+        }"""))
+    except Exception:
+        return False
+
+
 def _s_worldle_switch_mode(page, gid, mode, day_string):
     """Switch rounds via the round-nav dropdown click by visible label
     (the dropdown's goToRound calls setGameMode(mode, true); Summary
@@ -7242,7 +7509,28 @@ def _s_worldle_switch_mode(page, gid, mode, day_string):
                 return "summary" in (page.url or "")
             except Exception:
                 return False
-        return _s_worldle_current_mode(page) == mode
+        if _s_worldle_current_mode(page) != mode:
+            return False
+        if mode == "area":
+            # Iter-21 (ANALYSIS18 §6.5): the store is NOT the
+            # visible round. A switch that only reads game_round
+            # back "succeeds" while the SPA still shows the
+            # previous (completed) round's UI, and the comparison
+            # click then lands on the wrong round. The Area switch
+            # verifies the VISIBLE round too — an Area prompt
+            # rendered, or the selected tab naming Area. The
+            # site header is always WORLDLE, so a
+            # visible_header='WORLDLE' check is useless and is
+            # deliberately NOT used here. probe_ran=False means
+            # the probe never executed (legacy fakes that do
+            # not script it — production JS always returns a
+            # dict): fall back to the store check rather than
+            # blocking on a probe that never ran.
+            _vis = _s_worldle_visible_area_ui(page)
+            if not _vis.get("probe_ran"):
+                return True
+            return bool(_vis.get("visible"))
+        return True
 
     if _verify():
         return True
@@ -7302,6 +7590,32 @@ def _s_worldle_switch_mode(page, gid, mode, day_string):
                 _settle(page, base=1200)
                 if _verify():
                     return True
+                if (mode == "area"
+                        and _s_worldle_current_mode(page) == "area"):
+                    # Iter-21: store says Area but the visible UI
+                    # is still the previous (completed) round —
+                    # the SPA never re-rendered. Advance with its
+                    # own 'Next round' control (up to 2x) and
+                    # re-verify the VISIBLE round after each
+                    # advance; never return True on the store
+                    # alone. If the store itself moves off Area,
+                    # stop — the fallback below re-drives the
+                    # switch instead of chasing the wrong round.
+                    _dbg(gid, "worldle switch area: store says area "
+                              "but visible Area UI not showing; "
+                              "trying Next round advance")
+                    for _nr in (1, 2):
+                        if not _s_worldle_click_next_round(page):
+                            _dbg(gid, "worldle switch area: no "
+                                      "Next round control to click")
+                            break
+                        _settle(page, base=1500)
+                        if _verify():
+                            return True
+                        if _s_worldle_current_mode(page) != "area":
+                            break
+                    _dbg(gid, "worldle switch area: Next round "
+                              "advance did not render the Area UI")
                 # Lifesaver modal can hold the switch as pendingGameMode
                 # until it closes; one more settle + re-check.
                 _settle(page, base=1500)
@@ -7338,7 +7652,15 @@ def _s_worldle_switch_mode(page, gid, mode, day_string):
             return True
     except Exception as e:
         _dbg(gid, f"worldle switch {mode}: fallback failed: {str(e)[:90]}")
-    return _verify()
+    _ok = _verify()
+    if not _ok and mode == "area":
+        # Iter-21: fail honestly — the switch never rendered the
+        # Area UI, so the caller must NOT play the comparison
+        # into whatever round is actually visible.
+        _dbg(gid, "worldle switch area: visible-round gate failed "
+                  f"(visible={_s_worldle_visible_area_ui(page)}); "
+                  "switch NOT claimed")
+    return _ok
 
 
 def _s_worldle_live_round_modes(page, gid):
@@ -7406,7 +7728,21 @@ def _s_worldle_live_round_modes(page, gid):
     Escape-reset + toggle-click + scan — three attempts, each
     logged. The toggle search is tiered (explicit aria toggle
     first) and skips elements inside an already-open menu, which
-    are round ENTRIES — clicking one would SWITCH rounds."""
+    are round ENTRIES — clicking one would SWITCH rounds.
+
+    Fix-loop iter 21 (ANALYSIS18 §6.7): the reader STILL
+    returns None — toggle opened=True, scan container=False.
+    The container selector (role/class/aria) does not match
+    the opened menu's actual markup, and no log ever showed
+    that markup. The scan now falls back to CONTENT-based
+    container discovery (every visible container-shaped
+    element in the light DOM + shadow roots, scored by how
+    many innermost leaves map to known round labels, purity
+    >=60% so a page-wide wrapper cannot win) and, on
+    failure, returns a dump of the top scored containers
+    (tag/class/role/rect/score/leaves/sample) that Python
+    logs — the opened menu's actual markup, so the next
+    artifact shows what to align the selector to."""
     try:
         labels = list(_WORLDLE_MODE_LABELS.values())
         # Toggle click (tiered). Returns True iff a toggle was
@@ -7531,7 +7867,7 @@ def _s_worldle_live_round_modes(page, gid):
             // carrying non-empty text.
             const leaves = Array.from(m.querySelectorAll(
               'button, [role=option], [role=menuitem], ' +
-              '[role=menuitemradio], a, li, span, div'))
+              '[role=menuitemradio], a, li, span, div, p'))
               .filter(vis).filter(e => !hasTextChild(e));
             if (leaves.length < 3 || leaves.length > 60) continue;
             let score = 0;
@@ -7542,8 +7878,92 @@ def _s_worldle_live_round_modes(page, gid):
               bestScore = score; best = m; bestLeaves = leaves;
             }
           }
+          // Iter-21 (ANALYSIS18 §6.7): the toggle OPENS
+          // (opened=True) but the scan finds no container —
+          // the container selector (role/class/aria) does not
+          // match the opened menu's actual markup. The menu's
+          // MARKUP is the unknown, so the fallback stops
+          // trusting markup: EVERY visible container-shaped
+          // element (div/ul/section/nav/menu/aside/form + any
+          // role-bearing element, light DOM + every shadow
+          // root) is scored by CONTENT (how many innermost
+          // leaves map to known round labels). A real menu
+          // scores high AND pure (>=60% of its leaves are
+          // round labels — a page-wide wrapper scores high
+          // but impure, and is rejected). The fallback runs
+          // only when the markup-based pass scored <3.
+          // Diag: the top scored containers (tag/class/role/
+          // rect/score/leaves/sample) are returned on failure
+          // so the next artifact shows the opened menu's
+          // ACTUAL container markup instead of "no container".
+          const diagCands = [];
+          const noteCand = (el, score, leaves) => {
+            try {
+              const r = el.getBoundingClientRect();
+              diagCands.push({tag: el.tagName,
+                cls: String(el.getAttribute('class') || '')
+                  .slice(0, 60),
+                role: el.getAttribute('role') || '',
+                rect: {x: Math.round(r.x), y: Math.round(r.y),
+                       w: Math.round(r.width),
+                       h: Math.round(r.height)},
+                score: score, leaves: leaves.length,
+                sample: leaves.slice(0, 3).map(lf =>
+                  norm(lf.innerText || lf.textContent || '')
+                    .slice(0, 40))});
+            } catch (err) {}
+          };
+          if (!best || bestScore < 3) {
+            const fbRoots = [document];
+            let fbBest = null, fbScore = -1, fbLeaves = [];
+            const collectFb = rt => {
+              try {
+                for (const el of rt.querySelectorAll('*')) {
+                  if (el.shadowRoot) {
+                    fbRoots.push(el.shadowRoot);
+                    collectFb(el.shadowRoot);
+                  }
+                }
+              } catch (err) {}
+            };
+            try { collectFb(document); } catch (err) {}
+            const fbSeen = new Set();
+            for (const rt of fbRoots) {
+              let fbEls = [];
+              try { fbEls = Array.from(rt.querySelectorAll(
+                'div, ul, section, nav, menu, aside, form, ' +
+                '[role=menu], [role=listbox], [role=dialog]')); }
+              catch (err) {}
+              for (const m of fbEls) {
+                if (fbSeen.has(m)) continue;
+                fbSeen.add(m);
+                if (/^(BODY|HTML)$/.test(m.tagName)) continue;
+                if (!vis(m)) continue;
+                const leaves = Array.from(m.querySelectorAll(
+                  'button, [role=option], [role=menuitem], ' +
+                  '[role=menuitemradio], a, li, span, div, p'))
+                  .filter(vis).filter(e => !hasTextChild(e));
+                if (leaves.length < 3 || leaves.length > 60) continue;
+                let score = 0;
+                for (const lf of leaves)
+                  if (labelKeys.has(keyOf(
+                      lf.innerText || lf.textContent || ''))) score++;
+                noteCand(m, score, leaves);
+                const purity = leaves.length ?
+                  score / leaves.length : 0;
+                if (score >= 3 && purity >= 0.6 && score > fbScore) {
+                  fbScore = score; fbBest = m; fbLeaves = leaves;
+                }
+              }
+            }
+            diagCands.sort((a, b) => b.score - a.score);
+            if (fbBest) {
+              best = fbBest; bestScore = fbScore; bestLeaves = fbLeaves;
+            }
+          }
           if (!best || bestScore < 3)
-            return {entries: [], container: false};
+            return {entries: [], container: false,
+                    diag: diagCands.slice(0, 5)};
           for (const e of bestLeaves) push(e.innerText);
           return {entries: out, container: true};
         }"""
@@ -7628,6 +8048,16 @@ def _s_worldle_live_round_modes(page, gid):
                           "(unreadable) | toggle outcomes="
                           f"{_toggle_outcomes} | scan outcomes="
                           f"{_scan_outcomes}")
+                # Iter-21: the scan now dumps the top scored
+                # containers (tag/class/role/rect/score/leaves/
+                # sample) — the opened menu's ACTUAL markup —
+                # so the next artifact shows what to align the
+                # selector to instead of a bare "no container".
+                _diag = raw_ev.get("diag")
+                if _diag:
+                    _dbg(gid, "worldle G4 live rounds reader: "
+                              "opened-menu container dump (top "
+                              f"scored): {str(_diag)[:1500]}")
                 return None
             raw = list(raw_ev.get("entries") or [])
         elif isinstance(raw_ev, list):
@@ -7773,7 +8203,7 @@ def _worldle_pin_probe(page, px, py):
             'teuteuf-geo-map, [data-projection], svg, canvas, ' +
             '[class*=map i]') : false;
           const q = s => document.querySelectorAll(s).length;
-          const markers = q('svg circle, svg ellipse, ' +
+          const markers = q('svg circle, svg ellipse, svg use, ' +
             'svg [class*=marker i], svg [class*=pin i], ' +
             '.leaflet-marker-icon, .maplibregl-marker, [data-marker], ' +
             '[class*=marker i], [class*=pin i]');
@@ -7790,7 +8220,8 @@ def _worldle_pin_probe(page, px, py):
               if (el.shadowRoot) {
                 shadowHosts += 1;
                 markersShadow += el.shadowRoot.querySelectorAll(
-                  'svg circle, svg ellipse, svg [class*=marker i], ' +
+                  'svg circle, svg ellipse, svg use, ' +
+                  'svg [class*=marker i], ' +
                   'svg [class*=pin i], [data-marker], ' +
                   '[class*=marker i], [class*=pin i]').length;
                 countShadow(el.shadowRoot);
@@ -8592,6 +9023,23 @@ def _worldle_capital_pinpoint_probe(page, px, py):
               return b > 100 && b > r + 30 && b > g - 20; }
             return false;
           };
+          // Iter-21 (ANALYSIS18 §6.4): UNIFY this collection
+          // with the markers counter (_worldle_pin_probe),
+          // which DID see 4 while this probe saw 0. Two gaps
+          // closed: (a) the iter-20 tag list
+          // 'path, rect, div, span, button' is extended with
+          // <use> / <g> / <image> dot shapes (a <use href="#pin">
+          // marker or a <g class="marker"> wrapper is invisible
+          // to the old tag list); (b) the search was scoped to the pin SVG
+          // + its parent, so dots living anywhere else (an
+          // overlay layer, a different shadow subtree) were
+          // missed. A third pass below scans EVERY root (light
+          // + shadow + iframe docs) with the markers-counter
+          // selector set (+ dot-named classes), so any element
+          // the markers counter can see is also a dot
+          // candidate here. The dot-shape / on-map filters
+          // still apply, so a large marker container can
+          // never qualify as a dot.
           try {
             const scope = svg || container;
             const extra = [];
@@ -8602,12 +9050,25 @@ def _worldle_capital_pinpoint_probe(page, px, py):
               }
             };
             for (const el of scope.querySelectorAll(
-                'path, rect, div, span, button')) pushEl(el);
+                'path, rect, use, g, div, span, button, image'))
+              pushEl(el);
             try {
               const par = container ? container.parentElement : null;
               if (par) for (const el of par.querySelectorAll(
-                  'path, rect, div, span, button')) pushEl(el);
+                  'path, rect, use, g, div, span, button, image'))
+                pushEl(el);
             } catch (e) {}
+            for (const rt of roots) {
+              try {
+                for (const el of rt.querySelectorAll(
+                    'svg circle, svg ellipse, svg use, ' +
+                    'svg [class*=marker i], svg [class*=pin i], ' +
+                    'svg [class*=dot i], .leaflet-marker-icon, ' +
+                    '.maplibregl-marker, [data-marker], ' +
+                    '[class*=marker i], [class*=pin i], ' +
+                    '[class*=dot i]')) pushEl(el);
+              } catch (e) {}
+            }
             for (const c of extra) {
               let r2;
               try { r2 = c.getBoundingClientRect(); }
@@ -8626,8 +9087,14 @@ def _worldle_capital_pinpoint_probe(page, px, py):
               const tag2 = (c.tagName || '').toLowerCase();
               const clsId2 = ((c.getAttribute('class') || '') +
                 ' ' + (c.id || '')).toLowerCase();
+              // Iter-21: a <use> dot names itself via its
+              // referenced symbol (href="#pin" / "#dot"), not
+              // via class/id — fold href into the name check.
+              const href2 = ((c.getAttribute('href') || '') + ' ' +
+                (c.getAttribute('xlink:href') || '')).toLowerCase();
               const named2 = /(dot|marker|pin|point|capital)/
-                .test(clsId2);
+                .test(clsId2) || /(dot|marker|pin|point|capital)/
+                .test(href2);
               let fill2 = '';
               try { fill2 = c.getAttribute('fill') || ''; }
               catch (e) {}
@@ -8794,7 +9261,17 @@ def _worldle_capital_pick_pin_target(probe, fit_px, cap_name):
     would pick a centre dot (a different city) instead of the
     capital. A dot is clicked ONLY on a name match or as the
     nearest in-fill point (which is still a land point, and the
-    method is logged as in-fill-search, not dot-name)."""
+    method is logged as in-fill-search, not dot-name).
+
+    Iter-21: when a verified point (fit point in-fill, or the
+    in-fill-search corrected point) already COINCIDES with an
+    enumerated dot (within 12px), the target snaps to that
+    dot's CENTRE (method *-dot-centre, with dot_index/dot_tag
+    so the caller clicks the dot ELEMENT). This is not a
+    nearest-dot guess: the point was verified independently,
+    and the snap only replaces a near-dot coordinate with
+    the dot element itself — the clickable target — instead
+    of a bbox-fit coordinate that can miss the element."""
     probe = probe if isinstance(probe, dict) else {}
     if not probe.get("found"):
         return None
@@ -8805,6 +9282,24 @@ def _worldle_capital_pick_pin_target(probe, fit_px, cap_name):
     want = _s_worldle_norm(cap_name or "")
     dots = [d for d in (probe.get("dots") or [])
             if isinstance(d, dict)]
+
+    def _snap_to_dot(x, y, method, detail):
+        # Iter-21, see docstring: snap ONLY on coincidence
+        # (<=12px) with an already-verified point, never a
+        # nearest-dot guess across the map.
+        for d in dots:
+            try:
+                dx, dy = float(d.get("x")), float(d.get("y"))
+            except (TypeError, ValueError):
+                continue
+            if abs(dx - float(x)) <= 12 and abs(dy - float(y)) <= 12:
+                return {"x": dx, "y": dy,
+                        "method": method + "-dot-centre",
+                        "dot_index": dots.index(d),
+                        "dot_tag": str(d.get("tag") or ""),
+                        "detail": detail + f"; snapped to dot "
+                                  f"centre ({dx:.1f}, {dy:.1f})"}
+        return None
     if want:
         exact, contained = [], []
 
@@ -8894,11 +9389,22 @@ def _worldle_capital_pick_pin_target(probe, fit_px, cap_name):
         if len(named) > 1:
             return None
     if probe.get("in_fill"):
+        _snapped = _snap_to_dot(
+            fx, fy, "bbox-fit-in-fill",
+            "bbox-fit point is inside a country path's fill (on land)")
+        if _snapped is not None:
+            return _snapped
         return {"x": fx, "y": fy, "method": "bbox-fit-in-fill",
                 "detail": "bbox-fit point is inside a country "
                           "path's fill (on land)"}
     corr = probe.get("corrected") or {}
     if corr.get("x") is not None and corr.get("y") is not None:
+        _snapped = _snap_to_dot(
+            float(corr["x"]), float(corr["y"]), "in-fill-search",
+            "bbox-fit point is NOT in-fill (hole); nearest "
+            f"in-fill point {float(corr.get('dist') or 0):.1f}px away")
+        if _snapped is not None:
+            return _snapped
         return {"x": float(corr["x"]), "y": float(corr["y"]),
                 "method": "in-fill-search",
                 "detail": ("bbox-fit point is NOT in-fill (hole); "
@@ -8963,8 +9469,8 @@ def _worldle_capital_click_dot_element(page, px, py, cap_name):
     by name, this clicks THAT element: shadow-piercing
     elementFromPoint at the dot centre (the pinpoint map may
     live in a shadow tree), walk up to the nearest dot-like
-    element (circle/ellipse/path/rect, or a small element whose
-    class/id names dot/marker/pin/point/capital), then dispatch
+    element (circle/ellipse/path/rect/use/g, or a small element whose
+    class/id names dot/marker/pin/point/capital, or data-marker), then dispatch
     the full pointer+mouse sequence ON that element with the
     dot's client coordinates (the map component listens for
     pointerdown, not click alone) plus a native element.click().
@@ -8990,12 +9496,23 @@ def _worldle_capital_click_dot_element(page, px, py, cap_name):
             if (!e) return false;
             const tag = (e.tagName || '').toLowerCase();
             if (['circle', 'ellipse'].includes(tag)) return true;
-            if (['path', 'rect'].includes(tag)) {
+            // Iter-21: <use> markers and <g> marker wrappers
+            // are dots too (the pinpoint probe now enumerates
+            // them); a data-marker element is a dot by
+            // definition. Small-rect gate still applies so a
+            // large wrapper can never qualify.
+            if (['path', 'rect', 'use', 'g'].includes(tag)) {
               try { const r = e.getBoundingClientRect();
                 if (r.width > 0 && r.width <= 48 &&
                     r.height > 0 && r.height <= 48) return true; }
               catch (err) {}
               return false;
+            }
+            if (e.hasAttribute && e.hasAttribute('data-marker')) {
+              try { const r = e.getBoundingClientRect();
+                if (r.width > 0 && r.width <= 48 &&
+                    r.height > 0 && r.height <= 48) return true; }
+              catch (err) {}
             }
             const clsId = ((e.getAttribute('class') || '') + ' ' +
               (e.id || '')).toLowerCase();
@@ -13024,6 +13541,33 @@ def _s_worldle_play_comparison(page, gid, day, mode, ds, prompt_substrs,
               + str([(o.get("name"), values.get(_s_worldle_cmp_key(
                   o.get("name") or ""))) for o in options])
               + f" larger={best!r} ({pick_detail})")
+    if mode == "area":
+        # Iter-21 (ANALYSIS18 §6.5): NEVER click a comparison
+        # option on an unverified round. The probe above reads
+        # body text, which can list the Area prompt + options
+        # from a not-currently-visible round while the visible UI
+        # is still a completed earlier round (frame gp_0342).
+        # The visible-round gate is the last check before any
+        # click: no verified Area UI -> partial, nothing clicked.
+        # probe_ran=False means the visible probe never executed
+        # (legacy fakes that do not script it — production JS
+        # always returns a dict): the gate is not enforced on
+        # a probe that never ran, and the comparison-probe
+        # evidence below arbitrates instead. The skip is logged,
+        # never silent.
+        _vis = _s_worldle_visible_area_ui(page)
+        if not _vis.get("visible"):
+            if not _vis.get("probe_ran"):
+                _dbg(gid, "worldle area comparison: visible-round "
+                          "probe unavailable (no dict result); "
+                          "gate not enforced — proceeding on "
+                          "comparison-probe evidence")
+            else:
+                return ("partial", None,
+                        "visible Area UI not verified "
+                        f"(signals={_vis.get('signals')}); comparison "
+                        f"option {best!r} NOT clicked on an unverified "
+                        "round")
     # Iter-15 (Area P1): the FULL store list BEFORE the pick, so
     # the "answered" claim can be VERIFIED (iter-14 assumed answered
     # from click+Enter while the store never changed — twice).
@@ -17136,6 +17680,20 @@ def _upload_framed(gid, g, today, short, answers, chapters, final):
         print(f"[{gid}] upload error: {str(e)[:200]}")
 
 
+def _waffle_facts_stat(evidence):
+    """Pure: waffle-appropriate breakdown-card stat from the
+    solver evidence ("11 swaps, greens 7/21->21/21 (...)").
+    Returns ("11", "swaps used") — the metric that belongs on a
+    swap puzzle's card — or None when the evidence carries no
+    swap count (the card then drops the stat rather than
+    printing a meaningless "0 green rows"; ANALYSIS18 §2j).
+    Never invents a number: no match -> None."""
+    m = re.search(r"(\d+)\s+swaps", str(evidence or ""))
+    if not m:
+        return None
+    return (m.group(1), "swaps used")
+
+
 def run_one(gid):
     g = GAMES[gid]
     tgt = A.target_date()
@@ -17688,7 +18246,18 @@ def run_one(gid):
                                    scoring=gid not in _NO_LETTER_SCORING)
             DP.generate_facts(str(facts_p), g["name"], today, str(aval),
                                 steps, kind=_kind, palette=_pal,
-                                scoring=gid not in _NO_LETTER_SCORING)
+                                scoring=gid not in _NO_LETTER_SCORING,
+                                # Iter-21 (ANALYSIS18 §2j): the
+                                # Waffle card read "0 green rows" —
+                                # a meaningless generic metric for a
+                                # swap puzzle. Pass the
+                                # waffle-appropriate stat (swaps
+                                # used, parsed from the solver
+                                # evidence); the card drops the
+                                # stat if the parse fails.
+                                extra_stat=(
+                                    _waffle_facts_stat(evidence)
+                                    if gid == "waffle" else None))
             DP.generate_teaser(str(teaser_p), g["name"], today, g["slug"])
 
             def _still(p, secs):
