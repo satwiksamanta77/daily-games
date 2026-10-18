@@ -14566,6 +14566,22 @@ def _s_worldle_comparison_probe(page, prompt_substrs):
             // a centre and still collapse. A pill div whose name
             // matches a nearby button card is that card's label, not
             // a second option — merge it away.
+            // Iter-26 (ANALYSIS23 RC-new-1): the Area label pill
+            // is NEITHER a sibling NOR a descendant of the
+            // silhouette BUTTON, so the button keeps the generic
+            // name 'Image Quiz Item' while its label pill is
+            // collected as a separate 'Kuwait' entry — 4 entries
+            // for 2 cards. A label pill (DIV, no img) sitting
+            // ~140px below a generic-named button is that
+            // button's label, not a second option — merge it
+            // away. (Python src-resolution renames the generic
+            // buttons afterwards; Python dedup is the backstop.)
+            if (e.tagName === 'DIV' && !img &&
+                out.some(o => genericNames.has(norm(o.name)) &&
+                  Math.abs(o.x - cx) < 200 &&
+                  Math.abs(o.y - cy) < 200)) {
+              continue;
+            }
             let duplicate = false;
             for (const o of out) {
               if (norm(o.name) === norm(name) &&
@@ -14598,7 +14614,7 @@ def _s_worldle_comparison_probe(page, prompt_substrs):
 
 
 def _s_worldle_click_comparison_option(page, want, _exclude=(),
-                                      container=None):
+                                      container=None, src_code=None):
     """Click a comparison option by country name, matching first-line
     innerText, aria-label, data-value, title, a descendant img alt,
     or the sibling label pill (image-card options carry the generic
@@ -14626,6 +14642,17 @@ def _s_worldle_click_comparison_option(page, want, _exclude=(),
     caller verifies selection with
     _s_worldle_comparison_selected_state and the store.
 
+    Iter-26 (ANALYSIS23 RC-new-1): `src_code` (the 2-letter
+    img-src basename, e.g. 'kw') is the button's stable identity
+    for Area: the label pill is neither a sibling nor a
+    descendant of the silhouette BUTTON, so name matching can
+    NEVER match the button (its text is the generic 'Image Quiz
+    Item'). With `src_code` given, a card-sized BUTTON whose
+    descendant img src carries that code is clicked first
+    (detail records `match=src`); name matching stays as the
+    fallback (GDP buttons carry real text). Without `src_code`
+    behaviour is unchanged.
+
     Iter-25 (ANALYSIS22 RC-new-1): the JS matcher no longer
     climbs ancestors for a sibling label (that climb let a 40x40
     header nav button "match" every country name); names come
@@ -14645,6 +14672,10 @@ def _s_worldle_click_comparison_option(page, want, _exclude=(),
           (args) => {
           const want = (args && args.want) || args;
           const exclude = (args && args.exclude) || [];
+          // Iter-26: img-src code of the wanted card ('' when
+          // the caller has none — GDP). See srcMatch below.
+          const srcCode = ((args && args.src_code) || '')
+            .toLowerCase();
           // Iter-22: container restriction — only candidates
           // whose CENTRE lies inside the verified-visible Area
           // container (rect from the visible-round probe) may be
@@ -14745,13 +14776,47 @@ def _s_worldle_click_comparison_option(page, want, _exclude=(),
             .filter(e => !isChromeCandidate(e))
             .filter(inContainer)
             .filter(e => !e.querySelector('button, img, input, select'))
-            .filter(e => isLabelText(e.innerText || ''));
+            .filter(e => isLabelText(e.innerText || ''))
+            // Iter-26 (ANALYSIS23 RC-new-1): the Area label bar
+            // ('Kuwait' text bar, 240x26) is a DIV with the
+            // country text and no interactive descendant — the
+            // old div fallback clicked it. A bare label pill is
+            // never clickable: div fallbacks must be >=60px tall.
+            .filter(e => { try {
+              const r = e.getBoundingClientRect();
+              return r.height >= 60;
+            } catch (err) { return true; } });
           // Iter-20 (ANALYSIS17 §2i): BUTTON first, CARD second —
           // the caller needs to know WHICH target was clicked so
           // the post-click selected-state log can tell a
           // button-click that never selected from a card-click
           // that did. The old code fell through to divs silently.
-          const hitBtn = interactive.find(match);
+          // Iter-26 (ANALYSIS23 RC-new-1): with srcCode given,
+          // match the BUTTON by its descendant img src FIRST —
+          // the label pill is neither a sibling nor a descendant
+          // of the button, so name matching can never match it
+          // (its text is the generic 'Image Quiz Item'), which is
+          // how the old code fell through to the label-bar DIV.
+          // Src-match requires a card-sized button (>=80x80)
+          // with a descendant img, so a small control can never
+          // win on src. Name matching stays as the fallback.
+          const srcMatch = e => {
+            if (!srcCode) return false;
+            const im = e.querySelector('img');
+            if (!im) return false;
+            const s = (im.getAttribute('src') || '').toLowerCase();
+            if (!s.includes('/' + srcCode + '.')) return false;
+            try {
+              const r = e.getBoundingClientRect();
+              return r.width >= 80 && r.height >= 80;
+            } catch (err) { return false; }
+          };
+          let hitBtn = null, hitKind = 'name';
+          if (srcCode) {
+            hitBtn = interactive.find(srcMatch);
+            if (hitBtn) hitKind = 'src';
+          }
+          if (!hitBtn) hitBtn = interactive.find(match);
           if (hitBtn) { hitBtn.click();
             const d = describe(hitBtn);
             return [true, (hitBtn.innerText || '').trim().slice(0, 80),
@@ -14760,7 +14825,7 @@ def _s_worldle_click_comparison_option(page, want, _exclude=(),
                       .slice(0, 60),
                     {x: Math.round(d[0]), y: Math.round(d[1]),
                      w: Math.round(d[2]), h: Math.round(d[3])},
-                    Math.round(d[4]), Math.round(d[5])]; }
+                    Math.round(d[4]), Math.round(d[5]), hitKind]; }
           const hitCard = divs.find(match);
           if (hitCard) { hitCard.click();
             const d = describe(hitCard);
@@ -14776,7 +14841,8 @@ def _s_worldle_click_comparison_option(page, want, _exclude=(),
             'not found', 'none', '', '', null, null, null];
         }""", {"want": str(want),
                "exclude": list(_exclude or []),
-               "container": container})
+               "container": container,
+               "src_code": src_code or ""})
         if isinstance(hit, (list, tuple)) and len(hit) >= 8:
             _rect = hit[5] if isinstance(hit[5], dict) else None
             _detail = (str(hit[1] or "")
@@ -14784,6 +14850,8 @@ def _s_worldle_click_comparison_option(page, want, _exclude=(),
                        f"cls={str(hit[4] or '')[:60]} "
                        f"rect={_rect} "
                        f"centre=({hit[6]}, {hit[7]})")
+            if len(hit) >= 9 and hit[8]:
+                _detail += f" match={hit[8]}"
             return (bool(hit[0]), _detail, str(hit[2] or "none"))
         if isinstance(hit, (list, tuple)) and len(hit) >= 3:
             _detail = str(hit[1] or "")
@@ -14895,6 +14963,17 @@ def _s_worldle_click_comparison_card(page, want, container=None):
           // buttons. Buttons / [role=button] / links are excluded
           // here — this is the second attempt after a button click
           // produced no selection.
+          // Iter-26 (ANALYSIS23 RC-new-1): NEVER match the Area
+          // container DIV or the label-bar DIV. The container
+          // matched because descLabel() found 'Kuwait' among its
+          // descendants and it was clicked at its centre — the
+          // 6px gap between the cards. The label bar matched
+          // because it carries the country text with no img. A
+          // true card DIV has NO interactive descendant (the
+          // container holds both card BUTTONs), exactly ONE img
+          // (the container holds two), and its own img — a bare
+          // label pill has none. An element whose text IS the
+          // prompt is a holder, never a card.
           const cards = Array.from(document.querySelectorAll(
             'div, section, figure, li'))
             .filter(vis).filter(e => !e.closest('nav, header, footer'))
@@ -14902,8 +14981,12 @@ def _s_worldle_click_comparison_card(page, want, container=None):
             .filter(inContainer)
             .filter(e => !e.closest('button, a, [role=button]'))
             .filter(e => e.tagName !== 'BUTTON')
-            .filter(e => (e.querySelector('img') ||
-                          isLabelText(e.innerText || '')));
+            .filter(e => !e.querySelector(
+              'button, a, [role=button], input, select'))
+            .filter(e => e.querySelectorAll('img').length === 1)
+            .filter(e => e.querySelector('img'))
+            .filter(e => !/(which country|surface area|per capita|comparison)/i
+              .test(e.innerText || ''));
           const hit = cards.find(match);
           if (!hit) return [false, container ?
             'no card inside verified Area container' :
@@ -15140,6 +15223,167 @@ def _s_worldle_resolve_option_names_by_src(page, options):
             if detail else ("src codes unmapped: "
                              + ", ".join(unmapped))
     return opts, detail
+
+
+def _worldle_area_src_code(src):
+    """2-letter country code from a comparison-option image src
+    ('…/country-shapes/kw.svg' -> 'kw'). Pure. '' when the src
+    carries no 2-letter basename — the caller then falls back to
+    name matching."""
+    m = re.search(r"(?:^|/)([A-Za-z]{2})\."
+                  r"(?:svg|png|jpg|jpeg|webp)(?:[?#]|$)",
+                  str(src or ""))
+    return m.group(1).lower() if m else ""
+
+
+def _s_worldle_dedup_comparison_options(options):
+    """Dedup a comparison probe's option list by country name.
+    Iter-26 (ANALYSIS23 RC-new-1): the probe returned 4 entries
+    for 2 cards (2 generic-named silhouette buttons + 2 label
+    pills). Within one name keep the entry WITH an image/src
+    (the real card) and drop the bare label pill; with no image
+    anywhere keep the first. Pure."""
+    grouped = {}
+    order = []
+    for o in (options or []):
+        if not isinstance(o, dict):
+            continue
+        k = _s_worldle_cmp_key(o.get("name") or "")
+        if not k:
+            continue
+        if k not in grouped:
+            grouped[k] = []
+            order.append(k)
+        grouped[k].append(o)
+    out = []
+    for k in order:
+        grp = grouped[k]
+        with_media = [o for o in grp
+                      if o.get("has_img") or o.get("src")]
+        out.append(with_media[0] if with_media else grp[0])
+    return out
+
+
+def _s_worldle_area_button_fingerprint(page, container=None):
+    """Snapshot of every visible comparison BUTTON's
+    selection-relevant state (iter-26): class, computed border
+    colour, box-shadow (ring), background, aria-selected/pressed/
+    checked, data-selected — keyed by the img-src country code,
+    which is the button's stable identity (its text is the
+    generic 'Image Quiz Item'). Also lists visible submit/
+    confirm controls + their disabled state. Pure read, no
+    clicks. Returns {} on any failure (caller treats that as
+    'no fingerprint evidence', never as selection)."""
+    try:
+        res = page.evaluate("""/* worldle-area-button-fingerprint */
+          (container) => {
+          const vis = e => { try { const r = e.getBoundingClientRect();
+            return r.width > 0 && r.height > 0; }
+            catch (err) { return false; } };
+          const norm = s => (s||'').toLowerCase().replace(/\\s+/g,' ').trim();
+          const inContainer = e => {
+            if (!container || !container.rect) return true;
+            try {
+              const r = e.getBoundingClientRect();
+              const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+              const cr = container.rect;
+              return cx >= cr.x - 8 && cx <= cr.x + cr.w + 8 &&
+                     cy >= cr.y - 8 && cy <= cr.y + cr.h + 8;
+            } catch (err) { return false; }
+          };
+          const isChrome = e => { try { const r = e.getBoundingClientRect();
+            return r.y < 160 && r.width <= 56 && r.height <= 56;
+            } catch (err) { return false; } };
+          const codeOf = e => {
+            const im = e.querySelector('img');
+            if (!im) return '';
+            const s = (im.getAttribute('src') || '').toLowerCase();
+            const m = s.match(/(?:^|\\/)([a-z]{2})\\.(?:svg|png|jpg|jpeg|webp)(?:[?#]|$)/);
+            return m ? m[1] : '';
+          };
+          const buttons = Array.from(document.querySelectorAll('button'))
+            .filter(vis).filter(e => !e.closest('nav, header, footer'))
+            .filter(e => !isChrome(e)).filter(inContainer)
+            .map(e => { let cs = null;
+              try { cs = getComputedStyle(e); } catch (err) {}
+              return {code: codeOf(e),
+                name: ((e.innerText || '').split('\\n').map(s => s.trim())
+                  .filter(Boolean)[0] || ''),
+                cls: String(e.getAttribute('class') || ''),
+                border: cs ? cs.borderColor : '',
+                shadow: cs ? cs.boxShadow : '',
+                bg: cs ? cs.backgroundColor : '',
+                aria_selected: e.getAttribute('aria-selected') || '',
+                aria_pressed: e.getAttribute('aria-pressed') || '',
+                aria_checked: e.getAttribute('aria-checked') || '',
+                data_selected: (e.dataset && e.dataset.selected) || ''};
+            })
+            .filter(b => b.code);
+          const submit = Array.from(document.querySelectorAll(
+              'button, [role=button]')).filter(vis)
+            .filter(e => !e.closest('nav, header, footer'))
+            .filter(e => ['submit', 'confirm', 'check', 'continue',
+              'next round'].includes(norm(e.innerText ||
+                e.getAttribute('aria-label') || '')))
+            .map(e => ({text: norm(e.innerText ||
+                e.getAttribute('aria-label') || ''),
+              disabled: !!(e.disabled ||
+                e.getAttribute('aria-disabled') === 'true')}));
+          return {buttons: buttons, submit: submit};
+        }""", container)
+        return res if isinstance(res, dict) else {}
+    except Exception:
+        return {}
+
+
+def _worldle_area_fingerprint_changed(before, after, code):
+    """Did the target card BUTTON's fingerprint change between two
+    snapshots (iter-26)? Compares class / computed border /
+    box-shadow / background / aria / data-selected for the button
+    whose img-src code == `code`, plus submit-control appearance
+    / enabling. Returns (changed, detail). A missing snapshot or
+    a missing target button is (False, ...) — no evidence, never
+    a claimed selection."""
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return False, "fingerprint unavailable"
+    if not code:
+        return False, "no src code for target"
+    def _entry(fp):
+        for b in (fp.get("buttons") or []):
+            if isinstance(b, dict) and \
+                    str(b.get("code") or "").lower() == code:
+                return b
+        return None
+    b0, b1 = _entry(before), _entry(after)
+    if b0 is None or b1 is None:
+        return False, "target button not in fingerprint"
+    fields = ("cls", "border", "shadow", "bg", "aria_selected",
+              "aria_pressed", "aria_checked", "data_selected")
+    diffs = [f for f in fields
+             if str(b0.get(f) or "") != str(b1.get(f) or "")]
+    s0 = before.get("submit") or []
+    s1 = after.get("submit") or []
+    submit_changed = False
+    if len(s1) > len(s0):
+        submit_changed = True
+    else:
+        for a in s1:
+            if not isinstance(a, dict):
+                continue
+            match = [b for b in s0 if isinstance(b, dict) and
+                     b.get("text") == a.get("text")]
+            if match and match[0].get("disabled") and \
+                    not a.get("disabled"):
+                submit_changed = True
+    if diffs or submit_changed:
+        detail = ("button fields changed: " + ",".join(diffs)) \
+            if diffs else ""
+        if submit_changed:
+            detail += ("; submit control appeared/enabled"
+                       if detail else
+                       "submit control appeared/enabled")
+        return True, detail
+    return False, "no fingerprint change"
 
 
 _WORLDLE_AREA_HEADER_BAND_Y = 160
@@ -15417,6 +15661,15 @@ def _s_worldle_play_comparison(page, gid, day, mode, ds, prompt_substrs,
     if _src_det:
         _dbg(gid, f"worldle {mode} comparison: src name resolution: "
                   f"{_src_det}")
+    # Iter-26 (ANALYSIS23 RC-new-1): dedup the options list — the
+    # probe can return 4 entries for 2 cards (silhouette buttons
+    # + their label pills). Keep the imaged card per name.
+    _n_before_dedup = len(options)
+    options = _s_worldle_dedup_comparison_options(options)
+    if len(options) != _n_before_dedup:
+        _dbg(gid, f"worldle {mode} comparison: deduped options "
+                  f"{_n_before_dedup} -> {len(options)}: "
+                  f"{[o.get('name') for o in options]}")
     values = {}
     missing = []
     for o in options:
@@ -15523,6 +15776,23 @@ def _s_worldle_play_comparison(page, gid, day, mode, ds, prompt_substrs,
             _before = _s_worldle_day_guesses(page, _store_key, ds)
         except Exception:
             _before = None
+    # Iter-26 (ANALYSIS23 RC-new-1): the target card's img-src
+    # code (kw/qa) is the button's stable identity — the click
+    # matches the BUTTON by src, never by the label pill. The
+    # fingerprint snapshot below is the before-click baseline
+    # for the class/border/ring diff that proves selection.
+    _best_code = ""
+    _fp0 = {}
+    if mode == "area":
+        for _o in (options or []):
+            if isinstance(_o, dict) and \
+                    _s_worldle_cmp_key(_o.get("name") or "") == \
+                    _s_worldle_cmp_key(best):
+                _best_code = _worldle_area_src_code(
+                    _o.get("src") or "")
+                break
+        _fp0 = _s_worldle_area_button_fingerprint(
+            page, _area_container)
     # Iter-25 (ANALYSIS22 RC-new-1): Area is CARDS first. The
     # frame-proven widget is two silhouette cards + label bars,
     # not buttons; the old buttons-first click matched a 40x40
@@ -15535,7 +15805,8 @@ def _s_worldle_play_comparison(page, gid, day, mode, ds, prompt_substrs,
             page, best, container=_area_container)
         if not ok:
             ok, detail, via = _s_worldle_click_comparison_option(
-                page, best, container=_area_container)
+                page, best, container=_area_container,
+                src_code=_best_code)
     else:
         ok, detail, via = _s_worldle_click_comparison_option(
             page, best, container=_area_container)
@@ -15571,12 +15842,30 @@ def _s_worldle_play_comparison(page, gid, day, mode, ds, prompt_substrs,
               f"selected_name={str((_sel or {}).get('selected_name') or '')!r} "
               f"selected={(_sel or {}).get('selected') or []} "
               f"options={(_sel or {}).get('options') or []}")
-    if ok and via == "card" and not _any_selected(_sel):
+    # Iter-26: fingerprint right after the first click — if it
+    # already proves selection, skip the retry click: a second
+    # click could toggle the selection back off, and the probe's
+    # aria/class signals may simply be blind to this game's
+    # selection marking (the iter-25 shape: signals=[]).
+    _fp_after_first = False
+    if mode == "area" and ok:
+        _fp_mid = _s_worldle_area_button_fingerprint(
+            page, _area_container)
+        _fp_after_first, _fp_mid_detail = \
+            _worldle_area_fingerprint_changed(_fp0, _fp_mid,
+                                              _best_code)
+        if _fp_after_first:
+            _dbg(gid, f"worldle {mode} comparison fingerprint: "
+                      f"selection already proven after first click "
+                      f"({_fp_mid_detail}); skipping retry click")
+    if ok and via == "card" and not _any_selected(_sel) \
+            and not _fp_after_first:
         # Iter-25 (Area card-first): the card click produced NO
         # selection — try the button with the same name before
         # giving up (mirror of the button-first card retry below).
         _ok2, _det2, _via2 = _s_worldle_click_comparison_option(
-            page, best, container=_area_container)
+            page, best, container=_area_container,
+            src_code=_best_code)
         _sel2 = _s_worldle_comparison_selected_state(page, best)
         _dbg(gid, f"worldle {mode} comparison post-click selected-state "
                   f"(retry): target={best!r} via={_via2} "
@@ -15589,7 +15878,8 @@ def _s_worldle_play_comparison(page, gid, day, mode, ds, prompt_substrs,
         if _ok2:
             via = f"card(none-selected)+{_via2}"
             _sel = _sel2
-    if ok and via == "button" and not _any_selected(_sel):
+    if ok and via == "button" and not _any_selected(_sel) \
+            and not _fp_after_first:
         # Button click produced NO selection (the iter-19 shape:
         # frame gp_0360 shows both buttons unselected after the
         # click). Try the option CARD itself before submitting.
@@ -15607,7 +15897,24 @@ def _s_worldle_play_comparison(page, gid, day, mode, ds, prompt_substrs,
         if _ok2:
             via = f"button(none-selected)+{_via2}"
             _sel = _sel2
-    if ok and not _any_selected(_sel):
+    # Iter-26: selection proof #2 — the button fingerprint
+    # diff. The game may mark selection only via class/ring/
+    # border (no aria/class-selected signal the probe checks),
+    # so a changed fingerprint for the target BUTTON is a real
+    # selection signal. No diff + no probe selection = gate
+    # still blocks submit for Area (unchanged iter-25 gate).
+    _fp_changed, _fp_detail = (False, "fingerprint not taken")
+    if mode == "area" and ok and not _fp_after_first:
+        _fp1 = _s_worldle_area_button_fingerprint(
+            page, _area_container)
+        _fp_changed, _fp_detail = \
+            _worldle_area_fingerprint_changed(_fp0, _fp1, _best_code)
+        _dbg(gid, f"worldle {mode} comparison fingerprint diff: "
+                  f"target={best!r} code={_best_code!r} "
+                  f"changed={_fp_changed} ({_fp_detail})")
+    elif mode == "area" and ok:
+        _fp_changed, _fp_detail = True, "proven after first click"
+    if ok and not _any_selected(_sel) and not _fp_changed:
         if mode == "area" and (_sel or {}).get("options"):
             # Iter-25: selected-state verification GATES submit
             # for Area. The probe read the widget's options and
@@ -15626,6 +15933,7 @@ def _s_worldle_play_comparison(page, gid, day, mode, ds, prompt_substrs,
                     f"comparison option {best!r} clicked "
                     f"(via={via}) but no selected state on the card "
                     "after card + button attempts (pick-failed); "
+                    f"fingerprint: {_fp_detail}; "
                     "NOT submitted — selected-state verification "
                     "gates submit")
         # No selection after button (+card) attempts. Do NOT fail
@@ -18048,7 +18356,8 @@ def _attr_norm_name(s):
     return " ".join(str(s or "").lower().split())
 
 
-# Batterup probe hygiene (fix-loop iter 25, ANALYSIS22 RC-new-2).
+# Batterup probe hygiene (fix-loop iter 25, ANALYSIS22 RC-new-2;
+# iter 26, ANALYSIS23 RC-new-2).
 #
 # 1. NO_SUGGESTION: names the live site's suggestion index returns
 #    nothing for, even though they ARE in the vendored pool. "Jesus
@@ -18065,7 +18374,42 @@ def _attr_norm_name(s):
 #    by the first proven name that is not the answer and not already
 #    tried — never by inventing a name, and never for the answer
 #    itself (the answer is never replaced).
-_BATTERUP_NO_SUGGESTION_NAMES = {"jesus tinoco"}
+# 3. PITCHERS (iter 26): the three no-suggestion names observed so far
+#    — Tinoco, Wade Miley, Jhoan Duran (iter-25 run) — are ALL
+#    pitchers (positions SP/RP), while both suggestion-producing
+#    names are batters (1B). The "suggestion index covers batters
+#    only" hypothesis is SUPPORTED by 5/5 observed names plus the
+#    vendored answers file (all 8 answers are position players, zero
+#    pitchers), but NOT proven from site code: the site's JS bundle
+#    is not retrievable via a text fetch (rendered text only, no
+#    script URLs exposed), so the index's own filter is unconfirmed.
+#    The fix does not depend on the hypothesis being universally
+#    true: pitchers are excluded from the PROBE pool only (probes
+#    are disposable guesses; the answer always comes from the CDN,
+#    never from the pool), and a sampled batter probe that still
+#    yields no suggestions is replaced by a proven name as before.
+#    Pitcher exclusion is via _BATTERUP_PITCHER_POSITIONS below;
+#    Miley/Duran are additionally denylisted by name (a caller could
+#    still pass one in as an api_probe).
+# 4. .result-box (iter 26 ROOT CAUSE of the iter-25 failure): the
+#    site's suggestion rows are `.result-box` elements (the run-2 fix
+#    added that selector to _type_country_guess's pick), but the
+#    iter-24/25 click + selection-state code never addressed them:
+#    _attr_click_suggestion_once's Playwright/mouse-events selectors
+#    and _attr_selection_state's dropdown-open selectors covered only
+#    React-autosuggest / [role=option] shapes. Consequences, exactly
+#    matching the iter-25 log: the Playwright click never found the
+#    row (returned False, silently — no log line), the fallback
+#    keyboard path "succeeded", and _attr_selection_state reported
+#    selected=True VACUOUSLY (its open probe never saw the
+#    .result-box row, so open=False while the row sat open and
+#    unselected). Every submit then went out as Enter-with-dropdown-
+#    open and verified dropdown_open=True + 0 rows. Iter 26 adds
+#    .result-box selectors to the click, selection-state, and
+#    post-submit dropdown probes, and logs every real mouse click.
+_BATTERUP_NO_SUGGESTION_NAMES = {"jesus tinoco", "wade miley",
+                                 "jhoan duran"}
+_BATTERUP_PITCHER_POSITIONS = {"SP", "RP", "CP", "P", "CL"}
 _BATTERUP_PROVEN_SUGGESTION_NAMES = ("Vladimir Guerrero Jr",
                                      "Alec Burleson")
 
@@ -18079,7 +18423,10 @@ def _attr_pool(gid):
             return [p.get("player_name") for p in j
                     if isinstance(p, dict) and p.get("player_name")
                     and p.get("player_name").lower()
-                    not in _BATTERUP_NO_SUGGESTION_NAMES]
+                    not in _BATTERUP_NO_SUGGESTION_NAMES
+                    and not _BATTERUP_PITCHER_POSITIONS.intersection(
+                        {str(x).upper()
+                         for x in (p.get("position") or [])})]
         if gid == "marveldle":
             j = json.loads((HERE / "frontend_data" / "src" / "lib" / "data" /
                             "marveldle-comics.json").read_text(encoding="utf-8"))
@@ -18158,7 +18505,8 @@ def _attr_post_submit_probe(page):
           }
           const drop = Array.from(document.querySelectorAll(
             '[role=listbox], [class*=suggest i], [class*=autocomplete i], ' +
-            '[class*=dropdown i]')).filter(vis).length > 0;
+            '[class*=dropdown i], .result-box, ' +
+            '[class*=result-box i]')).filter(vis).length > 0;
           return {rows: rows, dropdown_open: drop,
                   populated: populated > 0, populated_rows: populated,
                   feedback_tiles: feedback,
@@ -18438,7 +18786,13 @@ def _attr_selection_state(page, name):
           const sels = ['[role=listbox]', '[role=option]',
             '.react-autosuggest__suggestions-container--open',
             'ul[class*=suggest i]', '[class*=suggestion i]',
-            '[class*=autocomplete i] [role=listbox]'];
+            '[class*=autocomplete i] [role=listbox]',
+            // Iter 26: Batterup's suggestion rows are .result-box
+            // elements (see the _attr hygiene note) — without these
+            // the probe reported open=False while the row sat open
+            // and unselected, and selected=True vacuously.
+            '.result-box', '[class*=result-box i]',
+            '#player-search .result-box'];
           let open = false;
           for (const s of sels) {
             const els = document.querySelectorAll(s);
@@ -18474,20 +18828,79 @@ def _attr_click_suggestion_once(page, name, method):
       React autocomplete that selects on mousedown / real pointer
       events never sees a selection from that, so the dropdown
       stayed open and nothing was ever selected.
+    - "mouse-coords": a REAL mouse click at the exact-match row's
+      centre coordinates via page.mouse (bypasses element-handle
+      actionability quirks; still a genuine pointer click).
     - "mouse-events": dispatch the full mousedown + mouseup + click
       sequence in-page (covers onMouseDown handlers when no element
       handle is reachable).
     - "keyboard": ArrowDown to highlight, then Enter to select — the
       autocomplete-native selection path. Enter here SELECTS (the
-      dropdown is open); it is not the submit keystroke.
+      dropdown is open); it is not the submit keystroke. The caller
+      (_attr_reselect) verifies the selection state changed before
+      anything is submitted — a keyboard attempt that leaves the
+      dropdown open is NOT a selection.
+    Every real mouse click logs a `suggestion row mouse-click:
+    clicked=True ...` line (iter 25: zero such lines existed, so a
+    missing click was indistinguishable from a silent one).
     Returns True when the attempt was actually performed. Never raises.
     """
+    _gid = getattr(page, "_qp_gid", "batterup")
     try:
         if method == "playwright-click":
             _sels = ("[role=option]",
                      ".react-autosuggest__suggestion",
                      "[class*=suggest i] li", "[class*=suggestion i]",
-                     ".dropdown-item", ".dropdown-menu li")
+                     ".dropdown-item", ".dropdown-menu li",
+                     # Iter 26: Batterup's rows are .result-box
+                     # elements — the previous selector set never
+                     # matched them, so this path returned False
+                     # without ever clicking (iter-25 failure).
+                     ".result-box", "[class*=result-box i]",
+                     "#player-search .result-box")
+            for _sel in _sels:
+                try:
+                    _rows = page.query_selector_all(_sel)
+                except Exception:
+                    continue
+                for _row in _rows or []:
+                    try:
+                        _txt = (_row.inner_text() or "").strip()
+                    except Exception:
+                        continue
+                    if _attr_norm_name(_txt) != _attr_norm_name(name) \
+                            and not _attr_norm_name(_txt).startswith(
+                                _attr_norm_name(name)):
+                        continue
+                    try:
+                        _row.scroll_into_view_if_needed(timeout=3000)
+                    except Exception:
+                        pass
+                    _bb = None
+                    try:
+                        _bb = _row.bounding_box()
+                        if _bb:
+                            QP.ev_push(_bb["x"] + _bb["width"] / 2,
+                                       _bb["y"] + _bb["height"] / 2,
+                                       "click")
+                    except Exception:
+                        pass
+                    _row.click(timeout=3000)
+                    _dbg(_gid, f"suggestion row mouse-click: clicked=True "
+                               f"method=playwright-click row={_txt[:60]!r} "
+                               f"rect={_bb}")
+                    return True
+            _dbg(_gid, "suggestion row mouse-click: clicked=False "
+                       "method=playwright-click reason=no exact-match row")
+            return False
+        if method == "mouse-coords":
+            # Real pointer click at the exact-match row's centre.
+            _sels = ("[role=option]",
+                     ".react-autosuggest__suggestion",
+                     "[class*=suggest i] li", "[class*=suggestion i]",
+                     ".dropdown-item", ".dropdown-menu li",
+                     ".result-box", "[class*=result-box i]",
+                     "#player-search .result-box")
             for _sel in _sels:
                 try:
                     _rows = page.query_selector_all(_sel)
@@ -18508,21 +18921,33 @@ def _attr_click_suggestion_once(page, name, method):
                         pass
                     try:
                         _bb = _row.bounding_box()
-                        if _bb:
-                            QP.ev_push(_bb["x"] + _bb["width"] / 2,
-                                       _bb["y"] + _bb["height"] / 2,
-                                       "click")
+                    except Exception:
+                        _bb = None
+                    if not _bb:
+                        continue
+                    _cx = _bb["x"] + _bb["width"] / 2
+                    _cy = _bb["y"] + _bb["height"] / 2
+                    try:
+                        QP.ev_push(_cx, _cy, "click")
                     except Exception:
                         pass
-                    _row.click(timeout=3000)
+                    page.mouse.click(_cx, _cy)
+                    _dbg(_gid, f"suggestion row mouse-click: clicked=True "
+                               f"method=mouse-coords row={_txt[:60]!r} "
+                               f"rect={_bb}")
                     return True
+            _dbg(_gid, "suggestion row mouse-click: clicked=False "
+                       "method=mouse-coords reason=no exact-match row")
             return False
         if method == "mouse-events":
             return bool(page.evaluate("""(want) => {
               const rows = Array.from(document.querySelectorAll(
                 '.react-autosuggest__suggestion, [role=option], ' +
                 '[role=listbox] li, .dropdown-menu li, .dropdown-item, ' +
-                'ul[class*=suggest i] li, [class*=suggestion i]'));
+                'ul[class*=suggest i] li, [class*=suggestion i], ' +
+                // Iter 26: Batterup's rows are .result-box elements.
+                '.result-box, [class*=result-box i], ' +
+                '#player-search .result-box'));
               const w = want.trim().toLowerCase();
               const best = rows.find(e =>
                 (e.innerText || '').trim().toLowerCase() === w)
@@ -18563,17 +18988,24 @@ def _attr_reselect(page, name):
     move. Each method is verified via _attr_selection_state before
     the next is tried. Returns (ok, detail). Never raises.
     """
-    for _method in ("playwright-click", "mouse-events", "keyboard"):
+    for _method in ("playwright-click", "mouse-coords", "mouse-events",
+                   "keyboard"):
         try:
             _did = _attr_click_suggestion_once(page, name, _method)
         except Exception:
             _did = False
         if not _did:
+            _dbg(getattr(page, "_qp_gid", "batterup"),
+                 f"re-select {name!r}: method={_method} did=False")
             continue
         try:
             _st = _attr_selection_state(page, name)
         except Exception:
             _st = {"selected": None}
+        _dbg(getattr(page, "_qp_gid", "batterup"),
+             f"re-select {name!r}: method={_method} did=True "
+             f"selected={_st.get('selected')} "
+             f"suggestion_open={_st.get('suggestion_open')}")
         if _st.get("selected") is True:
             return True, f"selected via {_method}"
         if _st.get("selected") is None:
@@ -18812,17 +19244,38 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
                 _skip_soft_dismiss = False
                 _submit_branch = "Enter key"
                 try:
-                    btn = page.query_selector(
-                        "button:has-text('Guess'), "
-                        "button:has-text('Submit'), "
-                        "button:has-text('Go'), "
-                        "button[aria-label*='Guess'], "
-                        "button[aria-label*='Submit'], "
-                        "button[title*='Guess'], "
-                        "button[title*='Submit']")
-                    if btn and btn.is_visible():
-                        btn.click(timeout=3000)
-                        _submit_branch = "Guess-button click"
+                    _sels = ["button:has-text('Guess'), "
+                             "button:has-text('Submit'), "
+                             "button:has-text('Go'), "
+                             "button[aria-label*='Guess'], "
+                             "button[aria-label*='Submit'], "
+                             "button[title*='Guess'], "
+                             "button[title*='Submit']"]
+                    if gid == "batterup":
+                        # Iter 26: Batterup's submit control lives in
+                        # the guess form (#player-search); try its
+                        # scoped submit button before Enter. Enter is
+                        # used ONLY after a confirmed selection (the
+                        # pre-submit gate above already enforced
+                        # that), never on an unverified selection.
+                        _sels.append(
+                            "#player-search button[type=submit]")
+                    _btn = None
+                    for _sel in _sels:
+                        try:
+                            _cand = page.query_selector(_sel)
+                        except Exception:
+                            _cand = None
+                        if _cand and _cand.is_visible():
+                            _btn = _cand
+                            _submit_branch = (
+                                "Guess-button click"
+                                if "player-search" not in _sel
+                                else "Guess-button click "
+                                     "(#player-search submit)")
+                            break
+                    if _btn:
+                        _btn.click(timeout=3000)
                     else:
                         page.keyboard.press("Enter")
                 except Exception:
