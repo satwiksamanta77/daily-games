@@ -2633,55 +2633,113 @@ def _qc_visible_content(gid, vdir, gameplay_path=None, solve_span_s=None,
     return ok, detail
 
 
-def _semantic_dom_scores(page, word):
-    """Score for `word` from the sites' real score DOM (guess list/table).
+def _semantic_parse_dom_rows(rows, word):
+    """Score for `word` from scoped guess-row records (pure function).
 
-    Semantle renders each guess as a table row (word + similarity);
-    Contexto renders each guess as a list row (word + rank number). Read
-    the row for this word and take its number: a trailing '%' number first,
-    else the single decimal, else the single integer when the row holds
-    only the word + one number. Returns (score_or_None, probe) — None with
-    the probe (rows scanned, matched row text) means the DOM exposes no
-    per-guess score; the caller must say so honestly, never fake one.
+    `rows` are the per-row records returned by the scoped probe in
+    _semantic_dom_scores — one per rendered guess row, already scoped
+    to the site's real guess list (no 80-row truncation, no generic
+    table/li/class soup):
+    - Contexto: {"src": "contexto", "word": <row-word text>,
+      "score": <displayed rank text>}. The rank is the site's own
+      displayed number (distance + 1), matched on the word cell.
+    - Semantle: {"src": "semantle", "text": <row innerText>}. The row
+      holds guess number + word + similarity + proximity; the
+      similarity is the ONLY decimal in the row (proximity is an
+      integer or text, the guess number is an integer), so the first
+      decimal AFTER the word token is the similarity.
+
+    Returns (score_or_None, probe). None means no row for this word
+    (or no score in its row) — the caller must say so honestly.
     """
     import re as _re
+    probe = {"rows_scanned": len(rows or []), "matched_row": None,
+             "numbers": []}
+    w = str(word or "").lower()
+    if not w:
+        return None, probe
+    wpat = _re.compile(r"(?<![a-z])" + _re.escape(w) + r"(?![a-z])")
+    for r in (rows or []):
+        if not isinstance(r, dict):
+            continue
+        if r.get("src") == "contexto":
+            rw = str(r.get("word") or "").strip().lower()
+            if rw == w and r.get("score") is not None:
+                probe["matched_row"] = (
+                    f"{r.get('word')} {r.get('score')}")[:160]
+                probe["numbers"] = [str(r.get("score"))]
+                return str(r.get("score")), probe
+        elif r.get("src") == "semantle":
+            t = str(r.get("text") or "")
+            m = wpat.search(t.lower())
+            if not m:
+                continue
+            probe["matched_row"] = t[:160]
+            # First decimal AFTER the word token: the similarity.
+            # (Guess number is an integer before the word; proximity
+            # is an integer or text after it.)
+            decs = _re.findall(r"[-+]?\d+\.\d+", t[m.end():])
+            probe["numbers"] = decs
+            if decs:
+                return decs[0], probe
+            return None, probe
+    return None, probe
+
+
+def _semantic_dom_scores(page, word):
+    """Score for `word` from the sites' real score DOM (guess lists).
+
+    Fix-loop iter 30 (ANALYSIS28 BUG 2): the old probe used one
+    generic selector — 'table tr, li, [class*=guess i],
+    [class*=row i], [class*=entry i]' capped at the first 80 matches
+    — which matches NEITHER site's real guess rows. Semantle is an
+    Angular app: its guesses render as a <div> grid inside
+    <app-guesses>, each row a div.dark:border-neutral-300 (no table,
+    no li, no guess/row/entry class). Contexto renders each guess as
+    div.row-wrapper > div.row > span.row-word + rank span inside
+    div.guess-history. The old probe therefore scanned 80 unrelated
+    elements, matched no guess row, and reported every score None
+    even though the scores were visibly rendered — for every guess,
+    in both games, across all runs.
+
+    The probe below scopes to each site's real guess list (no cap —
+    scoped selectors return only guess rows) and hands the rows to
+    _semantic_parse_dom_rows. Returns (score_or_None, probe) — None
+    with the probe means the DOM exposes no per-guess score; the
+    caller must say so honestly, never fake one.
+    """
     probe = {"rows_scanned": 0, "matched_row": None, "numbers": []}
     try:
         rows = page.evaluate("""() => {
           const out = [];
+          // Contexto: .guess-history .row-wrapper > .row > .row-word + rank.
+          // The rank span shows distance + 1 (the site's own number).
           for (const r of document.querySelectorAll(
-              'table tr, li, [class*=guess i], [class*=row i], [class*=entry i]')) {
-            const t = (r.innerText || r.textContent || '').trim();
-            if (t) out.push(t);
+              '.guess-history .row-wrapper')) {
+            const w = r.querySelector('.row-word');
+            const cells = r.querySelectorAll('.row > span');
+            const rank = cells.length
+              ? cells[cells.length - 1].textContent.trim() : null;
+            if (w) out.push({src: 'contexto',
+                             word: (w.textContent || '').trim(),
+                             score: rank});
           }
-          return out.slice(0, 80);
+          // Semantle: <app-guesses> ngFor rows are divs with class
+          // dark:border-neutral-300. The recent-guess card shares the
+          // class but adds rounded-md — exclude it (it duplicates the
+          // latest guess; rows are the ngFor list).
+          for (const r of document.querySelectorAll(
+              'app-guesses div[class*="border-neutral-300"]')) {
+            if ((r.className || '').includes('rounded-md')) continue;
+            const t = (r.innerText || '').trim();
+            if (t) out.push({src: 'semantle', text: t});
+          }
+          return out;
         }""") or []
     except Exception as e:
         probe["error"] = str(e)[:80]
         return None, probe
-    probe["rows_scanned"] = len(rows)
-    w = str(word).lower()
-    matched = None
-    for t in rows:
-        low = t.lower()
-        if _re.search(r"(?<![a-z])" + _re.escape(w) + r"(?![a-z])", low):
-            matched = t
-    if not matched:
-        return None, probe
-    probe["matched_row"] = matched[:160]
-    nums = _re.findall(r"[-+]?\d+(?:\.\d+)?%?", matched)
-    probe["numbers"] = nums
-    m_pct = _re.search(r"([-+]?\d+(?:\.\d+)?)\s*%", matched)
-    if m_pct:
-        return m_pct.group(1), probe
-    decs = [n for n in nums if "." in n]
-    if len(decs) == 1:
-        return decs[0], probe
-    rest = _re.sub(r"(?i)" + _re.escape(w), "", matched)
-    rest_nums = _re.findall(r"[-+]?\d+(?:\.\d+)?", rest)
-    if len(rest_nums) == 1:
-        return rest_nums[0], probe
-    return None, probe
+    return _semantic_parse_dom_rows(rows, word)
 
 
 def _betweenle_counters(page):
@@ -6740,17 +6798,76 @@ def _s_worldle_chapter_plan():
     return list(_WORLDLE_SEGMENTS)
 
 
-def _s_worldle_final_chapters(intro_s, gameplay_s, cards_s=15.0):
+def _s_worldle_raw_to_polished(raw_t, kept_segments):
+    """Map a RAW-recording offset to its POLISHED-gameplay offset.
+
+    The solver records chapter segments against the raw recording
+    (offsets vs _VIDEO_T0), but assembly embeds chapters over the
+    AUTOCROPPED gameplay: the leading idle (and any mid-video static
+    cuts) are gone, so raw t=0 is NOT polished t=0. kept_segments are
+    the autocrop kept segments in raw coordinates, e.g.
+    [[13.4, 334.0]] for a 13.4s leading cut and no other cuts.
+
+    Mapping: walk the kept segments in order, accumulating polished
+    durations. A raw offset inside a kept segment maps to
+    polished_start + (raw - seg_start). A raw offset inside a CUT gap
+    clamps to the polished position of the next kept segment's start
+    (the chapter lands on the first kept frame at/after the mode
+    start). Before the first segment -> 0.0; after the last -> the
+    polished total. kept_segments None/empty -> identity (no cut
+    applied). Pure function.
+    """
+    try:
+        raw = float(raw_t)
+    except Exception:
+        return 0.0
+    segs = []
+    try:
+        for a, b in (kept_segments or []):
+            a, b = float(a), float(b)
+            if b > a:
+                segs.append((a, b))
+    except Exception:
+        return max(0.0, raw)
+    if not segs:
+        return max(0.0, raw)
+    polished = 0.0
+    for a, b in segs:
+        if raw < a:
+            # In a cut gap before this segment: clamp to its start.
+            return round(polished, 1)
+        if raw <= b:
+            return round(polished + (raw - a), 1)
+        polished += b - a
+    # Past the last kept segment: clamp to the polished total.
+    return round(polished, 1)
+
+
+def _s_worldle_final_chapters(intro_s, gameplay_s, cards_s=15.0,
+                              kept_segments=None):
     """Full final-video chapter list from the gameplay-relative plan.
 
     Assumed assembly layout (the generic one): intro, then 5 s recap +
     10 s hints cards (cards_s=15) before gameplay, then the end cards.
     One chapter per played mode, plus Summary at gameplay end. Callers
-    with a different card layout pass their own cards_s."""
+    with a different card layout pass their own cards_s.
+
+    Fix-loop iter 30 (ANALYSIS28 BUG 1): the segment offsets in
+    _WORLDLE_SEGMENTS are RAW-recording offsets, but the embedded
+    chapters sit over the AUTOCROPPED gameplay. The old code mapped
+    chapter = intro + cards + raw_off, which lands every chapter one
+    leading-cut late (13.4 s in the confirmation run: "Area Solve"
+    on the postcard, "Flag Solve" on Trivia). kept_segments (the
+    autocrop kept segments in raw coordinates, from
+    QP.LAST_POLISH['autocrop']['segments']) maps each raw offset to
+    its polished offset first; None/empty keeps the old identity
+    mapping (no cut applied).
+    """
     out = [(0, "Intro")] if intro_s else [(0, "Today's Worldle puzzle")]
     base = float(intro_s or 0) + float(cards_s)
     for off, title in _WORLDLE_SEGMENTS:
-        out.append((round(base + float(off), 1), title))
+        pol = _s_worldle_raw_to_polished(off, kept_segments)
+        out.append((round(base + pol, 1), title))
     out.append((round(base + float(gameplay_s or 0), 1), "Summary"))
     return out
 
@@ -22500,9 +22617,18 @@ def run_one(gid):
             # solver) + Summary. Generic chapters would hide the modes.
             if gid == "worldle" and _WORLDLE_SEGMENTS:
                 try:
-                    chapters = _s_worldle_final_chapters(_intro_dur, gd)
+                    # Iter-30 (ANALYSIS28 BUG 1): the segment offsets
+                    # are RAW-recording offsets, but `gameplay` above
+                    # is the AUTOCROPPED clip. Pass the autocrop kept
+                    # segments so chapters map raw -> polished; without
+                    # this every chapter landed one leading-cut late.
+                    _kept = ((QP.LAST_POLISH or {}).get("autocrop") or {}
+                             ).get("segments")
+                    chapters = _s_worldle_final_chapters(
+                        _intro_dur, gd, kept_segments=_kept)
                     _dbg(gid, f"worldle chapters wired: n={len(chapters)} "
-                              f"modes={len(_WORLDLE_SEGMENTS)}")
+                              f"modes={len(_WORLDLE_SEGMENTS)} "
+                              f"kept_segments={_kept}")
                 except Exception as e:
                     _dbg(gid, f"worldle chapters wiring failed: {str(e)[:120]}")
             out = str(vdir / f"{gid}_final_{date_key}.mp4")
