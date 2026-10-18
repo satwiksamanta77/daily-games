@@ -7366,6 +7366,9 @@ def _s_worldle_click_option_loose(page, want, container=None):
             'button, [role=option], [role=button], [role=menuitem], ' +
             'a, label, li')).filter(vis).filter(
             e => !e.closest('nav, header, footer'))
+            .filter(e => { try { const r = e.getBoundingClientRect();
+              return !(r.y < 160 && r.width <= 56 && r.height <= 56);
+              } catch (err) { return true; } })
             .filter(inContainer);
           const w = norm(want);
           const hit = els.find(e => norm(e.innerText) === w) ||
@@ -7836,9 +7839,16 @@ def _s_worldle_visible_area_ui(page):
                 .includes('larger surface area') ||
                 norm(e.innerText || '')
                 .includes('surface area of')))
+              // Iter-25: count silhouette IMAGES as option-like
+              // descendants too. The Area widget's cards are image
+              // + label-bar, NOT buttons — the old button-only
+              // count (>=2) never matched the widget, so the
+              // container fell back to a prompt-only wrapper (or
+              // None) and the click restriction could not keep
+              // the click inside the widget.
               .filter(e => e.querySelectorAll(
                 'button, [role=option], [role=radio], ' +
-                '[role=button], a, label, [data-value]').length >= 2);
+                '[role=button], a, label, [data-value], img').length >= 2);
             holders.sort((a, b) =>
               (a.innerText || '').length - (b.innerText || '').length);
             const picked = holders[0] ||
@@ -14450,8 +14460,13 @@ def _s_worldle_comparison_probe(page, prompt_substrs):
             return /^[A-Za-zÀ-ÿ'’.\- ]+$/.test(s);
           };
           const sibLabel = (e) => {
-            // Direct siblings first (pill below the button), then the
-            // parent's other leaf children (pill in a sibling subtree).
+            // Iter-25 (ANALYSIS22 RC-new-1): DIRECT siblings only
+            // (the label pill below the card). The old version
+            // climbed 3 ancestors and scanned whole subtrees, so
+            // ANY element sharing a high ancestor with the cards
+            // (e.g. a header nav button) "matched" every country
+            // name — that is how the Area click landed on a 40x40
+            // chrome button. Ancestor scans never name an option.
             const sibs = [];
             if (e.nextElementSibling) sibs.push(e.nextElementSibling);
             if (e.previousElementSibling) sibs.push(e.previousElementSibling);
@@ -14460,25 +14475,36 @@ def _s_worldle_comparison_probe(page, prompt_substrs):
               if (c.querySelector('button, img, input, select')) continue;
               if (isLabelText(t)) return t;
             }
-            let node = e;
-            for (let depth = 0; depth < 3 && node; depth++) {
-              const parent = node.parentElement;
-              if (!parent) break;
-              for (const cand of parent.querySelectorAll('div, span, p, label')) {
-                if (cand === e || e.contains(cand) || cand.contains(e)) continue;
-                if (cand.querySelector('button, img, input, select')) continue;
-                const t = (cand.innerText || '').trim();
-                if (isLabelText(t)) return t;
-              }
-              node = parent;
+            return '';
+          };
+          const descLabel = (e) => {
+            // Label pill INSIDE the card itself (a descendant leaf
+            // carrying the country name). Scoped to the element —
+            // unlike an ancestor scan it cannot leak a name from
+            // another part of the page onto this candidate.
+            for (const cand of e.querySelectorAll('div, span, p, label')) {
+              if (cand.querySelector('button, img, input, select')) continue;
+              const t = (cand.innerText || '').trim();
+              if (isLabelText(t)) return t;
             }
             return '';
+          };
+          const isChromeCandidate = (e) => {
+            // Iter-25: a small (~40x40) control in the top header
+            // band (prev/next arrows, banner X, menu) is chrome,
+            // never a comparison option — even if its own text
+            // or a nearby label looks country-ish.
+            try {
+              const r = e.getBoundingClientRect();
+              return r.y < 160 && r.width <= 56 && r.height <= 56;
+            } catch (err) { return false; }
           };
           const out = []; const seen = new Set();
           const cands = Array.from(container.querySelectorAll(
             'button, [role=option], [role=radio], [role=button], a, ' +
             'label, [data-value]'))
             .filter(vis).filter(e => !e.closest('nav, header, footer'))
+            .filter(e => !isChromeCandidate(e))
             .filter(e => e.getAttribute('role') !== 'tab')
             .filter(e => !e.closest('[role=tablist]'))
             .filter(e => e.getAttribute('aria-selected') === null)
@@ -14492,6 +14518,7 @@ def _s_worldle_comparison_probe(page, prompt_substrs):
           // an already-collected button card (same name, nearby).
           const divCands = Array.from(container.querySelectorAll('div'))
             .filter(vis).filter(e => !e.closest('nav, header, footer'))
+            .filter(e => !isChromeCandidate(e))
             .filter(e => !e.querySelector('button, img, input, select'))
             .filter(e => isLabelText(e.innerText || ''));
           const allCands = cands.concat(divCands);
@@ -14508,7 +14535,7 @@ def _s_worldle_comparison_probe(page, prompt_substrs):
             // Quiz Item') is NOT a name — the sibling label pill is.
             let name = firstLine || '';
             if (!name || genericNames.has(norm(name))) {
-              name = sibLabel(e) || aria || dval || title || alt || name;
+              name = sibLabel(e) || descLabel(e) || aria || dval || title || alt || name;
             }
             if (!name || name.length > 80) continue;
             if (chrome.has(norm(name))) continue;
@@ -14529,6 +14556,7 @@ def _s_worldle_comparison_probe(page, prompt_substrs):
             if (/icon\\s*$/.test(name) || _iconish(aria) ||
                 _iconish(title) || _iconish(alt)) continue;
             const r = e.getBoundingClientRect();
+            if (isChromeCandidate(e)) continue;
             if (r.width <= 48 && r.height <= 48 && !img &&
                 !isLabelText(firstLine)) continue;
             const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
@@ -14555,6 +14583,9 @@ def _s_worldle_comparison_probe(page, prompt_substrs):
             if (seen.has(key)) continue;
             seen.add(key);
             out.push({name: name, x: cx, y: cy, has_img: !!img,
+                      rect: {x: Math.round(r.x), y: Math.round(r.y),
+                             w: Math.round(r.width),
+                             h: Math.round(r.height)},
                       text: (e.innerText || '').slice(0, 120),
                       aria: aria.slice(0, 80), alt: alt.slice(0, 80),
                       title: title.slice(0, 80),
@@ -14595,7 +14626,12 @@ def _s_worldle_click_comparison_option(page, want, _exclude=(),
     caller verifies selection with
     _s_worldle_comparison_selected_state and the store.
 
-    Iter-22 (ANALYSIS19 §3c): `container` is the verified-visible
+    Iter-25 (ANALYSIS22 RC-new-1): the JS matcher no longer
+    climbs ancestors for a sibling label (that climb let a 40x40
+    header nav button "match" every country name); names come
+    from the element itself, a DIRECT sibling label, or a
+    descendant label inside the candidate. Small (~40x40)
+    controls in the top header band are excluded as chrome.
     Area container (from _s_worldle_visible_area_ui). When given,
     ONLY candidates whose centre lies inside that container are
     clickable — the iter-21 click picked the FIRST document-order
@@ -14650,6 +14686,9 @@ def _s_worldle_click_comparison_option(page, want, _exclude=(),
             return /^[A-Za-zÀ-ÿ'’.\\- ]+$/.test(s);
           };
           const sibLabel = (e) => {
+            // Iter-25: DIRECT siblings only — see the probe for
+            // why the ancestor climb had to go (it let a header
+            // nav button "match" every country name).
             const sibs = [];
             if (e.nextElementSibling) sibs.push(e.nextElementSibling);
             if (e.previousElementSibling) sibs.push(e.previousElementSibling);
@@ -14658,19 +14697,26 @@ def _s_worldle_click_comparison_option(page, want, _exclude=(),
               if (c.querySelector('button, img, input, select')) continue;
               if (isLabelText(t)) return t;
             }
-            let node = e;
-            for (let depth = 0; depth < 3 && node; depth++) {
-              const parent = node.parentElement;
-              if (!parent) break;
-              for (const cand of parent.querySelectorAll('div, span, p, label')) {
-                if (cand === e || e.contains(cand) || cand.contains(e)) continue;
-                if (cand.querySelector('button, img, input, select')) continue;
-                const t = (cand.innerText || '').trim();
-                if (isLabelText(t)) return t;
-              }
-              node = parent;
+            return '';
+          };
+          const descLabel = (e) => {
+            // Label pill INSIDE the candidate itself (descendant
+            // leaf). Scoped to the element, so it cannot leak a
+            // name from elsewhere on the page onto this candidate.
+            for (const cand of e.querySelectorAll('div, span, p, label')) {
+              if (cand.querySelector('button, img, input, select')) continue;
+              const t = (cand.innerText || '').trim();
+              if (isLabelText(t)) return t;
             }
             return '';
+          };
+          const isChromeCandidate = (e) => {
+            // Iter-25: a small (~40x40) control in the top header
+            // band is chrome, never a comparison option.
+            try {
+              const r = e.getBoundingClientRect();
+              return r.y < 160 && r.width <= 56 && r.height <= 56;
+            } catch (err) { return false; }
           };
           const genericNames = new Set(['image quiz item', 'quiz item', 'image', 'option', 'choice', 'card']);
           const match = e => {
@@ -14679,9 +14725,9 @@ def _s_worldle_click_comparison_option(page, want, _exclude=(),
             const img = e.querySelector('img');
             let primary = firstLine || '';
             if (!primary || genericNames.has(normDiac(primary))) {
-              primary = sibLabel(e) || primary;
+              primary = sibLabel(e) || descLabel(e) || primary;
             }
-            const vals = [primary, firstLine, sibLabel(e),
+            const vals = [primary, firstLine, sibLabel(e), descLabel(e),
               e.getAttribute('aria-label') || '',
               e.getAttribute('data-value') || '',
               e.getAttribute('title') || '',
@@ -14692,9 +14738,11 @@ def _s_worldle_click_comparison_option(page, want, _exclude=(),
             'button, [role=option], [role=radio], [role=button], a, ' +
             'label, [data-value]')).filter(vis)
             .filter(e => !e.closest('nav, header, footer'))
+            .filter(e => !isChromeCandidate(e))
             .filter(inContainer);
           const divs = Array.from(document.querySelectorAll('div'))
             .filter(vis).filter(e => !e.closest('nav, header, footer'))
+            .filter(e => !isChromeCandidate(e))
             .filter(inContainer)
             .filter(e => !e.querySelector('button, img, input, select'))
             .filter(e => isLabelText(e.innerText || ''));
@@ -14807,6 +14855,25 @@ def _s_worldle_click_comparison_card(page, want, container=None):
             }
             return '';
           };
+          const descLabel = (e) => {
+            // Iter-25: the Area label bar ("Kuwait" / "Qatar") is
+            // a DESCENDANT of the card div, not a sibling — without
+            // this the card itself never matches its own label.
+            for (const cand of e.querySelectorAll('div, span, p, label')) {
+              if (cand.querySelector('button, img, input, select')) continue;
+              const t = (cand.innerText || '').trim();
+              if (isLabelText(t)) return t;
+            }
+            return '';
+          };
+          const isChromeCandidate = (e) => {
+            // Iter-25: a small (~40x40) control in the top header
+            // band is chrome, never a comparison card.
+            try {
+              const r = e.getBoundingClientRect();
+              return r.y < 160 && r.width <= 56 && r.height <= 56;
+            } catch (err) { return false; }
+          };
           const genericNames = new Set(['image quiz item', 'quiz item', 'image', 'option', 'choice', 'card']);
           const match = e => {
             const firstLine = (e.innerText || '').split('\\n')
@@ -14814,9 +14881,9 @@ def _s_worldle_click_comparison_card(page, want, container=None):
             const img = e.querySelector('img');
             let primary = firstLine || '';
             if (!primary || genericNames.has(normDiac(primary))) {
-              primary = sibLabel(e) || primary;
+              primary = sibLabel(e) || descLabel(e) || primary;
             }
-            const vals = [primary, firstLine, sibLabel(e),
+            const vals = [primary, firstLine, sibLabel(e), descLabel(e),
               e.getAttribute('aria-label') || '',
               e.getAttribute('data-value') || '',
               e.getAttribute('title') || '',
@@ -14831,6 +14898,7 @@ def _s_worldle_click_comparison_card(page, want, container=None):
           const cards = Array.from(document.querySelectorAll(
             'div, section, figure, li'))
             .filter(vis).filter(e => !e.closest('nav, header, footer'))
+            .filter(e => !isChromeCandidate(e))
             .filter(inContainer)
             .filter(e => !e.closest('button, a, [role=button]'))
             .filter(e => e.tagName !== 'BUTTON')
@@ -14911,6 +14979,15 @@ def _s_worldle_comparison_selected_state(page, want):
             }
             return '';
           };
+          const descLabel = (e) => {
+            // Iter-25: card label bars are descendants of the card.
+            for (const cand of e.querySelectorAll('div, span, p, label')) {
+              if (cand.querySelector('button, img, input, select')) continue;
+              const t = (cand.innerText || '').trim();
+              if (isLabelText(t)) return t;
+            }
+            return '';
+          };
           const genericNames = new Set(['image quiz item', 'quiz item', 'image', 'option', 'choice', 'card']);
           const nameOf = e => {
             const firstLine = (e.innerText || '').split('\\n')
@@ -14918,9 +14995,9 @@ def _s_worldle_comparison_selected_state(page, want):
             const img = e.querySelector('img');
             let primary = firstLine || '';
             if (!primary || genericNames.has(normDiac(primary))) {
-              primary = sibLabel(e) || primary;
+              primary = sibLabel(e) || descLabel(e) || primary;
             }
-            for (const v of [primary, firstLine, sibLabel(e),
+            for (const v of [primary, firstLine, sibLabel(e), descLabel(e),
                 e.getAttribute('aria-label') || '',
                 e.getAttribute('data-value') || '',
                 e.getAttribute('title') || '',
@@ -14949,6 +15026,9 @@ def _s_worldle_comparison_selected_state(page, want):
             'button, [role=option], [role=radio], [role=button], a, ' +
             'label, [data-value], div'))
             .filter(vis).filter(e => !e.closest('nav, header, footer'))
+            .filter(e => { try { const r = e.getBoundingClientRect();
+              return !(r.y < 160 && r.width <= 56 && r.height <= 56);
+              } catch (err) { return true; } })
             .filter(e => !e.closest('[role=tablist]'))
             .filter(e => e.getAttribute('role') !== 'tab');
           const seen = new Set();
@@ -15062,6 +15142,32 @@ def _s_worldle_resolve_option_names_by_src(page, options):
     return opts, detail
 
 
+_WORLDLE_AREA_HEADER_BAND_Y = 160
+_WORLDLE_AREA_CHROME_MAX = 56
+
+
+def _worldle_area_is_chrome_rect(rect):
+    """True iff `rect` is a small (~40x40) control in the top header
+    band — prev/next nav arrows, banner X, menu — never a comparison
+    option. `rect` is a {x, y, w, h} (or {x, y, width, height}) dict
+    as recorded by the comparison probe. Pure; the JS probes carry
+    the same rule (isChromeCandidate), this is the Python-side
+    enforcement in _s_worldle_comparison_pick."""
+    try:
+        if not isinstance(rect, dict):
+            return False
+        _y = rect.get("y")
+        _w = rect.get("w", rect.get("width"))
+        _h = rect.get("h", rect.get("height"))
+        if _y is None or _w is None or _h is None:
+            return False
+        return (float(_y) < _WORLDLE_AREA_HEADER_BAND_Y
+                and 0 < float(_w) <= _WORLDLE_AREA_CHROME_MAX
+                and 0 < float(_h) <= _WORLDLE_AREA_CHROME_MAX)
+    except Exception:
+        return False
+
+
 def _s_worldle_comparison_pick(options, values):
     """Pick the max-stat comparison option. `options`: [{name, ...}]
     in display order; `values`: {_s_worldle_cmp_key(name): number}.
@@ -15076,7 +15182,14 @@ def _s_worldle_comparison_pick(options, values):
     # aria/title/alt containing 'icon'. Real country names never
     # match this rule.
     _real_opts = []
+    # Iter-25 (ANALYSIS22 RC-new-1): drop header-band chrome
+    # candidates (a 40x40 nav button at rect y=62 that the old
+    # click matched as "Kuwait") BEFORE the name dedup below —
+    # a chrome candidate listed first must not shadow the real
+    # card with the same name.
     for o in (options or []):
+        if _worldle_area_is_chrome_rect((o or {}).get("rect")):
+            continue  # header/nav chrome, not a country option
         _blob = " ".join(str(o.get(f) or "") for f in
                          ("aria", "title", "alt"))
         if re.search(r"icon\s*$", str(o.get("name") or ""),
@@ -15410,8 +15523,22 @@ def _s_worldle_play_comparison(page, gid, day, mode, ds, prompt_substrs,
             _before = _s_worldle_day_guesses(page, _store_key, ds)
         except Exception:
             _before = None
-    ok, detail, via = _s_worldle_click_comparison_option(
-        page, best, container=_area_container)
+    # Iter-25 (ANALYSIS22 RC-new-1): Area is CARDS first. The
+    # frame-proven widget is two silhouette cards + label bars,
+    # not buttons; the old buttons-first click matched a 40x40
+    # header nav button as "Kuwait" and navigated away. For Area
+    # the card is attempted first, the button only as fallback.
+    # GDP keeps the proven buttons-first order (its options ARE
+    # buttons).
+    if mode == "area":
+        ok, detail, via = _s_worldle_click_comparison_card(
+            page, best, container=_area_container)
+        if not ok:
+            ok, detail, via = _s_worldle_click_comparison_option(
+                page, best, container=_area_container)
+    else:
+        ok, detail, via = _s_worldle_click_comparison_option(
+            page, best, container=_area_container)
     if not ok:
         ok, detail = _s_worldle_click_option_loose(
             page, best, container=_area_container)
@@ -15444,6 +15571,24 @@ def _s_worldle_play_comparison(page, gid, day, mode, ds, prompt_substrs,
               f"selected_name={str((_sel or {}).get('selected_name') or '')!r} "
               f"selected={(_sel or {}).get('selected') or []} "
               f"options={(_sel or {}).get('options') or []}")
+    if ok and via == "card" and not _any_selected(_sel):
+        # Iter-25 (Area card-first): the card click produced NO
+        # selection — try the button with the same name before
+        # giving up (mirror of the button-first card retry below).
+        _ok2, _det2, _via2 = _s_worldle_click_comparison_option(
+            page, best, container=_area_container)
+        _sel2 = _s_worldle_comparison_selected_state(page, best)
+        _dbg(gid, f"worldle {mode} comparison post-click selected-state "
+                  f"(retry): target={best!r} via={_via2} "
+                  f"clicked={_det2!r} ok={bool(_ok2)} "
+                  f"selected={_any_selected(_sel2)} "
+                  f"wanted_selected={bool((_sel2 or {}).get('wanted_selected'))} "
+                  f"selected_name={str((_sel2 or {}).get('selected_name') or '')!r} "
+                  f"selected={(_sel2 or {}).get('selected') or []} "
+                  f"options={(_sel2 or {}).get('options') or []}")
+        if _ok2:
+            via = f"card(none-selected)+{_via2}"
+            _sel = _sel2
     if ok and via == "button" and not _any_selected(_sel):
         # Button click produced NO selection (the iter-19 shape:
         # frame gp_0360 shows both buttons unselected after the
@@ -15463,6 +15608,26 @@ def _s_worldle_play_comparison(page, gid, day, mode, ds, prompt_substrs,
             via = f"button(none-selected)+{_via2}"
             _sel = _sel2
     if ok and not _any_selected(_sel):
+        if mode == "area" and (_sel or {}).get("options"):
+            # Iter-25: selected-state verification GATES submit
+            # for Area. The probe read the widget's options and
+            # NONE is selected after card + button attempts —
+            # submitting now would answer whatever the view
+            # happens to show (iter-24: the flipped
+            # PopulationCurrency round). Pick-failed, nothing
+            # submitted. When the probe itself read nothing
+            # (options empty — probe never ran), fall through to
+            # the old submit-anyway + store-verify arbitration.
+            _dbg(gid, f"worldle {mode} comparison: no selection "
+                      f"after click (via={via}); selected-state "
+                      "gate blocks submit for Area (pick-failed) — "
+                      "NOT submitting")
+            return ("partial", None,
+                    f"comparison option {best!r} clicked "
+                    f"(via={via}) but no selected state on the card "
+                    "after card + button attempts (pick-failed); "
+                    "NOT submitted — selected-state verification "
+                    "gates submit")
         # No selection after button (+card) attempts. Do NOT fail
         # here: some widgets register the pick only on submit /
         # Enter. Submit once and let the store-verify below (and
@@ -15482,16 +15647,23 @@ def _s_worldle_play_comparison(page, gid, day, mode, ds, prompt_substrs,
         # executed) does not block: the click + store-verify
         # below arbitrate, as before.
         _vis2 = _s_worldle_visible_area_ui(page)
-        if _vis2.get("probe_ran") and not _vis2.get("visible"):
+        # Iter-25: a view-flip is pick-FAILED, never pick-ok —
+        # check the visible round AND the store/header evidence
+        # (_worldle_area_still_on_area: game_round or the visible
+        # header naming another round). Either signal alone
+        # blocks the submit.
+        _still = _worldle_area_still_on_area(page)
+        if (_vis2.get("probe_ran") and not _vis2.get("visible")) or not _still:
             _dbg(gid, "worldle area comparison: view FLIPPED after "
-                      "click (no longer visible Area) — NOT "
-                      "submitting into the wrong round "
-                      f"(reason={_vis2.get('reason')})")
+                      "click (no longer visible Area) — pick-failed, "
+                      "NOT submitting into the wrong round "
+                      f"(reason={_vis2.get('reason')}; "
+                      f"still_on_area={_still})")
             return ("partial", None,
                     "comparison click flipped the view off Area "
-                    f"(reason={_vis2.get('reason')}); click did "
-                    "NOT register — NOT submitted into the wrong "
-                    "round")
+                    f"(pick-failed; reason={_vis2.get('reason')}; "
+                    f"still_on_area={_still}); click did NOT "
+                    "register — NOT submitted into the wrong round")
     _s_worldle_submit_guarded(page, gid, mode, ds)
     _settle(page, base=2000)
     if verify_store and _store_key is not None and _before is not None:
@@ -17871,6 +18043,33 @@ def _s_phoodle(page, ans, gid):
     return ok, ev
 
 
+def _attr_norm_name(s):
+    """Whitespace-collapsed lowercase name key (pure)."""
+    return " ".join(str(s or "").lower().split())
+
+
+# Batterup probe hygiene (fix-loop iter 25, ANALYSIS22 RC-new-2).
+#
+# 1. NO_SUGGESTION: names the live site's suggestion index returns
+#    nothing for, even though they ARE in the vendored pool. "Jesus
+#    Tinoco" is in batterup-players.json but the 2026-10-18 run got
+#    `pick ok=False (no suggestions ...)` for him twice — the probe
+#    was never submittable, so it burned a guess slot on nothing.
+#    Denylisted from _attr_pool (the single choke point feeding both
+#    _plan_for slides and solve_attr_game), so it can never be sampled
+#    again. Names are matched lowercased.
+# 2. PROVEN_SUGGESTION: names the live site PROVABLY suggests — the
+#    iter-24 frames show their suggestion rows on the live board
+#    (f0030: "Vladimir Guerrero Jr"; f0145: "Alec Burleson"). When a
+#    probe yields no suggestions mid-solve, it is REPLACED in place
+#    by the first proven name that is not the answer and not already
+#    tried — never by inventing a name, and never for the answer
+#    itself (the answer is never replaced).
+_BATTERUP_NO_SUGGESTION_NAMES = {"jesus tinoco"}
+_BATTERUP_PROVEN_SUGGESTION_NAMES = ("Vladimir Guerrero Jr",
+                                     "Alec Burleson")
+
+
 def _attr_pool(gid):
     """Probe-name pool for attribute games (never contains the answer)."""
     try:
@@ -17878,7 +18077,9 @@ def _attr_pool(gid):
             j = json.loads((HERE / "frontend_data" / "src" / "lib" / "data" /
                             "batterup-players.json").read_text(encoding="utf-8"))
             return [p.get("player_name") for p in j
-                    if isinstance(p, dict) and p.get("player_name")]
+                    if isinstance(p, dict) and p.get("player_name")
+                    and p.get("player_name").lower()
+                    not in _BATTERUP_NO_SUGGESTION_NAMES]
         if gid == "marveldle":
             j = json.loads((HERE / "frontend_data" / "src" / "lib" / "data" /
                             "marveldle-comics.json").read_text(encoding="utf-8"))
@@ -18136,6 +18337,7 @@ def _attr_verify_submitted(page, gid, baseline_rows, timeout_s=8.0):
             break
     _grew = int(_pr.get("populated_rows") or 0) > int(baseline_rows or 0)
     if _grew:
+        _pr["failure_kind"] = "verified"
         # Dismiss the lingering suggestion dropdown, then re-probe: the
         # board must still show the new row, and the dropdown should
         # now read closed.
@@ -18154,13 +18356,18 @@ def _attr_verify_submitted(page, gid, baseline_rows, timeout_s=8.0):
                       "dropdown rows) — dropdown detector is known to stay "
                       "open after genuine submits (iter9)")
     else:
-        # RC4 (iter 24): an unverified submit that leaves the dropdown
-        # OPEN with NO row growth is the CMP-overlay signature (Batterup
-        # iter-23: submit verify populated_rows=0 + dropdown_open=True,
-        # then every re-pick click timed out behind "We value your
-        # privacy"). Re-check consent FIRST — blind re-picks just time
-        # out against the overlay again — then clean the board state
-        # for the retry's fresh pick.
+        # Iter 25 (ANALYSIS22 RC-new-2): an unverified submit that
+        # leaves the dropdown OPEN with NO row growth is the
+        # "selection never happened" signature — NOT the CMP signature.
+        # Iter-23/24 blamed the CMP overlay, but iter-24 proved it
+        # wrong: zero CMP/consent lines and NO consent dialog in any
+        # gameplay frame, yet all 6 submits failed exactly this way.
+        # The CMP re-check below is kept ONLY as a fallback (a CMP
+        # may still appear on some runs); it is no longer treated as
+        # the cause when no dialog is present. The caller uses the
+        # failure_kind on the probe to trigger a RE-SELECT (click the
+        # suggestion row again), not a blind re-pick.
+        _pr["failure_kind"] = _attr_submit_failure_kind(_pr, baseline_rows)
         if _pr.get("dropdown_open"):
             try:
                 _attr_consent_recheck(
@@ -18182,6 +18389,198 @@ def _attr_verify_submitted(page, gid, baseline_rows, timeout_s=8.0):
     return bool(_grew), _pr
 
 
+def _attr_submit_failure_kind(probe, baseline_rows=0):
+    """Classify an unverified submit from its post-submit probe (pure).
+
+    - "verified": populated rows grew past the baseline.
+    - "selection-never-happened": dropdown still OPEN and zero
+      populated rows — the iter-24 Batterup shape (ANALYSIS22
+      RC-new-2). The suggestion was never selected, so the submit
+      keystroke was consumed by the open autocomplete; re-SELECT,
+      do not blindly re-pick.
+    - "no-row-growth": anything else (dropdown closed, still no row).
+    """
+    try:
+        pr = probe or {}
+        if int(pr.get("populated_rows") or 0) > int(baseline_rows or 0):
+            return "verified"
+        if pr.get("dropdown_open") and int(pr.get("populated_rows") or 0) == 0:
+            return "selection-never-happened"
+    except Exception:
+        pass
+    return "no-row-growth"
+
+
+def _attr_selection_state(page, name):
+    """Did the suggestion pick actually SELECT a player (Batterup)?
+
+    The old pick check could not tell: `_type_country_guess` verified
+    only that the input held the typed name — but typed text equals
+    the name whether or not the suggestion row was ever selected, so
+    "pick ok=True" fired while the dropdown sat open with nothing
+    selected (iter-24: pick ok=True, then every submit left
+    dropdown_open=True + 0 rows). The ONLY discriminator between
+    "typed" and "selected" is the suggestion dropdown CLOSING with
+    the input holding exactly the picked name.
+
+    Returns {"selected": True/False/None, "suggestion_open": bool,
+    "input_value": str}. selected=None means the probe itself was
+    unavailable (evaluate failed / returned nothing) — the caller
+    falls back to the pick's own verdict with a WARN, never crashes.
+    Never raises.
+    """
+    try:
+        res = page.evaluate("""(want) => {
+          const inp = document.querySelector(
+            'input[name=guess], #input-box, input[type=text], ' +
+            'input:not([type]), input[type=search]');
+          const val = inp ? (inp.value || '') : '';
+          const sels = ['[role=listbox]', '[role=option]',
+            '.react-autosuggest__suggestions-container--open',
+            'ul[class*=suggest i]', '[class*=suggestion i]',
+            '[class*=autocomplete i] [role=listbox]'];
+          let open = false;
+          for (const s of sels) {
+            const els = document.querySelectorAll(s);
+            for (const e of els) {
+              if (e && e.offsetParent !== null) { open = true; break; }
+            }
+            if (open) break;
+          }
+          return {input_value: val, suggestion_open: open};
+        }""", name)
+    except Exception:
+        return {"selected": None, "suggestion_open": None,
+                "input_value": ""}
+    if not isinstance(res, dict):
+        return {"selected": None, "suggestion_open": None,
+                "input_value": ""}
+    _open = bool(res.get("suggestion_open"))
+    _val = str(res.get("input_value") or "")
+    _selected = (not _open) and \
+        _attr_norm_name(_val) == _attr_norm_name(name)
+    return {"selected": _selected, "suggestion_open": _open,
+            "input_value": _val}
+
+
+def _attr_click_suggestion_once(page, name, method):
+    """One attempt to click/select the suggestion row for `name`.
+
+    Methods, in escalating order:
+    - "playwright-click": a REAL Playwright click on the exact-match
+      row (real mousedown/mouseup/click + scrolling). This is the fix
+      for the iter-24 failure: the old path used only a JS
+      `element.click()`, which dispatches a bare `click` event — a
+      React autocomplete that selects on mousedown / real pointer
+      events never sees a selection from that, so the dropdown
+      stayed open and nothing was ever selected.
+    - "mouse-events": dispatch the full mousedown + mouseup + click
+      sequence in-page (covers onMouseDown handlers when no element
+      handle is reachable).
+    - "keyboard": ArrowDown to highlight, then Enter to select — the
+      autocomplete-native selection path. Enter here SELECTS (the
+      dropdown is open); it is not the submit keystroke.
+    Returns True when the attempt was actually performed. Never raises.
+    """
+    try:
+        if method == "playwright-click":
+            _sels = ("[role=option]",
+                     ".react-autosuggest__suggestion",
+                     "[class*=suggest i] li", "[class*=suggestion i]",
+                     ".dropdown-item", ".dropdown-menu li")
+            for _sel in _sels:
+                try:
+                    _rows = page.query_selector_all(_sel)
+                except Exception:
+                    continue
+                for _row in _rows or []:
+                    try:
+                        _txt = (_row.inner_text() or "").strip()
+                    except Exception:
+                        continue
+                    if _attr_norm_name(_txt) != _attr_norm_name(name) \
+                            and not _attr_norm_name(_txt).startswith(
+                                _attr_norm_name(name)):
+                        continue
+                    try:
+                        _row.scroll_into_view_if_needed(timeout=3000)
+                    except Exception:
+                        pass
+                    try:
+                        _bb = _row.bounding_box()
+                        if _bb:
+                            QP.ev_push(_bb["x"] + _bb["width"] / 2,
+                                       _bb["y"] + _bb["height"] / 2,
+                                       "click")
+                    except Exception:
+                        pass
+                    _row.click(timeout=3000)
+                    return True
+            return False
+        if method == "mouse-events":
+            return bool(page.evaluate("""(want) => {
+              const rows = Array.from(document.querySelectorAll(
+                '.react-autosuggest__suggestion, [role=option], ' +
+                '[role=listbox] li, .dropdown-menu li, .dropdown-item, ' +
+                'ul[class*=suggest i] li, [class*=suggestion i]'));
+              const w = want.trim().toLowerCase();
+              const best = rows.find(e =>
+                (e.innerText || '').trim().toLowerCase() === w)
+                || rows.find(e =>
+                  (e.innerText || '').trim().toLowerCase().startsWith(w));
+              if (!best) return false;
+              const opts = {bubbles: true, cancelable: true, view: window};
+              best.dispatchEvent(new MouseEvent('mousedown', opts));
+              best.dispatchEvent(new MouseEvent('mouseup', opts));
+              best.dispatchEvent(new MouseEvent('click', opts));
+              return true;
+            }""", name))
+        if method == "keyboard":
+            page.keyboard.press("ArrowDown")
+            try:
+                page.wait_for_timeout(400)
+            except Exception:
+                pass
+            page.keyboard.press("Enter")
+            try:
+                page.wait_for_timeout(800)
+            except Exception:
+                pass
+            return True
+    except Exception:
+        return False
+    return False
+
+
+def _attr_reselect(page, name):
+    """Re-select the suggestion row WITHOUT retyping (Batterup).
+
+    Used when a pick reported ok but no selection landed, and when a
+    submit fails with the "selection-never-happened" signature
+    (dropdown open + 0 rows): the input still holds the name and the
+    dropdown still shows the suggestion, so clicking the row again is
+    the repair — retyping + re-picking is the fallback, not the first
+    move. Each method is verified via _attr_selection_state before
+    the next is tried. Returns (ok, detail). Never raises.
+    """
+    for _method in ("playwright-click", "mouse-events", "keyboard"):
+        try:
+            _did = _attr_click_suggestion_once(page, name, _method)
+        except Exception:
+            _did = False
+        if not _did:
+            continue
+        try:
+            _st = _attr_selection_state(page, name)
+        except Exception:
+            _st = {"selected": None}
+        if _st.get("selected") is True:
+            return True, f"selected via {_method}"
+        if _st.get("selected") is None:
+            return False, "selection probe unavailable"
+    return False, "selection never landed after re-select attempts"
+
+
 def solve_attr_game(page, answer_name, gid, api_probes=()):
     """Attribute search-box games (batterup, marveldle): 2 real probes with
     on-screen column feedback, then the answer. Suggestion rows are picked by
@@ -18197,13 +18596,32 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
     pre-submit baseline (batterup rerun #9: Enter never submitted, yet
     the guess was counted). A guess with no populated row never reaches
     the win check, and the answer-echo fallback is gone: the answer
-    merely sitting in the input / open dropdown is not win evidence."""
+    merely sitting in the input / open dropdown is not win evidence.
+
+    Fix-loop iter 25 (ANALYSIS22 RC-new-2, batterup only): "pick ok"
+    now means the suggestion was SELECTED, not merely that a
+    suggestion appeared. Typing + suggestion appearance alone never
+    counts: after the pick, _attr_selection_state must report the
+    dropdown closed with the input holding exactly the picked name,
+    or the pick is re-selected (real click / mouse events /
+    keyboard) before anything is submitted. A submit that leaves
+    dropdown_open=True + 0 populated rows is classified
+    "selection-never-happened" and triggers a re-select first, not a
+    blind re-pick. A probe whose suggestion index returns nothing is
+    replaced in place by a proven-suggestion name; the answer is
+    never replaced. The CMP re-check stays as a fallback only —
+    iter-24 refuted CMP as the cause (no dialog in any frame)."""
     _close_modals(page)
     answer_name = str(answer_name or "").strip()
     if not answer_name:
         return False, "empty answer"
     pool = [n for n in _attr_pool(gid) if n and n.lower() != answer_name.lower()]
     probes = [str(p) for p in (list(api_probes or [])[:2]) if p]
+    if gid == "batterup":
+        # Never play a denylisted no-suggestion name even if a caller
+        # passed it in as an api_probe.
+        probes = [p for p in probes
+                  if p.lower() not in _BATTERUP_NO_SUGGESTION_NAMES]
     # Date-seeded sample, same seed as _plan_for (fix-loop iter 11):
     # the old pool[0] / pool[mid] picks opened every video with the
     # same two probes. Never the answer (excluded from pool above).
@@ -18219,6 +18637,57 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
     _pick_failed = []  # names whose suggestion pick failed (never submitted)
     _submit_failed = []  # names picked but never verified submitted
     _dbg(gid, f"plan: probes={probes} answer={answer_name!r}")
+
+    def _pick_and_confirm(_name, _label="pick"):
+        """Type + click the suggestion, then CONFIRM a real selection.
+
+        Returns (ok, detail). For batterup, ok=True means SELECTED:
+        after _type_country_guess reports ok, _attr_selection_state
+        must report the dropdown closed with the input holding exactly
+        the name; if it does not, the row is re-selected (real click /
+        mouse events / keyboard) and only a confirmed selection keeps
+        ok=True. A pick that fails outright is retried once after a
+        consent re-check + soft dropdown close (the iter-24 CMP path),
+        then confirmed again. For other games this is just the pick:
+        their pick paths are proven and their dropdowns may
+        legitimately stay open, so no dropdown-closed gate is applied.
+        """
+        _ok, _detail = _type_country_guess(page, page, _name)
+        if not _ok:
+            # A pick that fails while a CMP covers the board
+            # (Playwright click timeout) is NOT a missed suggestion —
+            # the board was unclickable. Re-check consent, close the
+            # dropdown, and retry the pick once before dropping it.
+            _attr_consent_recheck(page, gid, f"pick failed for {_name!r}",
+                                  full=True)
+            _attr_dismiss_dropdown_soft(page)
+            _ok, _detail = _type_country_guess(page, page, _name)
+            _dbg(gid, f"guess {_label} {_name!r}: re-pick ok={_ok} "
+                      f"({_detail})")
+        if _ok and gid == "batterup":
+            try:
+                _st = _attr_selection_state(page, _name)
+            except Exception:
+                _st = {"selected": None}
+            if _st.get("selected") is False:
+                _dbg(gid, f"guess {_label} {_name!r}: pick reported ok "
+                          f"but no selection landed "
+                          f"(suggestion_open={_st.get('suggestion_open')} "
+                          f"input={_st.get('input_value')!r}); re-selecting")
+                _sel_ok, _sel_detail = _attr_reselect(page, _name)
+                if _sel_ok:
+                    _detail = (f"{_detail} (selection confirmed via "
+                               f"{_sel_detail})")
+                else:
+                    _ok = False
+                    _detail = (f"suggestion never selected "
+                               f"({_sel_detail}); pick ok=False")
+            elif _st.get("selected") is None:
+                _dbg(gid, f"guess {_label} {_name!r}: selection probe "
+                          f"unavailable; accepting pick verdict "
+                          f"({_detail})")
+        return _ok, _detail
+
     for n, name in enumerate(seq):
         last = (n == len(seq) - 1)
         _idle_drift(page)
@@ -18236,20 +18705,34 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
                 _attr_post_submit_probe(page).get("populated_rows") or 0)
         except Exception:
             _baseline_rows = 0
-        ok, detail = _type_country_guess(page, page, name)
+        ok, detail = _pick_and_confirm(name, f"{n + 1}/{len(seq)}")
         _dbg(gid, f"guess {n + 1}/{len(seq)} {name!r}: pick ok={ok} ({detail})")
-        if not ok:
-            # RC4 (iter 24): a pick that fails while a CMP covers the
-            # board (Playwright click timeout) is NOT a missed
-            # suggestion — the board was unclickable. Re-check consent,
-            # close the dropdown, and retry the pick once before
-            # dropping it.
-            _attr_consent_recheck(page, gid, f"pick failed for {name!r}",
-                                  full=True)
-            _attr_dismiss_dropdown_soft(page)
-            ok, detail = _type_country_guess(page, page, name)
-            _dbg(gid, f"guess {n + 1}/{len(seq)} {name!r}: re-pick "
-                      f"ok={ok} ({detail})")
+        if not ok and gid == "batterup" and not last \
+                and "no suggestions" in str(detail):
+            # Iter 25: the probe produced NO suggestion at all (the
+            # "Jesus Tinoco" shape) — it can never be submitted, so
+            # REPLACE it in place with a proven-suggestion name
+            # instead of burning the slot. The replacement is picked
+            # and confirmed like any other guess; the failed probe is
+            # recorded as pick-failed (never submitted). The answer
+            # (last) is NEVER replaced.
+            _tried = {_attr_norm_name(x)
+                      for x in list(seq) + _pick_failed + _submitted}
+            for _fb in _BATTERUP_PROVEN_SUGGESTION_NAMES:
+                if _attr_norm_name(_fb) in _tried \
+                        or _attr_norm_name(_fb) == \
+                        _attr_norm_name(answer_name):
+                    continue
+                _fb_ok, _fb_detail = _pick_and_confirm(
+                    _fb, f"{n + 1}/{len(seq)}")
+                _dbg(gid, f"guess {n + 1}/{len(seq)}: probe {name!r} "
+                          f"had no suggestions; replacement {_fb!r} "
+                          f"pick ok={_fb_ok} ({_fb_detail})")
+                if _fb_ok:
+                    _pick_failed.append(name)
+                    _REJECTED[gid] = list(_pick_failed)
+                    name, detail, ok = _fb, _fb_detail, True
+                    break
         if not ok:
             # suggestion missed: drop this probe and continue like a human.
             # It was NEVER submitted: record separately, do not count it.
@@ -18266,51 +18749,131 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
         # the guess was counted as submitted). The guess joins _submitted
         # only after _attr_verify_submitted sees populated rows grow.
         _verified = False
+        _pr = {"populated_rows": _baseline_rows, "dropdown_open": False,
+               "feedback_tiles": 0,
+               "failure_kind": "no-row-growth"}
+        _reselect_tried = False  # re-select already attempted this guess
+        _skip_soft_dismiss = False  # confirmed selection already closed it
         for _attempt in range(3):
-            # Dismiss the suggestion dropdown FIRST (soft: no clearing):
-            # Enter sent while the autocomplete is open is consumed by
-            # the dropdown instead of submitting (batterup rerun #9).
-            _attr_dismiss_dropdown_soft(page)
-            _submit_branch = "Enter key"
-            try:
-                btn = page.query_selector(
-                    "button:has-text('Guess'), button:has-text('Submit'), "
-                    "button:has-text('Go')")
-                if btn and btn.is_visible():
-                    btn.click(timeout=3000)
-                    _submit_branch = "Guess-button click"
-                else:
-                    page.keyboard.press("Enter")
-            except Exception:
+            if gid == "batterup":
+                # NEVER submit without a confirmed selection: an Enter
+                # sent while the autocomplete is open is consumed by
+                # the dropdown instead of submitting (iter-24: 6/6
+                # submits failed exactly this way). If no selection
+                # landed, re-select first; only a confirmed selection
+                # (or an unavailable selection probe) reaches submit.
                 try:
-                    page.keyboard.press("Enter")
+                    _sel = _attr_selection_state(page, name)
                 except Exception:
-                    pass
-            _dbg(gid, f"guess {n + 1}/{len(seq)} {name!r}: submit "
-                      f"attempt {_attempt + 1}/3 via {_submit_branch}")
-            _settle(page, base=3000)
-            _verified, _pr = _attr_verify_submitted(
-                page, gid, _baseline_rows)
+                    _sel = {"selected": None}
+                if _sel.get("selected") is False:
+                    _sel_ok, _sel_detail = _attr_reselect(page, name)
+                    _reselect_tried = True
+                    if not _sel_ok:
+                        _skip_soft_dismiss = False
+                        _dbg(gid, f"guess {n + 1}/{len(seq)} {name!r}: "
+                                  f"no selection before submit "
+                                  f"({_sel_detail}); NOT submitting")
+                        _verified = False
+                        _pr = {"populated_rows": _baseline_rows,
+                               "dropdown_open": True,
+                               "feedback_tiles": 0,
+                               "failure_kind":
+                                   "selection-never-happened"}
+                        # Fall through to the retry handling below,
+                        # which re-picks (retypes) since re-select
+                        # already failed for this guess.
+                        _attempt_failed_no_submit = True
+                    else:
+                        _attempt_failed_no_submit = False
+                        # Re-select closed the dropdown: nothing left
+                        # for the Escape soft-dismiss to do.
+                        _skip_soft_dismiss = True
+                elif _sel.get("selected") is True:
+                    # Dropdown already closed on a confirmed selection:
+                    # skip the Escape soft-dismiss — there is nothing
+                    # to dismiss, and Escape must not disturb a
+                    # confirmed selection.
+                    _attempt_failed_no_submit = False
+                    _skip_soft_dismiss = True
+                else:
+                    _attempt_failed_no_submit = False
+                    _skip_soft_dismiss = False
+            else:
+                _attempt_failed_no_submit = False
+            if not _attempt_failed_no_submit:
+                # Dismiss the suggestion dropdown FIRST (soft: no
+                # clearing) — unless a confirmed Batterup selection
+                # already closed it (see above): Enter sent while the
+                # autocomplete is open is consumed by the dropdown
+                # instead of submitting (batterup rerun #9).
+                if not _skip_soft_dismiss:
+                    _attr_dismiss_dropdown_soft(page)
+                _skip_soft_dismiss = False
+                _submit_branch = "Enter key"
+                try:
+                    btn = page.query_selector(
+                        "button:has-text('Guess'), "
+                        "button:has-text('Submit'), "
+                        "button:has-text('Go'), "
+                        "button[aria-label*='Guess'], "
+                        "button[aria-label*='Submit'], "
+                        "button[title*='Guess'], "
+                        "button[title*='Submit']")
+                    if btn and btn.is_visible():
+                        btn.click(timeout=3000)
+                        _submit_branch = "Guess-button click"
+                    else:
+                        page.keyboard.press("Enter")
+                except Exception:
+                    try:
+                        page.keyboard.press("Enter")
+                    except Exception:
+                        pass
+                _dbg(gid, f"guess {n + 1}/{len(seq)} {name!r}: submit "
+                          f"attempt {_attempt + 1}/3 via {_submit_branch}")
+                _settle(page, base=3000)
+                _verified, _pr = _attr_verify_submitted(
+                    page, gid, _baseline_rows)
             if _verified:
                 break
             if _attempt < 2:
+                _kind = _attr_submit_failure_kind(_pr, _baseline_rows)
                 _dbg(gid, f"guess {n + 1}/{len(seq)} {name!r}: submit "
                           f"attempt {_attempt + 1}/3 NOT verified on the "
-                          f"board; re-picking and retrying")
-                # RC4 (iter 24): verification already re-checked
-                # consent on the dropdown-open + no-growth signature;
-                # re-check again here (cheap probe) in case the CMP
-                # re-appeared with a different signature, and close
-                # the dropdown explicitly before re-picking so a
-                # stale open dropdown cannot swallow the pick.
+                          f"board (failure_kind={_kind}); "
+                          f"re-selecting/re-picking and retrying")
+                if _kind == "selection-never-happened" \
+                        and not _reselect_tried:
+                    # Iter 25: selection never happened — the input
+                    # still holds the name and the dropdown still
+                    # shows the suggestion, so RE-SELECT (click the
+                    # row again) WITHOUT retyping. Only if the
+                    # re-select fails do we fall through to a full
+                    # re-pick below. The CMP re-check stays as a
+                    # fallback (verification already ran one); CMP is
+                    # no longer presumed to be the cause.
+                    _sel_ok, _sel_detail = _attr_reselect(page, name)
+                    _reselect_tried = True
+                    if _sel_ok:
+                        _dbg(gid, f"guess {n + 1}/{len(seq)} {name!r}: "
+                                  f"re-selected ({_sel_detail}); "
+                                  f"retrying submit without retyping")
+                        continue
+                    _dbg(gid, f"guess {n + 1}/{len(seq)} {name!r}: "
+                              f"re-select failed ({_sel_detail}); "
+                              f"falling through to full re-pick")
+                # Re-pick: the input was cleared by the dismiss inside
+                # verification, so type + pick the suggestion again
+                # (and confirm the selection for batterup).
                 _attr_consent_recheck(
                     page, gid, "before re-pick after unverified submit")
                 _attr_dismiss_dropdown_soft(page)
-                # Re-pick: the input was cleared by the dismiss inside
-                # verification, so type + pick the suggestion again.
-                ok, detail = _type_country_guess(page, page, name)
+                ok, detail = _pick_and_confirm(
+                    name, f"{n + 1}/{len(seq)}")
                 _dbg(gid, f"guess {n + 1}/{len(seq)} {name!r}: re-pick "
                           f"ok={ok} ({detail})")
+                _reselect_tried = False
                 if not ok:
                     break
             else:
