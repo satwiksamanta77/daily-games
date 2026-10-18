@@ -1146,6 +1146,73 @@ def _unplayed_pool(pool, played):
             if not any(_row_matches_equation(p, s) for p in played)]
 
 
+def _solver_empty_fallback(eqs, official_i, typed_guesses, pool,
+                             played):
+    """Next guess when the solver returns empty (remaining: 0)
+    (iter-23, P0, ANALYSIS20 §3). Pure.
+
+    A solver remaining: 0 is a MODEL divergence, not proof the
+    mode is dead: in iter-22 the solver reported remaining: 0
+    after Maxi guess 3 although the true solution
+    ('1²+67+8=76') was still playable. So a solver-empty result
+    must NEVER kill the mode while a fallback exists: first the
+    next unplayed OFFICIAL equation, then the next unplayed
+    SITE solution from the pool (the pool-drain backstop,
+    extended here to single-board modes — the old backstop
+    required boards_n > 1, so a single-board mode with the
+    official list exhausted could still be abandoned with a
+    site solution unplayed). Returns (nxt_or_None,
+    new_official_i). Official matching is exact (the existing
+    emergency-official behaviour); pool matching is
+    DOM-normalized via _unplayed_pool.
+    """
+    _typed = set(typed_guesses or [])
+    _i = int(official_i or 0)
+    _eqs = list(eqs or [])
+    while _i < len(_eqs) and _eqs[_i] in _typed:
+        _i += 1
+    if _i < len(_eqs):
+        return _eqs[_i], _i + 1
+    _unplayed = _unplayed_pool(pool, played)
+    if _unplayed:
+        return _unplayed[0], _i
+    return None, _i
+
+
+def _nerdle_verdict(results):
+    """Verdict from per-mode results (iter-23, P0 honesty).
+    Pure. Returns (all_won, unproven_modes, evidence).
+
+    Iter-22 shipped solved=true / QC ok=true with Maxi unwon
+    (signal '', unproven_modes=[]) and cut the Maxi chapter
+    with no on-video disclosure — a hollow-success shape.
+    The verdict now requires ALL modes won: any mode whose
+    signal is not exactly "won" (including '' / empty signal,
+    'unproven', or a mode missing from results) makes
+    all_won False, lands in unproven_modes, and is named in
+    the evidence string. A silently cut mode with
+    unproven_modes=[] is impossible by construction: the
+    unproven list is derived from the mode list, not from a
+    separate claim. Callers still apply the number gate on
+    top (a gate block also fails the run).
+    """
+    _status = {}
+    for _mid, _t, _e, _s in (results or []):
+        _status[_mid] = _s
+    _won = [m["id"] for m in NERDLE_MODES
+            if _status.get(m["id"]) == "won"]
+    _unproven = [m["id"] for m in NERDLE_MODES
+                 if _status.get(m["id"]) != "won"]
+    if not _unproven:
+        _evidence = (f"nerdle all-modes: {len(_won)}/"
+                     f"{len(NERDLE_MODES)} won")
+    else:
+        _evidence = (f"nerdle all-modes: {len(_won)}/"
+                     f"{len(NERDLE_MODES)} won; UNWON modes="
+                     f"{_unproven} — NOT solved")
+    return (not _unproven, _unproven, _evidence)
+
+
 def _green_row_count(state):
     """Fully-green (all-feedback-2) rows across all grids. Pure.
 
@@ -2162,20 +2229,96 @@ async def _power_button_candidates(page, ch):
     return []
 
 
+POWER_KEYBOARD_STATE_JS = """
+// Iter-23 (POWER_KEYBOARD_STATE): selector + DOM/keyboard state
+// for a 0-candidate power-key lookup — the iter-22 log said only
+// `candidates (0): []` with no selector and no keyboard state,
+// so the next artifact could not tell a missing button from a
+// keyboard that had not rendered yet.
+() => {
+  const btns = Array.from(document.querySelectorAll('button'));
+  const kb = document.querySelectorAll(
+      '[class*="keyboard"], [class*="Keyboard"]');
+  const grids = document.querySelectorAll('div.pb-grid');
+  return {selector: "document.querySelectorAll('button') + power "
+          "matcher (aria-label/text/dataset == ch, x+ch, X+ch)",
+          buttons_total: btns.length,
+          keyboard_containers: kb.length,
+          grids: grids.length,
+          body_text_len: (document.body
+              ? (document.body.innerText || '').length : 0)};
+}
+"""
+
+
+async def _power_keyboard_state(page):
+    """Selector + DOM/keyboard state for a 0-candidate lookup
+    (iter-23). Never raises; {} on probe failure."""
+    try:
+        st = await page.evaluate(POWER_KEYBOARD_STATE_JS)
+        if isinstance(st, dict):
+            return st
+    except Exception:
+        pass
+    return {}
+
+
+async def _probe_power_candidates(page, ch, attempts=3, wait_ms=250):
+    """Re-query the power-key lookup itself (iter-23, P0).
+
+    The iter-22 Maxi failure was a 0-candidate lookup on guess 4
+    after the same lookup found the button on guess 3 — the
+    keyboard re-renders between guesses, so a single lookup can
+    read a transiently empty DOM. Re-query up to `attempts` times
+    with a short settle between them and return the first
+    non-empty result; a still-empty result after all re-probes
+    is a genuine probe failure, not a single-read artefact.
+    Never raises. Typing speed / pacing unchanged: this runs
+    only on the ²/³ entry path, never on plain typing.
+    """
+    cands = []
+    for _ in range(max(1, attempts)):
+        try:
+            cands = await _power_button_candidates(page, ch)
+        except Exception:
+            cands = []
+        if cands:
+            break
+        try:
+            await page.wait_for_timeout(wait_ms)
+        except Exception:
+            pass
+    return cands
+
+
 async def _dump_power_candidates(page, ch):
     """Log every power-key candidate on entry failure (iter-21).
 
     The iter-20 log said only `clicked=False` while the X² button
     was visibly rendered — the next artifact must show WHICH
     element blocked the click (hidden duplicate, zero rect,
-    disabled) instead. Never raises.
+    disabled) instead. Iter-23: the lookup itself is re-probed
+    (see _probe_power_candidates) before 0 candidates is
+    declared, and a persistent 0 logs the selector + DOM/
+    keyboard state so the next artifact can tell a missing
+    button from an unrendered keyboard. Never raises. Returns
+    the (re-probed) candidate list.
     """
     try:
-        cands = await _power_button_candidates(page, ch)
+        cands = await _probe_power_candidates(page, ch)
     except Exception:
         cands = []
     print(f"[type] power key {ch!r} candidates ({len(cands)}): "
           f"{str(cands)[:2000]}")
+    if not cands:
+        try:
+            _state = await _power_keyboard_state(page)
+        except Exception:
+            _state = {}
+        print(f"[type] power key {ch!r} 0-candidate lookup after "
+              f"re-probe: selector=document.querySelectorAll('button') "
+              f"+ power matcher keyboard_state={_state} — PROBE "
+              f"failure (button not found), NOT an entry failure")
     return cands
 
 
@@ -2739,17 +2882,68 @@ async def type_equation(page, eq, delay=200):
                           f"(ladder cap — failure already recorded "
                           f"for {eq!r}; no re-entry)")
                 else:
-                    # Iter-21: record the full-ladder failure so
-                    # later attempts fail fast (ladder cap), and
-                    # dump EVERY candidate so the artifact names
-                    # the blocker instead of just clicked=False.
-                    _ladder_failed.add(eq)
+                    # Iter-23 (P0, ANALYSIS20 §3): a 0-candidate
+                    # lookup is a PROBE failure, not "tried and
+                    # failed" — the button may simply not have
+                    # rendered yet, and the iter-22 cap turned
+                    # that one transient probe miss into permanent
+                    # mode loss. The dump below re-probes the
+                    # lookup itself; the cap engages ONLY when the
+                    # re-probed lookup finds the button (a genuine
+                    # ENTRY failure: button existed, all four
+                    # methods failed to deliver it). On a
+                    # persistent 0-candidate probe failure the cap
+                    # is NOT engaged, so the pre-Enter retype, the
+                    # site-solution retry and the outer entry
+                    # retries (all gated on the cap set) may
+                    # re-probe the button instead of failing fast.
                     print(f"[type] power key {part!r} FAILED after all "
                           "entry methods (js-click + coordinate click + "
                           "clipboard paste + insert_text); "
                           f"U+00B2 count {before}->{after} — row will "
-                          "stall; ladder cap engaged (no re-entry)")
-                    await _dump_power_candidates(page, part)
+                          "stall")
+                    _probe_cands = await _dump_power_candidates(
+                        page, part)
+                    if _probe_cands:
+                        # Button existed at re-probe time: one
+                        # bounded re-entry via js-click against the
+                        # freshly probed button — the ladder's
+                        # methods may all have run while the
+                        # keyboard was mid-render. If it verifies,
+                        # this is a recovery, not a failure.
+                        _re_before = await _grid_superscript_state(
+                            page, cols)
+                        _re_clicked = bool(
+                            await _click_power_key(page, part))
+                        await page.wait_for_timeout(150)
+                        _re_after = await _grid_superscript_state(
+                            page, cols)
+                        if _re_clicked and _superscript_entry_verified(
+                                _re_before, _re_after):
+                            print(f"[type] power key {part!r} "
+                                  f"RECOVERED via re-probed js-click "
+                                  f"(tile/sup "
+                                  f"{_re_before and _re_before.get('tiles')}->"
+                                  f"{_re_after and _re_after.get('tiles')} "
+                                  f"sup "
+                                  f"{_re_before and _re_before.get('sup_cells')}->"
+                                  f"{_re_after and _re_after.get('sup_cells')})")
+                            verified = True
+                            _exhausted = False
+                        else:
+                            # Iter-21: record the full-ladder
+                            # failure so later attempts fail fast
+                            # (ladder cap).
+                            _ladder_failed.add(eq)
+                            print(f"[type] power key {part!r} "
+                                  f"ladder cap engaged (button "
+                                  f"existed, entry failed — no "
+                                  f"re-entry)")
+                    else:
+                        print(f"[type] power key {part!r} PROBE "
+                              f"failure (0 candidates after lookup "
+                              f"re-probe) — ladder cap NOT engaged; "
+                              f"retries may re-probe the button")
             print(f"[type] stage superscript {part!r} done "
                   f"verified={verified} +{time.time() - _t_part:.1f}s")
             await page.wait_for_timeout(120)
@@ -3730,12 +3924,14 @@ async def play_mode(page, mode, script_dir, official=None):
                                 break
                     nxt = sug[0] if sug else None
                     if nxt is None:
-                        # solver empty/down: emergency official
-                        while official_i < len(eqs) and eqs[official_i] in typed_guesses:
-                            official_i += 1
-                        if official_i < len(eqs):
-                            nxt = eqs[official_i]
-                            official_i += 1
+                        # solver empty/down: emergency official,
+                        # then unplayed site solution — see
+                        # _solver_empty_fallback (iter-23): a
+                        # solver remaining: 0 must never kill the
+                        # mode while a fallback exists.
+                        nxt, official_i = _solver_empty_fallback(
+                            eqs, official_i, typed_guesses, pool,
+                            list(typed_guesses) + list(played_here))
                 if nxt is None:
                     if not typed_guesses:
                         nxt = FILLERS.get(cols, "12+34=46")
@@ -3752,7 +3948,12 @@ async def play_mode(page, mode, script_dir, official=None):
                         # still counts as played.
                         _unplayed = _unplayed_pool(
                             pool, list(typed_guesses) + list(played_here))
-                        if boards_n > 1 and _unplayed:
+                        # Iter-23: the pool-drain backstop applies
+                        # to single-board modes too (see
+                        # _solver_empty_fallback) — solver +
+                        # official exhausted must not strand an
+                        # unplayed site solution.
+                        if _unplayed:
                             nxt = _unplayed[0]
                             print(f"[{mode['id']}] solver + official "
                                   f"exhausted with site solution "
@@ -4431,14 +4632,31 @@ async def main():
     if _wd_warnings:
         _nlog(f"[nerdle] served-mismatch warnings (not gating): "
               f"{_wd_warnings}")
+    # Iter-23 (P0 honesty, ANALYSIS20 §1): the verdict requires
+    # ALL modes won. The old rule (won >= 9-1) shipped
+    # solved=true with Maxi unwon and cut its chapter with no
+    # disclosure. _nerdle_verdict derives unproven_modes from
+    # the mode list (any signal != "won", including ''), names
+    # the unwon modes in the evidence, and makes a silently
+    # cut mode with unproven_modes=[] impossible. When any
+    # mode is unwon, all_solved=False: no final assembly, no
+    # upload, exit 1 — the job fails, like Worldle/Batterup.
+    _all_won, _verdict_unproven, _verdict_evidence = _nerdle_verdict(
+        results)
+    _unproven = sorted(set(_unproven) | set(_verdict_unproven),
+                       key=lambda m: [x["id"] for x in NERDLE_MODES].index(m)
+                       if m in [x["id"] for x in NERDLE_MODES] else 99)
     won_modes = [mid for mid, t, e, s in results if s == "won"]
     weak = [(mid, t, e) for mid, t, e, s in results if s != "won"]
     failed = weak
-    all_solved = len(won_modes) >= len(NERDLE_MODES) - 1 and not _wd_blocked
-    if all_solved and len(won_modes) != len(NERDLE_MODES):
-        print(f"[nerdle] shipping with cut modes: "
-              f"{[m for m, _t, _e, st in results if st != 'won']}")
-    print(f"[verify] won {len(won_modes)}/{len(NERDLE_MODES)} no-win={weak}")
+    all_solved = _all_won and not _wd_blocked
+    if _wd_blocked:
+        _verdict_evidence += f"; number gate BLOCKED: {_wd_detail}"
+    elif not _all_won:
+        _nlog(f"[nerdle] NOT solved: unwon modes "
+              f"{_verdict_unproven} — no final assembly, no upload")
+    print(f"[verify] won {len(won_modes)}/{len(NERDLE_MODES)} no-win={weak} "
+          f"evidence={_verdict_evidence}")
 
     global CUT_MODES
     CUT_MODES = {mid for mid, _t, _e, st in results if st != "won"}
@@ -4666,6 +4884,9 @@ async def main():
     # signal == "won" only (see counts_note).
     _eq_rep = equations_report(PLAYED, official if isinstance(official, dict) else {})
     _res_doc = {"game": "nerdle", "date": date_key, "solved": all_solved,
+         # Iter-23 honesty: the evidence names the unwon mode(s)
+         # when any mode is unwon (see _nerdle_verdict).
+         "evidence": _verdict_evidence,
          "modes": [{"id": mid, "typed": t, "expected": e, "signal": s,
                     "equations_played": list(PLAYED.get(mid) or []),
                     # Iter-22 (P2): the DOM-flattened read-back

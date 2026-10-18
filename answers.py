@@ -1424,10 +1424,41 @@ def batterup(d=None):
     # game_date values the file actually carries, and the defer
     # message embeds that evidence. The DEFER DECISION itself is
     # unchanged (safe direction); only its evidence is now real.
+    # Iter-23 (P1, ANALYSIS20 §4): the iter-22 evidence exposed the
+    # deeper defect — a 403 with the identical 111-byte body / same
+    # sha256 for BOTH 2026-10-18 and 2026-10-19 (a date that cannot
+    # be published yet) proves the 403 carries zero information about
+    # publication on its own. Root cause, traced live 2026-10-18:
+    # the 403 body is S3's standard missing-key XML
+    # ("<Error><Code>AccessDenied</Code>..."), NOT a bot-block —
+    # the same client + headers get 200 + a real 477 KB archive
+    # for 2026-10-17 (cumulative games 2024-02-19..2026-10-17,
+    # incl. the 2026-10-17 entry, Wyatt Langford #972), and
+    # browser-identical site-context headers (Referer/Origin/
+    # Accept/Sec-Fetch-*) change NOTHING (200 stays 200, 403
+    # stays 403 with the identical fingerprint) — so there is no
+    # header-based site-context fetch to replicate; the files are
+    # simply absent until the ~23:23 ET publish on day D-1.
+    # The fix is a CONTROL: a negative verdict ("not published
+    # yet") is only reported when the fetch path is PROVEN working
+    # — either a target file returned a parseable archive, or a
+    # known-published control file (D-1, then D-2) did. When NO
+    # fetch returns a parseable archive (control and target share
+    # the same failure fingerprint), the defer reason is
+    # "unverified (fetch blocked)" — never "not published yet".
+    # Safe behaviour is unchanged in both cases: raise SystemExit,
+    # no video, solved=false, qc pending.
     import hashlib as _hl
     _evidence = []
-    for key in (d.isoformat(),
-                (d + timedelta(days=1)).isoformat()):
+
+    def _fetch(key):
+        """One CDN fetch: returns (games_list_or_None, archive_ok).
+
+        Logs the iter-22 evidence line. archive_ok means the fetch
+        returned a parseable archive (a dict/list carrying a games
+        list) — proof the fetch path itself works, whatever the
+        target-entry outcome.
+        """
         _url = f"{_BATTER_CDN}/games_batterup{key}.json"
         try:
             r = requests.get(_url, headers=hdr, timeout=30)
@@ -1436,6 +1467,7 @@ def batterup(d=None):
                    f"bytes={len(_body)}")
             _server_ts = r.headers.get("Date", "?") if hasattr(r, "headers") else "?"
             _dates = []
+            games = None
             try:
                 j = r.json()
                 games = j.get("games") if isinstance(j, dict) else j
@@ -1451,27 +1483,67 @@ def batterup(d=None):
                      f"target_entry={'yes' if d.isoformat() in _dates else 'no'}")
             print(f"[batterup] publish check: {_line}")
             _evidence.append(_line)
-            if not r.ok:
-                continue
-            if not isinstance(games, list):
-                continue
-            entry = next((g for g in games
-                          if isinstance(g, dict)
-                          and g.get("game_date") == d.isoformat()), None)
-            if entry and entry.get("player_name"):
-                return {"answer": entry["player_name"], "player": entry,
-                        "date": d.isoformat(), "via": "cdn",
-                        "game_number": entry.get("game_number")}
+            return games, isinstance(games, list)
         except Exception as e:
             _line = f"url={_url} fetch_failed={str(e)[:100]}"
             print(f"[batterup] publish check: {_line}")
             _evidence.append(_line)
+            return None, False
+
+    _archive_ok = False
+    for key in (d.isoformat(),
+                (d + timedelta(days=1)).isoformat()):
+        games, _ok = _fetch(key)
+        _archive_ok = _archive_ok or _ok
+        if not isinstance(games, list):
             continue
+        entry = next((g for g in games
+                      if isinstance(g, dict)
+                      and g.get("game_date") == d.isoformat()), None)
+        if entry and entry.get("player_name"):
+            return {"answer": entry["player_name"], "player": entry,
+                    "date": d.isoformat(), "via": "cdn",
+                    "game_number": entry.get("game_number")}
+    # Negative path: adjudicate with a CONTROL before naming the
+    # reason. Only needed when no target fetch returned a parseable
+    # archive (a parsed archive already proves the path works, so
+    # the missing target entry is genuinely unpublished). The
+    # control is a known-published day: file D-1 carries the D-1
+    # entry (verified live: 2026-10-17 file -> 200 + its own
+    # entry). D-2 is the fallback if D-1 itself is unusable.
+    _control_note = ""
+    if not _archive_ok:
+        _control_ok = False
+        for _delta in (1, 2):
+            _ckey = (d - timedelta(days=_delta)).isoformat()
+            _cgames, _cok = _fetch(_ckey)
+            if _cok and isinstance(_cgames, list) and any(
+                    isinstance(g, dict)
+                    and g.get("game_date") == _ckey
+                    and g.get("player_name") for g in _cgames):
+                _control_ok = True
+                _control_note = (f"control={_ckey} archive ok "
+                                 f"(fetch path proven working)")
+                break
+        if not _control_ok:
+            _control_note = ("control=D-1/D-2 also failed with no "
+                             "parseable archive (fetch blocked or "
+                             "indistinguishable from unpublished)")
+            raise SystemExit(
+                f"batterup: day {d.isoformat()} unverified "
+                f"(fetch blocked) — cannot distinguish unpublished "
+                f"from a blocked CDN fetch; {_control_note}; "
+                f"publish-check evidence: "
+                f"{' | '.join(_evidence) if _evidence else 'no fetch attempted'}")
+    else:
+        _control_note = ("target fetch returned a parseable archive "
+                         "(fetch path proven working)")
     # Before the CDN file for day D exists (observed ~03:30 UTC for the
     # 2026-10-16 file; earlier docs said ~01:04 UTC) that window belongs
     # to the morning batch - fail loudly, never guess.
     raise SystemExit(f"batterup: day {d.isoformat()} not published yet "
-                     f"(CDN flips ~01:04 UTC); publish-check evidence: "
+                     f"(CDN flips ~01:04 UTC); {_control_note}; "
+                     f"publish-check evidence: "
                      f"{' | '.join(_evidence) if _evidence else 'no fetch attempted'}")
     try:
         snap = json.loads(

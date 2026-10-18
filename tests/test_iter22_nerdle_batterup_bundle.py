@@ -739,6 +739,10 @@ class TestBatterupPublishCheckEvidence(unittest.TestCase):
         self.assertEqual(len(seen_urls), 2)
 
     def test_non_ok_fetch_logged_with_status(self):
+        # Iter-23: a uniform non-OK (control + target share the
+        # failure fingerprint) is now "unverified (fetch blocked)",
+        # NOT "not published yet" — a 404/403 on its own carries
+        # zero publication information (ANALYSIS20 §4).
         def _get(url, **kw):
             return _FakeBatterupResp(status=404, body=b"Not Found")
 
@@ -747,7 +751,8 @@ class TestBatterupPublishCheckEvidence(unittest.TestCase):
                 ANS.batterup(self.DAY)
         msg = str(cm.exception)
         self.assertIn("status=404", msg)
-        self.assertIn("not published yet", msg)
+        self.assertIn("unverified (fetch blocked)", msg)
+        self.assertNotIn("not published yet", msg)
 
     def test_fetch_exception_logged_not_swallowed(self):
         def _get(url, **kw):

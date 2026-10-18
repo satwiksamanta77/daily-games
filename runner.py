@@ -1750,6 +1750,57 @@ def _dismiss_teuteuf_banner(page):
                       .slice(0, 60),
                     id: hit.id || ''};
                 } catch (err) {}
+                // Iter-23 (ANALYSIS20 §4): BANNER SIGNATURE.
+                // The hollow-box heuristic fired on game UI —
+                // it mistook the Kuwait Area card (a BUTTON
+                // with a country-shape <img>) for a banner box
+                // and clicked it, answering a puzzle round by
+                // luck. A hollow box is a coordinate-X
+                // candidate ONLY with a banner signature: a
+                // NON-interactive container (not a button /
+                // link / input / img), with NO light-DOM game
+                // content inside it (no img / button / link —
+                // a closed-shadow banner host has no light-DOM
+                // descendants at all, while a game card's
+                // img / button live in the light DOM), whose
+                // centre hit is not interactive, and which is
+                // banner-shaped (wide, short, top-of-page).
+                // Boxes WITHOUT the signature are still
+                // DIAGNOSED (rejection reasons below) but are
+                // never clicked.
+                const sigReasons = [];
+                const interactiveTags = ['BUTTON', 'A', 'INPUT',
+                  'SELECT', 'TEXTAREA', 'LABEL', 'IMG', 'VIDEO',
+                  'AUDIO', 'CANVAS'];
+                if (interactiveTags.includes(tag))
+                  sigReasons.push('interactive-tag:' + tag);
+                const roleL = String(
+                  el.getAttribute('role') || '').toLowerCase();
+                if (['button', 'option', 'radio', 'tab', 'link',
+                     'menuitem', 'checkbox', 'switch']
+                    .includes(roleL))
+                  sigReasons.push('interactive-role:' + roleL);
+                let hasGameDesc = false;
+                try { hasGameDesc = !!el.querySelector(
+                  'img, button, a, input, select, ' +
+                  '[role=button], [role=option]');
+                } catch (err) {}
+                if (hasGameDesc)
+                  sigReasons.push('light-dom-game-descendant');
+                const hostTagU = hostAtCentre ?
+                  String(hostAtCentre.tag || '')
+                    .toUpperCase() : '';
+                if (interactiveTags.includes(hostTagU))
+                  sigReasons.push(
+                    'centre-hit-interactive:' + hostTagU);
+                if (!(r.width >= 320 && r.height >= 20 &&
+                      r.height <= 200))
+                  sigReasons.push('not-banner-shaped:' +
+                    Math.round(r.width) + 'x' +
+                    Math.round(r.height));
+                if (!(r.top >= -20 && r.top <= 200))
+                  sigReasons.push('not-top-of-page:' +
+                    Math.round(r.top));
                 hollow.push({tag: el.tagName,
                   cls: String(el.getAttribute('class') || '')
                     .slice(0, 60),
@@ -1758,10 +1809,13 @@ def _dismiss_teuteuf_banner(page):
                          w: Math.round(r.width),
                          h: Math.round(r.height)},
                   children: el.childElementCount || 0,
-                  host_at_centre: hostAtCentre});
+                  host_at_centre: hostAtCentre,
+                  signature: sigReasons.length === 0,
+                  signature_reasons: sigReasons});
               }
               hollow.sort((a, b) =>
-                (b.rect.w * b.rect.h) - (a.rect.w * a.rect.h));
+                ((b.signature ? 1 : 0) - (a.signature ? 1 : 0)) ||
+                ((b.rect.w * b.rect.h) - (a.rect.w * a.rect.h)));
               diag.hollow_boxes = hollow.slice(0, 8);
             } catch (err) {}
             return 'unverified-no-element-match:' +
@@ -1958,65 +2012,88 @@ def _dismiss_teuteuf_banner(page):
         except Exception:
             _hollow = []
         if _hollow:
-            _box = _hollow[0]
-            _rect = _box.get("rect") or {}
-            try:
-                _hx = float(_rect.get("x", 0)) \
-                    + float(_rect.get("w", 0)) - 16
-                _hy = float(_rect.get("y", 0)) + 16
-            except (TypeError, ValueError):
-                _hx, _hy = 0.0, 0.0
-            try:
-                _dbg(getattr(page, "_qp_gid", "banner"),
-                     "teuteuf edu banner: hollow-box candidate "
-                     f"{_box} — clicking X at ({_hx:.0f}, {_hy:.0f})")
-            except Exception:
-                pass
-            try:
-                page.mouse.click(_hx, _hy)
-                page.wait_for_timeout(500)
-                _res2 = page.evaluate(_JS)
-            except Exception:
-                _res2 = "hollow-box-click-failed"
-            if isinstance(_res2, str) and not _res2.startswith(
-                    ("unverified-no-element-match:",
-                     "absent-candidates:")):
-                res = (str(_res2) + " (via hollow-box coordinate X)")
-            elif isinstance(_res2, str):
-                _still = []
+            # Iter-23 (ANALYSIS20 §4): BANNER SIGNATURE gate.
+            # Only a hollow box the JS annotated signature=True
+            # may be coordinate-X clicked. Production JS always
+            # emits `signature`; a MISSING field means a legacy
+            # diagnostic (tests) and passes through. An explicit
+            # False blocks the click — the Kuwait Area card and
+            # every other game-UI box fail the signature, so the
+            # coordinate-X path can no longer click game UI.
+            _sig_boxes = [b for b in _hollow
+                          if isinstance(b, dict)
+                          and b.get("signature") is not False]
+            _box = _sig_boxes[0] if _sig_boxes else None
+            if _box is None:
                 try:
-                    import json as _json
-                    _diag2 = _json.loads(
-                        _res2[len("unverified-no-element-match:"):]
-                        if _res2.startswith(
-                            "unverified-no-element-match:")
-                        else "{}")
-                    _still = _diag2.get("hollow_boxes") or []
+                    _dbg(getattr(page, "_qp_gid", "banner"),
+                         "teuteuf edu banner: hollow-box candidates "
+                         "lack banner signature — NOT clicking "
+                         "game UI (coordinate-X path requires "
+                         "banner signature) "
+                         f"candidates={_hollow}")
                 except Exception:
+                    pass
+                _hollow_handled = True
+            if _box is not None:
+                _rect = _box.get("rect") or {}
+                try:
+                    _hx = float(_rect.get("x", 0)) \
+                        + float(_rect.get("w", 0)) - 16
+                    _hy = float(_rect.get("y", 0)) + 16
+                except (TypeError, ValueError):
+                    _hx, _hy = 0.0, 0.0
+                try:
+                    _dbg(getattr(page, "_qp_gid", "banner"),
+                         "teuteuf edu banner: hollow-box candidate "
+                         f"{_box} — clicking X at ({_hx:.0f}, {_hy:.0f})")
+                except Exception:
+                    pass
+                try:
+                    page.mouse.click(_hx, _hy)
+                    page.wait_for_timeout(500)
+                    _res2 = page.evaluate(_JS)
+                except Exception:
+                    _res2 = "hollow-box-click-failed"
+                if isinstance(_res2, str) and not _res2.startswith(
+                        ("unverified-no-element-match:",
+                         "absent-candidates:")):
+                    res = (str(_res2) + " (via hollow-box coordinate X)")
+                elif isinstance(_res2, str):
                     _still = []
-                _gone = True
-                for _b in _still:
-                    _r2 = _b.get("rect") or {}
                     try:
-                        if abs(float(_r2.get("x", -999))
-                               - float(_rect.get("x", 0))) < 4 \
-                                and abs(float(_r2.get("y", -999))
-                                        - float(_rect.get("y", 0))) < 4:
-                            _gone = False
-                    except (TypeError, ValueError):
-                        pass
-                if _gone:
-                    res = ("closed-hollow-box-via-coordinate-X "
-                           "(hollow box gone on re-probe; banner "
-                           "dismissal unverified by text probe)")
+                        import json as _json
+                        _diag2 = _json.loads(
+                            _res2[len("unverified-no-element-match:"):]
+                            if _res2.startswith(
+                                "unverified-no-element-match:")
+                            else "{}")
+                        _still = _diag2.get("hollow_boxes") or []
+                    except Exception:
+                        _still = []
+                    _gone = True
+                    for _b in _still:
+                        _r2 = _b.get("rect") or {}
+                        try:
+                            if abs(float(_r2.get("x", -999))
+                                   - float(_rect.get("x", 0))) < 4 \
+                                    and abs(float(_r2.get("y", -999))
+                                            - float(_rect.get("y", 0))) < 4:
+                                _gone = False
+                        except (TypeError, ValueError):
+                            pass
+                    if _gone:
+                        res = ("closed-hollow-box-via-coordinate-X "
+                               "(hollow box gone on re-probe; banner "
+                               "dismissal unverified by text probe)")
+                    else:
+                        res = ("hollow-box-X-click-did-not-dismiss "
+                               "(hollow box still present; banner NOT "
+                               "claimed dismissed)")
                 else:
-                    res = ("hollow-box-X-click-did-not-dismiss "
-                           "(hollow box still present; banner NOT "
-                           "claimed dismissed)")
-            else:
-                res = ("hollow-box-X-click-result-unreadable "
-                       "(banner NOT claimed dismissed)")
-            _hollow_handled = True
+                    res = ("hollow-box-X-click-result-unreadable "
+                           "(banner NOT claimed dismissed)")
+                _hollow_handled = True
     if not _hollow_handled and (res == "absent" or (isinstance(res, str)
                            and (res.startswith("absent-candidates:")
                                 or res.startswith(
@@ -7773,7 +7850,6 @@ def _s_worldle_visible_area_ui(page):
                   reason: reason,
                   rejected: rejected,
                   rejection_reasons: rejectionReasons};
-        }
         }""")
     except Exception:
         return {"visible": False, "signals": [],
@@ -8274,7 +8350,8 @@ def _s_worldle_live_round_modes(page, gid):
               } catch (err) { return {tag: el.tagName, via: via}; }
             };
             const toggles = Array.from(document.querySelectorAll(
-              '[aria-expanded="true"], [aria-haspopup="true"]'))
+              '[aria-expanded="true"], [aria-haspopup="true"], ' +
+              '[aria-controls]'))
               .filter(vis);
             for (const t of toggles) {
               const candsA = [];
@@ -8286,15 +8363,17 @@ def _s_worldle_live_round_modes(page, gid):
               const inner = t.querySelector(
                 '[role=menu], [role=listbox]');
               if (inner) candsA.push([inner, 'toggle-descendant']);
+              // Iter-23 (ANALYSIS20 §5): push EVERY sibling
+              // as an anchor candidate, not only menu-like /
+              // hyphen-tagged ones — the menu container may
+              // be a plain div sibling, and the CONTENT score
+              // (leaves mapping to round labels, score >= 3)
+              // is the filter, not the tag. Same for the
+              // elementsFromPoint ancestors below.
               if (t.parentElement) {
                 for (const sib of t.parentElement.children) {
                   if (sib === t) continue;
-                  const stag = (sib.tagName || '');
-                  if ((sib.matches &&
-                       sib.matches('[role=menu], [role=listbox], ' +
-                         '[class*=menu i], [class*=dropdown i]')) ||
-                      stag.includes('-'))
-                    candsA.push([sib, 'sibling']);
+                  candsA.push([sib, 'sibling']);
                 }
               }
               if (t.nextElementSibling)
@@ -8304,23 +8383,20 @@ def _s_worldle_live_round_modes(page, gid):
                 const hit = document.elementFromPoint(
                   tr.x + tr.width / 2, tr.y + tr.height + 12);
                 if (hit) {
-                  let node = hit, found = false;
+                  // Iter-23: push EVERY ancestor of the hit,
+                  // nearest-first — the open menu's container
+                  // is one of them, whatever its tag/class.
+                  // Content scoring (score >= 3) filters; the
+                  // loop below breaks at the first candidate
+                  // that scores, so a near menu container wins
+                  // before a page-wide wrapper.
+                  let node = hit;
                   for (let d = 0; d < 6 && node; d++) {
-                    const ntag = (node.tagName || '');
-                    const ncls = node.getAttribute ?
-                      String(node.getAttribute('class') || '') : '';
-                    if (node !== t &&
-                        ((node.matches && node.matches(
-                          '[role=menu], [role=listbox]')) ||
-                         ntag.includes('-') ||
-                         /menu|dropdown|popover|popper|listbox/i
-                           .test(ncls))) {
-                      candsA.push([node, 'elementsFromPoint-ancestor']);
-                      found = true; break;
-                    }
+                    if (node !== t)
+                      candsA.push([node,
+                        'elementsFromPoint-ancestor']);
                     node = node.parentElement;
                   }
-                  if (!found) candsA.push([hit, 'elementsFromPoint']);
                 }
               } catch (err) {}
               for (const pair of candsA) {
@@ -8509,6 +8585,18 @@ def _s_worldle_live_round_modes(page, gid):
                       f"{_attempt} toggle opened={_tog.get('opened')} "
                       f"via={_tog.get('via')} scan container="
                       f"{_has_container} entries={_n_entries}")
+            # Iter-23 (ANALYSIS20 §5): the anchored scan MUST
+            # log its anchor attempt on EVERY attempt — success
+            # AND failure — so the next analysis can tell
+            # whether it ran. The old code logged `anchored`
+            # only when a non-null anchor existed on the
+            # failure path, so a run with no anchor at all left
+            # zero `anchored` lines.
+            _anch_attempt = raw_ev.get("anchored") \
+                if isinstance(raw_ev, dict) else None
+            _dbg(gid, "worldle G4 live rounds reader: attempt "
+                      f"{_attempt} anchored="
+                      f"{str(_anch_attempt)[:400]}")
             if _has_container:
                 break
             _dbg(gid, "worldle G4 live rounds reader: attempt "
@@ -8539,12 +8627,20 @@ def _s_worldle_live_round_modes(page, gid):
                 # toggle) is logged even on failure — its
                 # tag/class/role + leaves name the menu's
                 # actual container when every other pass
-                # found nothing.
+                # found nothing. Iter-23: ALWAYS logged, even
+                # when the anchor is None (no anchor candidate
+                # evaluated) — a missing `anchored` line must
+                # never again be ambiguous with a scan that
+                # never ran.
                 _anch = raw_ev.get("anchored")
                 if _anch:
                     _dbg(gid, "worldle G4 live rounds reader: "
                               "anchored container (from toggle): "
                               f"{str(_anch)[:800]}")
+                else:
+                    _dbg(gid, "worldle G4 live rounds reader: "
+                              "anchored=None (no anchor candidate "
+                              "evaluated on this attempt)")
                 return None
             raw = list(raw_ev.get("entries") or [])
         elif isinstance(raw_ev, list):
@@ -9404,9 +9500,20 @@ def _worldle_capital_pinpoint_probe(page, px, py):
             catch (e) {}
             let fill = '';
             try { fill = c.getAttribute('fill') || ''; } catch (e) {}
-            if (!fill) {
-              try { fill = getComputedStyle(c).fill || ''; }
-              catch (e) {}
+            // Iter-23 (ANALYSIS20 §2): ALWAYS consult the
+            // computed fill, even when an attribute fill exists
+            // — the attribute fill must not veto the computed
+            // colour (computed rgb(82,82,255) passes while the
+            // attribute '#5252ff' used to fail the allowlist).
+            // The attribute fill stays in `fill`; the computed
+            // fill is kept separately and tested alongside it
+            // in the second pass. This also repairs a missing
+            // closing brace: the old `if (!fill) {` block was
+            // never closed, so this whole probe string failed
+            // to parse and every call threw -> dots=[].
+            let computedFill = '';
+            try { computedFill = getComputedStyle(c).fill || ''; }
+            catch (e) {}
             // Parent <g> text/attrs: the group often wraps the
             // dot + its label together (title / data-* / text).
             // When one <g> wraps ALL dots, every dot gets the same
@@ -9463,7 +9570,8 @@ def _worldle_capital_pinpoint_probe(page, px, py):
               }
             } catch (e) {}
             dots.push({x: cx, y: cy, r: r.width / 2,
-                       fill: fill, cls: String(
+                       fill: fill, computed_fill: computedFill,
+                       cls: String(
                          c.getAttribute('class') || '').slice(0, 80),
                        id: c.id || '', data: data, title: title,
                        aria: c.getAttribute('aria-label') || '',
@@ -9501,10 +9609,22 @@ def _worldle_capital_pinpoint_probe(page, px, py):
           const isBlueish = s => {
             const v = String(s || '').toLowerCase()
               .replace(/\s+/g, '');
-            if (/^#(0{0,2}5[0-9a-f]{3}|00[0-9a-f]|2563eb|3b82f6|1d4ed8)$/
+            if (/^#(0{0,2}5[0-9a-f]{3}|00[0-9a-f]|2563eb|3b82f6|1d4ed8|5252ff)$/
                 .test(v)) return true;
             if (/^(blue|dodgerblue|royalblue|mediumblue)$/.test(v))
               return true;
+            // Iter-23 (ANALYSIS20 §2): #5252ff is the game's
+            // exact dot fill — the old allowlist omitted it, so
+            // all 4 dots were rejected as not-named-not-blue. A
+            // 6-digit hex is now judged by the SAME b-dominant
+            // rule as rgb() (b > 100, b > r + 30, b > g - 20),
+            // so any rgb(82,82,255)-equivalent fill passes, not
+            // just the one literal.
+            const hx = v.match(/^#([0-9a-f]{6})$/);
+            if (hx) { const n = parseInt(hx[1], 16);
+              const r = (n >> 16) & 255, g = (n >> 8) & 255,
+                b = n & 255;
+              return b > 100 && b > r + 30 && b > g - 20; }
             const m = v.match(/rgba?\((\d+),(\d+),(\d+)/);
             if (m) { const r = +m[1], g = +m[2], b = +m[3];
               return b > 100 && b > r + 30 && b > g - 20; }
@@ -9623,10 +9743,14 @@ def _worldle_capital_pinpoint_probe(page, px, py):
                 }
               } catch (e) {}
               if (resolved2) fill2 = resolved2;
-              let bg2 = '';
+              let bg2 = '', computed2 = '';
               try { const cs2 = getComputedStyle(c);
                 bg2 = cs2.backgroundColor || '';
-                if (!fill2) fill2 = cs2.fill || '';
+                // Iter-23 (ANALYSIS20 §2): ALWAYS read the
+                // computed fill, even when an attribute fill
+                // exists — attribute fill must not veto the
+                // computed colour. Both are tested below.
+                computed2 = cs2.fill || '';
               } catch (e) {}
               const text2 = (tag2 === 'div' || tag2 === 'span' ||
                 tag2 === 'button')
@@ -9641,9 +9765,11 @@ def _worldle_capital_pinpoint_probe(page, px, py):
                   round2 = br >= Math.min(r2.width, r2.height) / 2 - 1;
                 } catch (e) {}
                 if (!named2 && !isBlueish(bg2) &&
-                    !isBlueish(fill2) && !round2) continue;
+                    !isBlueish(fill2) && !isBlueish(computed2) &&
+                    !round2) continue;
               } else {
                 if (!named2 && !isBlueish(fill2) &&
+                    !isBlueish(computed2) &&
                     !isBlueish(bg2)) continue;
               }
               let data2 = {};
@@ -9651,6 +9777,7 @@ def _worldle_capital_pinpoint_probe(page, px, py):
                 data2[k] = c.dataset[k]; } catch (e) {}
               dots.push({x: cx2, y: cy2, r: r2.width / 2,
                          fill: fill2, bg: bg2,
+                         computed_fill: computed2,
                          resolved_fill: resolved2,
                          cls: String(c.getAttribute('class') || '')
                            .slice(0, 80),
@@ -9810,10 +9937,19 @@ def _worldle_capital_probe_diagnostics(page):
           const isBlueish = s => {
             const v = String(s || '').toLowerCase()
               .replace(/\\s+/g, '');
-            if (/^#(0{0,2}5[0-9a-f]{3}|00[0-9a-f]|2563eb|3b82f6|1d4ed8)$/
+            if (/^#(0{0,2}5[0-9a-f]{3}|00[0-9a-f]|2563eb|3b82f6|1d4ed8|5252ff)$/
                 .test(v)) return true;
             if (/^(blue|dodgerblue|royalblue|mediumblue)$/.test(v))
               return true;
+            // Iter-23 (ANALYSIS20 §2): same fix as the main
+            // probe — #5252ff (the game's exact dot fill) plus
+            // the 6-digit-hex b-dominant rule, so any
+            // rgb(82,82,255)-equivalent fill passes.
+            const hx = v.match(/^#([0-9a-f]{6})$/);
+            if (hx) { const n = parseInt(hx[1], 16);
+              const r = (n >> 16) & 255, g = (n >> 8) & 255,
+                b = n & 255;
+              return b > 100 && b > r + 30 && b > g - 20; }
             const m = v.match(/rgba?\\((\\d+),(\\d+),(\\d+)/);
             if (m) { const r = +m[1], g = +m[2], b = +m[3];
               return b > 100 && b > r + 30 && b > g - 20; }
@@ -9882,10 +10018,14 @@ def _worldle_capital_probe_diagnostics(page):
                 .test(href);
               let fill = '';
               try { fill = el.getAttribute('fill') || ''; } catch (e) {}
-              let bg = '';
+              let bg = '', computedFill = '';
               try { const cs = getComputedStyle(el);
                 bg = cs.backgroundColor || '';
-                if (!fill) fill = cs.fill || '';
+                // Iter-23 (ANALYSIS20 §2): ALWAYS read the
+                // computed fill, even when an attribute fill
+                // exists — attribute fill must not veto the
+                // computed colour. Both are tested below.
+                computedFill = cs.fill || '';
               } catch (e) {}
               const res = resolvedFill(el);
               if (res) fill = res;
@@ -9896,7 +10036,8 @@ def _worldle_capital_probe_diagnostics(page):
               if ((tag === 'div' || tag === 'span' ||
                    tag === 'button') && text.length > 40) {
                 bump(rejected, 'long-text'); continue; }
-              if (!named && !isBlueish(fill) && !isBlueish(bg)) {
+              if (!named && !isBlueish(fill) &&
+                  !isBlueish(computedFill) && !isBlueish(bg)) {
                 bump(rejected, 'not-named-not-blue'); continue; }
               bump(rejected, 'accepted-as-dot-candidate');
             }
@@ -9955,6 +10096,33 @@ def _worldle_capital_probe_diagnostics(page):
             "marker_elements": list(res.get("marker_elements") or []),
             "marker_count": res.get("marker_count"),
             "svg_found": bool(res.get("svg_found"))}
+
+
+def _worldle_capital_is_blueish(s):
+    """Pure Python mirror of the pinpoint probes' JS `isBlueish`
+    (iter-23, ANALYSIS20 §2). The production test lives in the
+    JS evaluate strings (main probe + diagnostics); this mirror
+    exists so the rule is unit-testable without a browser and
+    must stay in sync with the JS: named blues, the explicit
+    hex allowlist, the 6-digit-hex b-dominant rule (which admits
+    #5252ff = rgb(82,82,255), the game's exact dot fill), and
+    the rgb() b-dominant rule."""
+    import re as _re
+    v = _re.sub(r"\s+", "", str(s or "").lower())
+    if _re.match(r"^#(0{0,2}5[0-9a-f]{3}|00[0-9a-f]|2563eb|3b82f6|1d4ed8|5252ff)$", v):
+        return True
+    if v in ("blue", "dodgerblue", "royalblue", "mediumblue"):
+        return True
+    m = _re.match(r"^#([0-9a-f]{6})$", v)
+    if m:
+        n = int(m.group(1), 16)
+        r, g, b = (n >> 16) & 255, (n >> 8) & 255, n & 255
+        return b > 100 and b > r + 30 and b > g - 20
+    m = _re.match(r"rgba?\((\d+),(\d+),(\d+)", v)
+    if m:
+        r, g, b = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        return b > 100 and b > r + 30 and b > g - 20
+    return False
 
 
 def _worldle_capital_nearest_dot(dots, fit_px, max_dist=60.0):
@@ -14320,6 +14488,79 @@ def _s_worldle_comparison_selected_state(page, want):
         return {}
 
 
+def _s_worldle_resolve_option_names_by_src(page, options):
+    """Resolve generic comparison-option names via the option
+    image src (iter-23, ANALYSIS20 §3). The Area widget renders
+    two silhouette cards whose button text is the generic title
+    'Image Quiz Item' and whose country name lives in a sibling
+    label pill the probe could not read — so the pick saw
+    'Image Quiz Item' x2, resolved neither, returned None, and
+    the gate/click/re-verify fix NEVER EXECUTED. The probe
+    already records each option's `src` ('…/country-shapes/kw.svg'
+    / '…/country-shapes/qa.svg'): the 2-letter basename IS the
+    country code, resolved to a name via the game's own CDN
+    countries list (the same endpoint
+    _s_worldle_fetch_country_stat uses). Returns
+    (options_with_names, detail); on any fetch failure the
+    options come back unchanged and the caller stays honest
+    (partial, unresolvable) instead of guessing a name. Pure
+    except for the single CDN code-map fetch."""
+    _GENERIC = {"image quiz item", "quiz item", "image", "option",
+                "choice", "card"}
+    opts = [dict(o) if isinstance(o, dict) else o
+            for o in (options or [])]
+    need = {}
+    for i, o in enumerate(opts):
+        if not isinstance(o, dict):
+            continue
+        name = _s_worldle_cmp_key(o.get("name") or "")
+        src = str(o.get("src") or "")
+        if name in _GENERIC or not name:
+            m = re.search(r"(?:^|/)([A-Za-z]{2})\."
+                          r"(?:svg|png|jpg|jpeg|webp)(?:[?#]|$)", src)
+            if m:
+                need[i] = m.group(1).lower()
+    if not need:
+        return opts, ""
+    try:
+        code_map = page.evaluate("""/* worldle-country-code-map */
+          () => fetch('https://cdn-assets.teuteuf.fr/data/common/countries.json')
+            .then(r => r.ok ? r.json() : null)
+            .then(list => {
+              if (!Array.isArray(list)) return {};
+              const out = {};
+              for (const c of list) {
+                if (c && c.code && c.name)
+                  out[String(c.code).toLowerCase()] = c.name;
+              }
+              return out;
+            }).catch(() => ({}))""") or {}
+    except Exception:
+        return opts, ("src resolution unavailable (CDN code-map "
+                      "fetch failed)")
+    if not isinstance(code_map, dict) or not code_map:
+        return opts, ("src resolution unavailable (CDN code-map "
+                      "empty)")
+    resolved, unmapped = [], []
+    for i, code in need.items():
+        name = code_map.get(code)
+        if name:
+            old = opts[i].get("name") or ""
+            opts[i]["name"] = name
+            opts[i]["name_via_src"] = True
+            resolved.append(f"{old!r} ({code}.svg) -> {name!r}")
+        else:
+            unmapped.append(code)
+    detail = ""
+    if resolved:
+        detail = "src-resolved " + "; ".join(resolved)
+    if unmapped:
+        detail += ("; src codes unmapped: " + ", ".join(unmapped)) \
+            if detail else ("src codes unmapped: "
+                             + ", ".join(unmapped))
+    return opts, detail
+
+
 def _s_worldle_comparison_pick(options, values):
     """Pick the max-stat comparison option. `options`: [{name, ...}]
     in display order; `values`: {_s_worldle_cmp_key(name): number}.
@@ -14553,6 +14794,15 @@ def _s_worldle_play_comparison(page, gid, day, mode, ds, prompt_substrs,
         return ("partial", None,
                 f"comparison prompt showing but only {len(options)} "
                 f"option(s) probed: {options}; NOT clicked")
+    # Iter-23 (ANALYSIS20 §3): resolve generic option names
+    # ('Image Quiz Item') via the option image src BEFORE the
+    # pick — without this the pick returns None and the
+    # gate/click/re-verify below NEVER EXECUTE.
+    options, _src_det = _s_worldle_resolve_option_names_by_src(
+        page, options)
+    if _src_det:
+        _dbg(gid, f"worldle {mode} comparison: src name resolution: "
+                  f"{_src_det}")
     values = {}
     missing = []
     for o in options:
@@ -14568,9 +14818,27 @@ def _s_worldle_play_comparison(page, gid, day, mode, ds, prompt_substrs,
         values.update(_s_worldle_fetch_country_stat(page, missing, stat))
     best, pick_detail = _s_worldle_comparison_pick(options, values)
     if best is None:
+        # Iter-23 (ANALYSIS20 §3): the gate must be EVALUATED
+        # and logged even on the unresolvable path — the iter-22
+        # artifact had ZERO gate lines because the pick's early
+        # return ran before the gate. No click happens here;
+        # the gate outcome is evidence, not a bypass.
+        _gate_note = ""
+        if mode == "area":
+            try:
+                _vis0 = _s_worldle_visible_area_ui(page)
+                _gate_note = (f" gate evaluated on unresolvable "
+                              f"path: visible={_vis0.get('visible')} "
+                              f"reason={_vis0.get('reason')}")
+                _dbg(gid, "worldle area comparison: pick "
+                          f"unresolvable ({pick_detail});"
+                          f"{_gate_note}; NOT clicked")
+            except Exception:
+                _gate_note = " gate evaluation failed"
         return ("partial", None,
                 f"comparison options unresolvable: {pick_detail}; "
-                f"options={options}; values={values}; NOT clicked")
+                f"options={options}; values={values};{_gate_note} "
+                f"NOT clicked")
     _dbg(gid, f"worldle {mode} comparison: options="
               + str([(o.get("name"), values.get(_s_worldle_cmp_key(
                   o.get("name") or ""))) for o in options])
@@ -15114,6 +15382,26 @@ def _s_worldle_play_area(page, gid, day):
                 det + "; re-switch claimed success but the visible " \
                 "round is still not Area; number path NOT run"
     elif st == "partial":
+        # Iter-23 (ANALYSIS20 §3): the verdict must match the
+        # store — if the store ALREADY records a pick although
+        # the Area click path clicked nothing (comparison
+        # returned partial), say so explicitly: the pick is NOT
+        # attributable to the Area path and is NOT credited as
+        # an Area-path solve. (Iter-22 logged "NOT clicked"
+        # while the store counted Area complete — a banner
+        # probe had clicked the Kuwait card. The banner probe
+        # no longer clicks game UI (Fix 3), so this branch is
+        # a safety net, not the expected path.)
+        try:
+            _win_p = _s_worldle_win_check(page, "area", day, ds)
+        except Exception:
+            _win_p = (False, [], "")
+        if _win_p[0]:
+            det = (det + "; STORE ALREADY RECORDS A PICK "
+                   f"(win_check={_win_p[2]}) although the Area "
+                   "click path clicked nothing — pick NOT "
+                   "attributable to the Area path; NOT credited "
+                   "as an Area-path solve")
         return "partial", [str(size)], det
     picked = []
     if st == "attempted":
@@ -18553,6 +18841,15 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
                                allsteps, scoring=False)
             _framed_total_guesses = sum(
                 int(d.get("guesses") or 0) for d in per_mode)
+            # Iter-23 (ANALYSIS20 §6): the breakdown counts live
+            # only as pixels in the facts card — the debug log
+            # never carried the "N guesses played / M final
+            # answers" string, so the last analysis could not
+            # verify the breakdown at string level. Emit it
+            # here so the artifact log proves the card's stats.
+            _dbg(gid, f"framed breakdown: "
+                       f"{_framed_total_guesses} guesses played / "
+                       f"{len(solved_modes)} final answers")
             DP.generate_facts(str(facts_p), g["name"], today,
                               f"{len(solved_modes)}/{len(FRAMED_MODES)} modes won",
                               allsteps, scoring=False,
