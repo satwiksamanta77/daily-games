@@ -245,8 +245,8 @@ class TestProbeJsEndToEnd(unittest.TestCase):
         src = inspect.getsource(R._semantic_dom_scores)
         start = src.index('page.evaluate("""')
         js = src[start:].split('"""', 2)[1]
-        body = (_MOCK_DOM_JS + "\nconst rows = (" + js.strip() + ")();\n"
-                "console.log(JSON.stringify(rows));\n")
+        body = (_MOCK_DOM_JS + "\nconst res = (" + js.strip() + ")();\n"
+                "console.log(JSON.stringify(res));\n")
         with tempfile.NamedTemporaryFile("w", suffix=".js",
                                          delete=False) as f:
             f.write(body)
@@ -257,7 +257,12 @@ class TestProbeJsEndToEnd(unittest.TestCase):
         return json.loads(r.stdout.strip())
 
     def test_probe_returns_scoped_rows(self):
-        rows = self._run_probe()
+        # Iter 32 supersession: the probe payload now returns
+        # {rows, card} (ANALYSIS30 §4) — the recent-guess card is
+        # captured separately because at probe time the current guess
+        # lives ONLY in the card. The rows assertions are unchanged.
+        res = self._run_probe()
+        rows = res["rows"]
         by_src = {}
         for r in rows:
             by_src.setdefault(r["src"], []).append(r)
@@ -270,15 +275,28 @@ class TestProbeJsEndToEnd(unittest.TestCase):
         # Semantle: exactly the 1 ngFor row (rounded-md card excluded).
         self.assertEqual(len(by_src.get("semantle", [])), 1)
         self.assertIn("nutrient", by_src["semantle"][0]["text"])
+        # Card: the rounded-md card captured separately, not loading
+        # (mock DOM has no app-spinner child).
+        self.assertIn("nutrient", res["card"]["text"])
+        self.assertEqual(res["card"]["loading"], False)
 
     def test_probe_rows_parse_to_scores(self):
-        rows = self._run_probe()
+        res = self._run_probe()
+        rows = res["rows"]
         got, _ = R._semantic_parse_dom_rows(rows, "outstanding")
         self.assertEqual(got, "1344")
         got, _ = R._semantic_parse_dom_rows(rows, "nutrient")
         self.assertEqual(got, "-0.67")
         got, _ = R._semantic_parse_dom_rows(rows, "decoyword")
         self.assertIsNone(got)
+
+    def test_probe_card_parses_to_score(self):
+        # The card alone parses to the current guess's score — the
+        # iter-32 path (list has no row for the current guess).
+        res = self._run_probe()
+        got, _ = R._semantic_parse_dom_rows([], "nutrient",
+                                             card=res["card"])
+        self.assertEqual(got, "-0.67")
 
 
 if __name__ == "__main__":

@@ -252,6 +252,101 @@ def framed_core(mode, num):
         return None
 
 
+# One-frame bundled-list cache (populated by
+# _framed_oneframe_bundled_titles on first use).
+_FRAMED_ONEFRAME_TITLES_CACHE = None
+
+
+def _framed_oneframe_bundled_titles():
+    """One-frame rotation titles from the site's LIVE frontend bundle.
+
+    The site itself scores one-frame against its bundled list Mh
+    (frontend _app.js: challenge = Mh[puzzle-1], title = entry.title).
+    Fetch the current _app chunk, extract the Mh array, return the
+    titles in rotation order. Cached per process (the list is static
+    for a deploy). None on any failure — the caller falls back.
+    """
+    global _FRAMED_ONEFRAME_TITLES_CACHE
+    if _FRAMED_ONEFRAME_TITLES_CACHE is not None:
+        return _FRAMED_ONEFRAME_TITLES_CACHE
+    import re as _re
+    import requests
+    try:
+        html = requests.get("https://framed.wtf/one-frame", timeout=20,
+                            headers={"User-Agent": "WordSolverX Video"}).text
+        m = _re.search(
+            r"/_next/static/chunks/(?:pages/)?_app-[A-Za-z0-9_-]+\.js",
+            html)
+        if not m:
+            return None
+        js = requests.get("https://framed.wtf" + m.group(0), timeout=30,
+                          headers={"User-Agent": "WordSolverX Video"}).text
+        anchor = js.find("Mh:function(){return r}")
+        if anchor < 0:
+            return None
+        lb = js.find("r=[", anchor)
+        if lb < 0:
+            return None
+        # Bracket-match the array literal, skipping string contents.
+        i = lb + 2
+        depth = 1  # the '[' at lb+1
+        instr = False
+        esc = False
+        q = ""
+        while i < len(js):
+            c = js[i]
+            if instr:
+                if esc:
+                    esc = False
+                elif c == "\\":
+                    esc = True
+                elif c == q:
+                    instr = False
+            else:
+                if c in "\"'`":
+                    instr = True
+                    q = c
+                elif c == "[":
+                    depth += 1
+                elif c == "]":
+                    depth -= 1
+                    if depth == 0:
+                        break
+            i += 1
+        arr = js[lb + 2:i]
+        titles = []
+        for tm in _re.finditer(r'title\s*:\s*"((?:[^"\\]|\\.)*)"', arr):
+            t = (tm.group(1).replace("\\'", "'").replace('\\"', '"')
+                 .replace("\\\\", "\\"))
+            titles.append(t)
+        if not titles:
+            return None
+        _FRAMED_ONEFRAME_TITLES_CACHE = titles
+        return titles
+    except Exception as e:
+        print(f"[framed] one-frame bundle fetch failed: {e}")
+        return None
+
+
+def framed_oneframe_bundled(num):
+    """Authoritative one-frame answer for puzzle number `num`, or None.
+
+    Index num-1 into the site's own bundled rotation. The indexing is
+    validated end-to-end: classic's Us list gives Us[1681] ==
+    'Warm Bodies' for classic #1682, the known-won puzzle.
+    """
+    titles = _framed_oneframe_bundled_titles()
+    if not titles:
+        return None
+    try:
+        n = int(num)
+    except (TypeError, ValueError):
+        return None
+    if 1 <= n <= len(titles):
+        return titles[n - 1]
+    return None
+
+
 def _framed_number(mode, d):
     _, newest, num = FRAMED_MODES[mode]
     return num + _days(d, newest)
@@ -282,8 +377,9 @@ def framed(d=None, mode="classic"):
     # is the most-GUESSED title, which is wrong when the answer has a
     # similar sibling (titleshot #501: leader "Despicable Me", real
     # answer "Despicable Me 2"). Titles API stays as fallback if core
-    # fails, and is the only source for classic/one-frame (their core
-    # challenge paths 404).
+    # fails. Classic keeps the titles API (it shows all 6 frames, so the
+    # frame-6 leader is the reveal frame's answer). One-frame NEVER uses
+    # the frame-6 leader — see below.
     num = _framed_number(mode, d)
     if mode in _FRAMED_CORE_MODES:
         core_title = framed_core(mode, num)
@@ -291,6 +387,19 @@ def framed(d=None, mode="classic"):
             return {"answer": core_title, "mode": mode,
                     "puzzle": num, "date": key,
                     "url": FRAMED_URLS[mode], "via": "core"}
+    if mode == "one-frame":
+        # Fix-loop iter 32 (one-frame #685: bot submitted the frame-6
+        # leader '2001: A Space Odyssey' twice, site scored it wrong):
+        # one-frame shows ONLY frame 001 (site image builder:
+        # /one-frame/images/<id>/001.jpeg), so the frame-6 leader
+        # answers a frame the mode never shows. The site scores
+        # one-frame against its own bundled list Mh[puzzle-1] — use
+        # that as the primary source.
+        bundled = framed_oneframe_bundled(num)
+        if bundled:
+            return {"answer": bundled, "mode": mode,
+                    "puzzle": num, "date": key,
+                    "url": FRAMED_URLS[mode], "via": "oneframe-bundle"}
     try:
         r = requests.get(f"https://titles.framed.wtf/v1/titles/top-ten/{num}",
                          params={"gameType": FRAMED_MODES[mode][0]}, timeout=20,
@@ -298,12 +407,20 @@ def framed(d=None, mode="classic"):
         if r.ok:
             frames = (r.json().get("frames") or [])
             if frames:
-                raw = frames[-1].get("items")
+                # One-frame fallback (bundled list unreachable): use
+                # FRAME 1's leader — the frame the mode actually
+                # shows — never frames[-1] (frame 6, the classic
+                # reveal). Still a guess-count leaderboard, so this
+                # is explicitly second-best (via "oneframe-frame1").
+                pick = frames[0] if mode == "one-frame" else frames[-1]
+                raw = pick.get("items")
                 items = json.loads(raw) if isinstance(raw, str) else (raw or [])
                 if items and items[0].get("title"):
                     return {"answer": items[0]["title"], "mode": mode,
                             "puzzle": num, "date": key,
-                            "url": FRAMED_URLS[mode], "via": "live"}
+                            "url": FRAMED_URLS[mode],
+                            "via": ("oneframe-frame1"
+                                   if mode == "one-frame" else "live")}
     except Exception as e:
         print(f"[framed] live failed: {e}")
     return {"answer": None, "mode": mode, "puzzle": num, "date": key,

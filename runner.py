@@ -2633,7 +2633,7 @@ def _qc_visible_content(gid, vdir, gameplay_path=None, solve_span_s=None,
     return ok, detail
 
 
-def _semantic_parse_dom_rows(rows, word):
+def _semantic_parse_dom_rows(rows, word, card=None):
     """Score for `word` from scoped guess-row records (pure function).
 
     `rows` are the per-row records returned by the scoped probe in
@@ -2649,16 +2649,31 @@ def _semantic_parse_dom_rows(rows, word):
       integer or text, the guess number is an integer), so the first
       decimal AFTER the word token is the similarity.
 
+    `card` (Semantle only) is the recent-guess card record
+    {"text": <card innerText>, "loading": <bool>} — see
+    _semantic_dom_scores. Fix-loop iter 32 (ANALYSIS30 §3): at probe
+    time the CURRENT guess lives ONLY in the card (the ngFor list
+    holds guesses 1..N-1; guess N moves into the list only when guess
+    N+1 is typed), so a list-only probe can NEVER see the current
+    guess. When no list row matches, parse the card — but ONLY if the
+    card's word matches the target AND loading is false (while
+    app-spinner is present the card shows the -1.00 placeholder, not
+    the real similarity). A stale card (wrong word) never matches.
+    The list row is preferred when both match (same value either way).
+
     Returns (score_or_None, probe). None means no row for this word
     (or no score in its row) — the caller must say so honestly.
     """
     import re as _re
     probe = {"rows_scanned": len(rows or []), "matched_row": None,
-             "numbers": []}
+             "numbers": [], "card_text": None, "card_loading": None}
     w = str(word or "").lower()
     if not w:
         return None, probe
     wpat = _re.compile(r"(?<![a-z])" + _re.escape(w) + r"(?![a-z])")
+    if isinstance(card, dict):
+        probe["card_text"] = str(card.get("text") or "")[:160]
+        probe["card_loading"] = bool(card.get("loading"))
     for r in (rows or []):
         if not isinstance(r, dict):
             continue
@@ -2686,6 +2701,22 @@ def _semantic_parse_dom_rows(rows, word):
             if decs:
                 return decs[0], probe
             return None, probe
+    # No list row matched: fall back to the recent-guess card (iter 32).
+    # Skip it while loading (app-spinner present => -1.00 placeholder,
+    # not the real similarity); the caller polls, which covers the
+    # brief loading window. A stale card (wrong word) never matches.
+    if isinstance(card, dict) and not card.get("loading"):
+        ctext = str(card.get("text") or "")
+        if ctext:
+            m = wpat.search(ctext.lower())
+            if m:
+                probe["matched_row"] = ctext[:160]
+                decs = _re.findall(r"[-+\u2212]?\d+\.\d+", ctext[m.end():])
+                decs = [d.replace("\u2212", "-") for d in decs]
+                probe["numbers"] = decs
+                if decs:
+                    return decs[0], probe
+                return None, probe
     return None, probe
 
 
@@ -2711,35 +2742,30 @@ def _semantic_dom_scores(page, word):
     with the probe means the DOM exposes no per-guess score; the
     caller must say so honestly, never fake one.
 
-    Fix-loop iter 31 (ANALYSIS29 BUG 2): Semantle still returned None
-    for every guess while the Similarity column was visibly rendered,
-    and the caller discarded the probe diagnostics, so the run
-    carried zero evidence of WHICH stage failed. Two changes:
-    (a) this function now also returns per-stage diagnostics —
-    raw selector counts BEFORE the rounded-md/text filters
-    (raw_semantle / raw_contexto) vs kept rows — plus attempts and
-    error, so a later log line can tell "selector matched nothing"
-    apart from "rows matched but filtered" apart from "evaluate
-    threw"; (b) bounded poll for the current word's row: if an
-    attempt finds no score AND no row for this word (matched_row
-    None — the guess row may render well after the first read; in
-    run 39115522198 the row for each Semantle guess was still absent
-    9s after typing began and appeared only 4–11s after Enter),
-    wait 1000ms and probe again, up to 10 attempts (~9s of
-    waiting). A matched row with no decimal is NOT retried (the row
-    is there; re-reading cannot add a decimal). The selector itself was verified against the
-    LIVE Semantle bundle template (main-BDG63Q2B.js, still served):
-    the ngFor guess row is a div with class " dark:border-neutral-300"
-    and NO rounded-md; the recent-guess card (wB template) carries
-    BOTH classes, so the rounded-md exclusion is correct.
+    Fix-loop iter 32 (ANALYSIS30 §3-§4): the bounded poll could not
+    fix Semantle — the current guess's row is not late, it is in a
+    DIFFERENT element. At probe time the current guess lives ONLY in
+    the recent-guess card (rounded-md div inside <app-guesses>,
+    rendering recentGuess.guess + recentGuess.initialSimilarity);
+    the ngFor list holds only guesses 1..N-1 (guess N moves into the
+    list only when guess N+1 is typed). So this function now ALSO
+    captures the card per attempt — {text, loading: card contains
+    app-spinner} — and hands it to _semantic_parse_dom_rows, which
+    parses the card when no list row matches, only if the card's word
+    matches the target AND loading is false (while app-spinner is
+    present the card shows the -1.00 placeholder). The bounded poll
+    is kept: it now covers the brief card-loading window (a loading
+    card leaves matched_row None, so the poll retries). The main
+    rows array stays list-rows-only (backward compat).
     """
     probe = {"rows_scanned": 0, "matched_row": None, "numbers": [],
              "attempts": 0, "raw_semantle": 0, "kept_semantle": 0,
-             "raw_contexto": 0, "kept_contexto": 0, "error": None}
+             "raw_contexto": 0, "kept_contexto": 0, "error": None,
+             "card_text": None, "card_loading": None}
     for _attempt in range(1, 11):
         probe["attempts"] = _attempt
         try:
-            rows = page.evaluate("""() => {
+            rows_raw = page.evaluate("""() => {
           const out = [];
           // Contexto: .guess-history .row-wrapper > .row > .row-word + rank.
           // The rank span shows distance + 1 (the site's own number).
@@ -2755,19 +2781,35 @@ def _semantic_dom_scores(page, word):
           }
           // Semantle: <app-guesses> ngFor rows are divs with class
           // dark:border-neutral-300. The recent-guess card shares the
-          // class but adds rounded-md — exclude it (it duplicates the
-          // latest guess; rows are the ngFor list).
+          // class but adds rounded-md — exclude it from the list rows
+          // (it duplicates the latest guess; rows are the ngFor list),
+          // and capture it separately (iter 32): at probe time the
+          // current guess lives ONLY in the card.
+          let card = null;
           for (const r of document.querySelectorAll(
               'app-guesses div[class*="border-neutral-300"]')) {
-            if ((r.className || '').includes('rounded-md')) continue;
+            if ((r.className || '').includes('rounded-md')) {
+              if (!card) card = {
+                text: (r.innerText || '').trim(),
+                loading: r.querySelector('app-spinner') !== null};
+              continue;
+            }
             const t = (r.innerText || '').trim();
             if (t) out.push({src: 'semantle', text: t});
           }
-          return out;
+          return {rows: out, card};
         }""") or []
         except Exception as e:
             probe["error"] = str(e)[:80]
             return None, probe
+        # Backward compat: older callers/tests may return a bare rows
+        # array (no card). A dict carries {rows, card}.
+        if isinstance(rows_raw, dict):
+            card = rows_raw.get("card")
+            rows = rows_raw.get("rows") or []
+        else:
+            card = None
+            rows = rows_raw
         # Diagnostics: raw selector counts BEFORE the rounded-md /
         # text filters, so the log can tell "selector matched nothing"
         # apart from "rows matched but filtered out".
@@ -2799,10 +2841,12 @@ def _semantic_dom_scores(page, word):
         probe["kept_semantle"] = int(diag.get("semantle_kept") or 0)
         probe["raw_contexto"] = int(diag.get("contexto_raw") or 0)
         probe["kept_contexto"] = int(diag.get("contexto_kept") or 0)
-        score, _pparse = _semantic_parse_dom_rows(rows, word)
+        score, _pparse = _semantic_parse_dom_rows(rows, word, card=card)
         probe["rows_scanned"] = _pparse.get("rows_scanned", 0)
         probe["matched_row"] = _pparse.get("matched_row")
         probe["numbers"] = _pparse.get("numbers", [])
+        probe["card_text"] = _pparse.get("card_text")
+        probe["card_loading"] = _pparse.get("card_loading")
         if score is not None:
             return score, probe
         # Bounded poll (see docstring): only while no row for this
@@ -4071,8 +4115,22 @@ def _framed_live_answer(page, mode, fallback):
     # asset.title) — the titles top-ten API counts guesses, not correct
     # answers, so its last-frame leader is the WRONG answer when the
     # puzzle is a sequel/sibling (titleshot #501: leader "Despicable Me",
-    # real answer "Despicable Me 2"). Classic/one-frame keep the titles
-    # API (their core challenge paths 404).
+    # real answer "Despicable Me 2"). Classic keeps the titles API
+    # (it shows all 6 frames; frame 6 is the reveal). One-frame NEVER
+    # uses the frame-6 leader — it shows only frame 001, so its answer
+    # comes from the site's bundled list Mh[shown-1] (iter 32: one-frame
+    # #685's frame-6 leader '2001: A Space Odyssey' scored wrong twice).
+    if mode == "one-frame":
+        try:
+            _bundled = A.framed_oneframe_bundled(shown)
+        except Exception:
+            _bundled = None
+        if _bundled:
+            print(f"[framed] {mode}: bundled list for #{shown} "
+                  f"-> {_bundled!r}")
+            return _bundled
+        print(f"[framed] {mode}: bundled list for #{shown} gave nothing; "
+              f"falling back to titles frame-1 leader")
     if mode in ("titleshot", "poster"):
         try:
             _core = A.framed_core(mode, shown)
@@ -4096,7 +4154,10 @@ def _framed_live_answer(page, mode, fallback):
         if _r.ok:
             _fr = (_r.json().get("frames") or [])
             if _fr:
-                _raw = _fr[-1].get("items")
+                # One-frame shows only frame 001: use frame 1's leader,
+                # never frames[-1] (frame 6). Classic keeps frames[-1].
+                _pick = _fr[0] if mode == "one-frame" else _fr[-1]
+                _raw = _pick.get("items")
                 _it = json.loads(_raw) if isinstance(_raw, str) else (_raw or [])
                 if _it and _it[0].get("title"):
                     print(f"[framed] {mode}: direct titles API for #{shown} "
@@ -4660,6 +4721,8 @@ def _semantic_guess_accepted(page, word, before_txt, gid=None):
                   f"raw_contexto={_p.get('raw_contexto')} "
                   f"kept_contexto={_p.get('kept_contexto')} "
                   f"matched_row={_p.get('matched_row')!r} "
+                  f"card_text={_p.get('card_text')!r} "
+                  f"card_loading={_p.get('card_loading')} "
                   f"error={_p.get('error')!r} "
                   f"attempts={_p.get('attempts')}")
     if dom_score is not None:
