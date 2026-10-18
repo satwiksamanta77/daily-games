@@ -1,3 +1,10 @@
+# 2026-10-18 batch audit: this batch absorbs the deleted morning (batterup,
+# canuckle), waffle (08:00) and gamedle (globle, 16:00) batches. Batterup needs
+# ET-midnight + CDN publish (latest sample 09:00 IST) — 11:30 IST clears both.
+# Waffle's board rotates at 00:00 UTC — 11:30 IST clears it. Canuckle/globle
+# are also in the 9pm batch; dawn is their fallback. Marveldle stays separate
+# (pick-id flip unproven; conservative bound 06:02 UTC = 11:32 IST, 2 min
+# AFTER this batch fires). Nerdle next-day stays in Batch C 22:30 IST.
 name: Batch A dawn fix-up (US-rolled boards)
 
 # The 21:00-IST batch targets the NEXT day's board. Client-seeded sites serve
@@ -1267,4 +1274,388 @@ jobs:
           git config user.email "video-bot@users.noreply.github.com"
           git add database/ browser_state.json || true
           git diff --cached --quiet || git commit -m "db: nerdle $(date -u +%F) dawn"
+          for i in 1 2 3 4 5 6 7 8; do git pull --rebase -X theirs --autostash 2>/dev/null && git push 2>/dev/null && break; git rebase --abort 2>/dev/null; sleep 6; done || true
+  generate-canuckle:
+    name: generate (canuckle)
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Workflow-honesty (fix-loop iter 10): game selection lives at the
+    # JOB level. A job whose game is not selected shows SKIPPED,
+    # never Success. The old step-level skip + always() upload/commit
+    # let unselected jobs report green with zero work (hollow-green).
+    # schedule-triggered runs always run (event_name clause).
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.game || '') == '' || inputs.game == 'canuckle' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+      - name: Install deps
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg xvfb
+          python -m pip install --upgrade pip
+          pip install --prefer-binary -r requirements.txt
+          python -m playwright install --with-deps chromium
+          npm init -y >/dev/null 2>&1 || true
+          npm install --no-save seedrandom 2>&1 | tail -1 || true
+      - name: Run game (never fails job without secrets - local mode, saves artifact)
+        id: run-game
+        env:
+          HEADLESS: 'true'
+          TZ_OFFSET_MINUTES: '540'
+          BROWSER_TZ: 'Pacific/Kiritimati'
+          CURSOR_OVERLAY: 'off'
+          FORCE_REGENERATE: ${{ inputs.force }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+        run: |
+          RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ] || [ "$1" = "betweenle" ]; then
+            HEADLESS=false xvfb-run -a python -u runner.py --game "$1";
+          else python -u runner.py --game "$1"; fi; }
+          RUN canuckle
+      - name: Verify game produced output (fail on zero work)
+        id: verify-output
+        # Runs only when Run game SUCCEEDED (default success() condition).
+        # If Run game failed (unsolved), this step is skipped and the job
+        # stays failed while Upload still ships the failure artifact.
+        # A no-duplicate skip (result.json skipped=true, no fresh video)
+        # is legitimate auditable work and passes. Anything else with no
+        # result.json, or a fresh attempt with no video, FAILS the job.
+        run: |
+          python - <<'PYEOF'
+          import json, pathlib, sys
+          d = pathlib.Path("videos/canuckle")
+          res = d / "result.json"
+          if not res.is_file():
+              print(f"::error::Run game produced no result.json in {d} (zero auditable work)")
+              sys.exit(1)
+          try:
+              r = json.loads(res.read_text())
+          except Exception as e:
+              print(f"::error::result.json in {d} is not valid JSON: {e}")
+              sys.exit(1)
+          if r.get("skipped") is True:
+              print(f"verify-output: legit no-duplicate skip (evidence={r.get('evidence')})")
+              sys.exit(0)
+          if not list(d.glob("*.mp4")):
+              print(f"::error::Run game produced no video artifact in {d} (fresh attempt, no .mp4)")
+              sys.exit(1)
+          print(f"verify-output: result.json + video present in {d}")
+          PYEOF
+      - name: Upload video artifact
+        if: ${{ always() && steps.run-game.outcome != 'skipped' && steps.verify-output.outcome != 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dawn-video-canuckle
+          path: |
+            videos/canuckle/*.mp4
+            videos/canuckle/*.log
+            videos/canuckle/qc_*.json
+            videos/canuckle/telemetry_*.json
+            videos/canuckle/result.json
+            videos/canuckle/stall_*.png
+            videos/canuckle/shot_win.png
+            videos/canuckle/board_*.png
+          retention-days: 7
+          if-no-files-found: error
+      - name: Commit database record
+        if: ${{ always() && steps.run-game.outcome != 'skipped' && steps.verify-output.outcome != 'failure' }}
+        run: |
+          git config user.name "video-bot"
+          git config user.email "video-bot@users.noreply.github.com"
+          git add database/ browser_state.json || true
+          git diff --cached --quiet || git commit -m "db: canuckle $(date -u +%F) dawn"
+          for i in 1 2 3 4 5 6 7 8; do git pull --rebase -X theirs --autostash 2>/dev/null && git push 2>/dev/null && break; git rebase --abort 2>/dev/null; sleep 6; done || true
+  generate-globle:
+    name: generate (globle)
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Workflow-honesty (fix-loop iter 10): game selection lives at the
+    # JOB level. A job whose game is not selected shows SKIPPED,
+    # never Success. The old step-level skip + always() upload/commit
+    # let unselected jobs report green with zero work (hollow-green).
+    # schedule-triggered runs always run (event_name clause).
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.game || '') == '' || inputs.game == 'globle' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+      - name: Install deps
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg xvfb
+          python -m pip install --upgrade pip
+          pip install --prefer-binary -r requirements.txt
+          python -m playwright install --with-deps chromium
+          npm init -y >/dev/null 2>&1 || true
+          npm install --no-save seedrandom 2>&1 | tail -1 || true
+      - name: Run game (never fails job without secrets - local mode, saves artifact)
+        id: run-game
+        env:
+          HEADLESS: 'true'
+          TZ_OFFSET_MINUTES: '540'
+          BROWSER_TZ: 'Pacific/Kiritimati'
+          CURSOR_OVERLAY: 'off'
+          FORCE_REGENERATE: ${{ inputs.force }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+        run: |
+          RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ] || [ "$1" = "betweenle" ]; then
+            HEADLESS=false xvfb-run -a python -u runner.py --game "$1";
+          else python -u runner.py --game "$1"; fi; }
+          RUN globle
+      - name: Verify game produced output (fail on zero work)
+        id: verify-output
+        # Runs only when Run game SUCCEEDED (default success() condition).
+        # If Run game failed (unsolved), this step is skipped and the job
+        # stays failed while Upload still ships the failure artifact.
+        # A no-duplicate skip (result.json skipped=true, no fresh video)
+        # is legitimate auditable work and passes. Anything else with no
+        # result.json, or a fresh attempt with no video, FAILS the job.
+        run: |
+          python - <<'PYEOF'
+          import json, pathlib, sys
+          d = pathlib.Path("videos/globle")
+          res = d / "result.json"
+          if not res.is_file():
+              print(f"::error::Run game produced no result.json in {d} (zero auditable work)")
+              sys.exit(1)
+          try:
+              r = json.loads(res.read_text())
+          except Exception as e:
+              print(f"::error::result.json in {d} is not valid JSON: {e}")
+              sys.exit(1)
+          if r.get("skipped") is True:
+              print(f"verify-output: legit no-duplicate skip (evidence={r.get('evidence')})")
+              sys.exit(0)
+          if not list(d.glob("*.mp4")):
+              print(f"::error::Run game produced no video artifact in {d} (fresh attempt, no .mp4)")
+              sys.exit(1)
+          print(f"verify-output: result.json + video present in {d}")
+          PYEOF
+      - name: Upload video artifact
+        if: ${{ always() && steps.run-game.outcome != 'skipped' && steps.verify-output.outcome != 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dawn-video-globle
+          path: |
+            videos/globle/*.mp4
+            videos/globle/*.log
+            videos/globle/qc_*.json
+            videos/globle/telemetry_*.json
+            videos/globle/result.json
+            videos/globle/stall_*.png
+            videos/globle/shot_win.png
+            videos/globle/board_*.png
+          retention-days: 7
+          if-no-files-found: error
+      - name: Commit database record
+        if: ${{ always() && steps.run-game.outcome != 'skipped' && steps.verify-output.outcome != 'failure' }}
+        run: |
+          git config user.name "video-bot"
+          git config user.email "video-bot@users.noreply.github.com"
+          git add database/ browser_state.json || true
+          git diff --cached --quiet || git commit -m "db: globle $(date -u +%F) dawn"
+          for i in 1 2 3 4 5 6 7 8; do git pull --rebase -X theirs --autostash 2>/dev/null && git push 2>/dev/null && break; git rebase --abort 2>/dev/null; sleep 6; done || true
+  generate-batterup:
+    name: generate (batterup)
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Workflow-honesty (fix-loop iter 10): game selection lives at the
+    # JOB level. A job whose game is not selected shows SKIPPED,
+    # never Success. The old step-level skip + always() upload/commit
+    # let unselected jobs report green with zero work (hollow-green).
+    # schedule-triggered runs always run (event_name clause).
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.game || '') == '' || inputs.game == 'batterup' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+      - name: Install deps
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg xvfb
+          python -m pip install --upgrade pip
+          pip install --prefer-binary -r requirements.txt
+          python -m playwright install --with-deps chromium
+          npm init -y >/dev/null 2>&1 || true
+          npm install --no-save seedrandom 2>&1 | tail -1 || true
+      - name: Run game (never fails job without secrets - local mode, saves artifact)
+        id: run-game
+        env:
+          HEADLESS: 'true'
+          TZ_OFFSET_MINUTES: '540'
+          BROWSER_TZ: 'Pacific/Kiritimati'
+          CURSOR_OVERLAY: 'off'
+          FORCE_REGENERATE: ${{ inputs.force }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+        run: |
+          RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ] || [ "$1" = "betweenle" ]; then
+            HEADLESS=false xvfb-run -a python -u runner.py --game "$1";
+          else python -u runner.py --game "$1"; fi; }
+          RUN batterup
+      - name: Verify game produced output (fail on zero work)
+        id: verify-output
+        # Runs only when Run game SUCCEEDED (default success() condition).
+        # If Run game failed (unsolved), this step is skipped and the job
+        # stays failed while Upload still ships the failure artifact.
+        # A no-duplicate skip (result.json skipped=true, no fresh video)
+        # is legitimate auditable work and passes. Anything else with no
+        # result.json, or a fresh attempt with no video, FAILS the job.
+        run: |
+          python - <<'PYEOF'
+          import json, pathlib, sys
+          d = pathlib.Path("videos/batterup")
+          res = d / "result.json"
+          if not res.is_file():
+              print(f"::error::Run game produced no result.json in {d} (zero auditable work)")
+              sys.exit(1)
+          try:
+              r = json.loads(res.read_text())
+          except Exception as e:
+              print(f"::error::result.json in {d} is not valid JSON: {e}")
+              sys.exit(1)
+          if r.get("skipped") is True:
+              print(f"verify-output: legit no-duplicate skip (evidence={r.get('evidence')})")
+              sys.exit(0)
+          if not list(d.glob("*.mp4")):
+              print(f"::error::Run game produced no video artifact in {d} (fresh attempt, no .mp4)")
+              sys.exit(1)
+          print(f"verify-output: result.json + video present in {d}")
+          PYEOF
+      - name: Upload video artifact
+        if: ${{ always() && steps.run-game.outcome != 'skipped' && steps.verify-output.outcome != 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dawn-video-batterup
+          path: |
+            videos/batterup/*.mp4
+            videos/batterup/*.log
+            videos/batterup/qc_*.json
+            videos/batterup/telemetry_*.json
+            videos/batterup/result.json
+            videos/batterup/stall_*.png
+            videos/batterup/shot_win.png
+            videos/batterup/board_*.png
+          retention-days: 7
+          if-no-files-found: error
+      - name: Commit database record
+        if: ${{ always() && steps.run-game.outcome != 'skipped' && steps.verify-output.outcome != 'failure' }}
+        run: |
+          git config user.name "video-bot"
+          git config user.email "video-bot@users.noreply.github.com"
+          git add database/ browser_state.json || true
+          git diff --cached --quiet || git commit -m "db: batterup $(date -u +%F) dawn"
+          for i in 1 2 3 4 5 6 7 8; do git pull --rebase -X theirs --autostash 2>/dev/null && git push 2>/dev/null && break; git rebase --abort 2>/dev/null; sleep 6; done || true
+  generate-waffle:
+    name: generate (waffle)
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Workflow-honesty (fix-loop iter 10): game selection lives at the
+    # JOB level. A job whose game is not selected shows SKIPPED,
+    # never Success. The old step-level skip + always() upload/commit
+    # let unselected jobs report green with zero work (hollow-green).
+    # schedule-triggered runs always run (event_name clause).
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.game || '') == '' || inputs.game == 'waffle' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+      - name: Install deps
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg xvfb
+          python -m pip install --upgrade pip
+          pip install --prefer-binary -r requirements.txt
+          python -m playwright install --with-deps chromium
+          npm init -y >/dev/null 2>&1 || true
+          npm install --no-save seedrandom 2>&1 | tail -1 || true
+      - name: Run game (never fails job without secrets - local mode, saves artifact)
+        id: run-game
+        env:
+          HEADLESS: 'true'
+          TZ_OFFSET_MINUTES: '540'
+          BROWSER_TZ: 'Pacific/Kiritimati'
+          CURSOR_OVERLAY: 'off'
+          FORCE_REGENERATE: ${{ inputs.force }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+        run: |
+          RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ] || [ "$1" = "betweenle" ]; then
+            HEADLESS=false xvfb-run -a python -u runner.py --game "$1";
+          else python -u runner.py --game "$1"; fi; }
+          RUN waffle
+      - name: Verify game produced output (fail on zero work)
+        id: verify-output
+        # Runs only when Run game SUCCEEDED (default success() condition).
+        # If Run game failed (unsolved), this step is skipped and the job
+        # stays failed while Upload still ships the failure artifact.
+        # A no-duplicate skip (result.json skipped=true, no fresh video)
+        # is legitimate auditable work and passes. Anything else with no
+        # result.json, or a fresh attempt with no video, FAILS the job.
+        run: |
+          python - <<'PYEOF'
+          import json, pathlib, sys
+          d = pathlib.Path("videos/waffle")
+          res = d / "result.json"
+          if not res.is_file():
+              print(f"::error::Run game produced no result.json in {d} (zero auditable work)")
+              sys.exit(1)
+          try:
+              r = json.loads(res.read_text())
+          except Exception as e:
+              print(f"::error::result.json in {d} is not valid JSON: {e}")
+              sys.exit(1)
+          if r.get("skipped") is True:
+              print(f"verify-output: legit no-duplicate skip (evidence={r.get('evidence')})")
+              sys.exit(0)
+          if not list(d.glob("*.mp4")):
+              print(f"::error::Run game produced no video artifact in {d} (fresh attempt, no .mp4)")
+              sys.exit(1)
+          print(f"verify-output: result.json + video present in {d}")
+          PYEOF
+      - name: Upload video artifact
+        if: ${{ always() && steps.run-game.outcome != 'skipped' && steps.verify-output.outcome != 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dawn-video-waffle
+          path: |
+            videos/waffle/*.mp4
+            videos/waffle/*.log
+            videos/waffle/qc_*.json
+            videos/waffle/telemetry_*.json
+            videos/waffle/result.json
+            videos/waffle/stall_*.png
+            videos/waffle/shot_win.png
+            videos/waffle/board_*.png
+          retention-days: 7
+          if-no-files-found: error
+      - name: Commit database record
+        if: ${{ always() && steps.run-game.outcome != 'skipped' && steps.verify-output.outcome != 'failure' }}
+        run: |
+          git config user.name "video-bot"
+          git config user.email "video-bot@users.noreply.github.com"
+          git add database/ browser_state.json || true
+          git diff --cached --quiet || git commit -m "db: waffle $(date -u +%F) dawn"
           for i in 1 2 3 4 5 6 7 8; do git pull --rebase -X theirs --autostash 2>/dev/null && git push 2>/dev/null && break; git rebase --abort 2>/dev/null; sleep 6; done || true
