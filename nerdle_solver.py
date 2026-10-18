@@ -5143,10 +5143,20 @@ async def main():
                 # Skipped: they print answers up front and say QUORDLE. The video
                 # is mode cards + real solves only.
                 final_clip = concatenate_videoclips(parts, method="compose")
-                # NO shared brand intro: wordsolverx-intro-20s.mp4
-                # opens EVERY video with a wrong-game, 12-day-stale
-                # Wordle answer (MOCHA, Oct 5). The mode cards open
-                # the video instead (fix-loop iter 11).
+                # Iter-33: cleaned 20 s brand intro prepended. The raw
+                # intro's stale MOCHA/Oct-5 + Phoodle "BRE" window is
+                # held on the logo frame and its audio dropped (bg
+                # song below covers the full clip). Chapters shift by
+                # the intro duration. Soft-fail: on error the clip
+                # ships intro-less, exactly as before.
+                try:
+                    import intro_watermark as _IW33
+                    (final_clip, chapters, _intro_dur33) = \
+                        _IW33.prepend_clean_intro(final_clip, chapters,
+                                                  video_dir,
+                                                  log=_nlog)
+                except Exception as e:
+                    _nlog(f"[nerdle] intro prepend skipped: {str(e)[:120]}")
                 _nlog(f"[nerdle] chapters: {[(round(float(s), 1), t) for s, t in chapters]}")
                 for _mp3 in ("song1.mp3", "song2.mp3"):
                     _sp = script_dir / _mp3
@@ -5158,6 +5168,16 @@ async def main():
                             break
                         except Exception:
                             continue
+                # Iter-33: wordsolverx watermark, bottom-right, whole
+                # clip (gameplay + cards). Soft-fail: on error the
+                # clip ships without it.
+                try:
+                    import intro_watermark as _IW33
+                    final_clip = _IW33.apply_watermark(final_clip,
+                                                       video_dir,
+                                                       log=_nlog)
+                except Exception as e:
+                    _nlog(f"[nerdle] watermark skipped: {str(e)[:120]}")
                 out = str(video_dir / f"nerdle_final_{date_key}.mp4")
                 final_clip.write_videofile(out, codec='libx264', audio_codec='aac', fps=24)
                 final = out

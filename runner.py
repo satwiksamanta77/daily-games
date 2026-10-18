@@ -21938,6 +21938,19 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
                 cur += secs
             total = cur
             clip = concatenate_videoclips(parts, method="compose")
+            # Iter-33: cleaned 20 s brand intro prepended. The raw
+            # intro's stale MOCHA/Oct-5 + Phoodle "BRE" window is held
+            # on the logo frame and its audio dropped (bg song below
+            # covers the full clip). Chapters shift by the intro
+            # duration. Soft-fail: on error the clip ships intro-less.
+            try:
+                import intro_watermark as _IW33
+                clip, chapters, _intro_dur33 = \
+                    _IW33.prepend_clean_intro(clip, chapters, vdir,
+                                              log=lambda m: _dbg(gid, m))
+                total += float(_intro_dur33 or 0)
+            except Exception as e:
+                _dbg(gid, f"intro prepend skipped: {str(e)[:120]}")
             for _mp3 in ("song1.mp3", "song2.mp3"):
                 _sp = QDIR / _mp3
                 if _sp.exists():
@@ -21950,10 +21963,15 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
                         break
                     except Exception:
                         continue
-            # NO shared brand intro: wordsolverx-intro-20s.mp4
-            # opens EVERY video with a wrong-game, 12-day-stale Wordle
-            # answer (MOCHA, Oct 5). The per-game dated recap card
-            # opens the video instead (fix-loop iter 11).
+            # Iter-33: wordsolverx watermark, bottom-right, whole
+            # clip (gameplay + cards). Soft-fail: on error the clip
+            # ships without it.
+            try:
+                import intro_watermark as _IW33
+                clip = _IW33.apply_watermark(
+                    clip, vdir, log=lambda m: _dbg(gid, m))
+            except Exception as e:
+                _dbg(gid, f"watermark skipped: {str(e)[:120]}")
             out = str(vdir / f"{gid}_final_{date_key}.mp4")
             clip.write_videofile(out, codec="libx264", audio_codec="aac",
                                  fps=24, verbose=False, logger=None)
@@ -22750,6 +22768,20 @@ def run_one(gid):
             total = cur
 
             clip = concatenate_videoclips(parts, method="compose")
+            # Iter-33: cleaned 20 s brand intro prepended. The raw
+            # intro's stale MOCHA/Oct-5 + Phoodle "BRE" window is held
+            # on the logo frame and its audio dropped (bg song below
+            # covers the full clip). Chapters shift by the intro
+            # duration. Soft-fail: on error the clip ships intro-less.
+            try:
+                import intro_watermark as _IW33
+                clip, chapters, _intro_dur = \
+                    _IW33.prepend_clean_intro(clip, chapters, vdir,
+                                              log=lambda m: _dbg(gid, m))
+                total += float(_intro_dur or 0)
+            except Exception as e:
+                _dbg(gid, f"intro prepend skipped: {str(e)[:120]}")
+                _intro_dur = 0.0
             for _mp3 in ("song1.mp3", "song2.mp3"):
                 _sp = QDIR / _mp3
                 if _sp.exists():
@@ -22764,11 +22796,15 @@ def run_one(gid):
                         break
                     except Exception:
                         continue
-            # NO shared brand intro: wordsolverx-intro-20s.mp4
-            # opens EVERY video with a wrong-game, 12-day-stale Wordle
-            # answer (MOCHA, Oct 5). The per-game dated recap card
-            # opens the video instead (fix-loop iter 11).
-            _intro_dur = 0.0
+            # Iter-33: wordsolverx watermark, bottom-right, whole
+            # clip (gameplay + cards). Soft-fail: on error the clip
+            # ships without it.
+            try:
+                import intro_watermark as _IW33
+                clip = _IW33.apply_watermark(
+                    clip, vdir, log=lambda m: _dbg(gid, m))
+            except Exception as e:
+                _dbg(gid, f"watermark skipped: {str(e)[:120]}")
             # Worldle all-modes: replace generic chapters with one chapter
             # per played mode (gameplay-relative segments recorded by the
             # solver) + Summary. Generic chapters would hide the modes.

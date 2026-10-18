@@ -11,7 +11,8 @@ Covers the ANALYSIS8 §1/§6 regression diagnosis (run 39043936480):
 (e) true cards/counts: steps + result.json reflect ONLY actually
     submitted guesses; a solved record carries the verified answer,
     never answer=None;
-(f) stale 20s MOCHA intro prepend stays removed; typing speed unchanged.
+(f) stale 20s MOCHA intro never ships raw - only the CLEANED intro
+    (iter 33); typing speed unchanged.
 """
 import json
 import shutil
@@ -289,20 +290,26 @@ class TestSubmittedOnlyStepsAndAnswer(unittest.TestCase):
 
 
 class TestIntroRemovedAndTypingSpeed(unittest.TestCase):
-    """(f) Stale MOCHA intro stays removed; typing speed unchanged."""
+    """(f) Stale MOCHA intro never ships raw - only the CLEANED intro
+    (iter 33); typing speed unchanged."""
 
-    def test_no_intro_clip_in_runner(self):
-        src = (Path(__file__).parent.parent / "runner.py").read_text()
-        self.assertIn("_intro_dur = 0.0", src)
-        for line in src.splitlines():
-            stripped = line.strip()
-            if "wordsolverx-intro" in line:
-                self.assertTrue(stripped.startswith("#"),
-                                f"intro file referenced in code: {line!r}")
-            self.assertFalse(
-                ("wordsolverx-intro" in line
-                 and ("VideoFileClip" in line or "AudioFileClip" in line)),
-                f"intro clip loaded: {line!r}")
+    def test_raw_intro_never_prepended_directly(self):
+        # The raw intro file (with the stale MOCHA/Oct-5 + Phoodle
+        # "BRE" window) must be referenced ONLY by the cleaner
+        # (intro_watermark.py). Assembly in runner.py / nerdle_solver.py
+        # routes through prepend_clean_intro, never the raw file.
+        root = Path(__file__).parent.parent
+        for fname in ("runner.py", "nerdle_solver.py"):
+            src = (root / fname).read_text()
+            self.assertNotIn("wordsolverx-intro-20s.mp4", src,
+                             f"raw intro referenced in {fname}")
+            self.assertIn("prepend_clean_intro", src,
+                          f"{fname} must prepend via the cleaner")
+            self.assertIn("apply_watermark", src,
+                          f"{fname} must apply the watermark")
+        iw = (root / "intro_watermark.py").read_text()
+        self.assertIn("wordsolverx-intro-20s.mp4", iw,
+                      "cleaner must own the raw-intro reference")
 
     def test_betweenle_solver_wires_new_paths(self):
         src = (Path(__file__).parent.parent / "runner.py").read_text()
