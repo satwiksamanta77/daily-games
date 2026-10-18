@@ -566,21 +566,13 @@ class TestFeedbackContinuation(unittest.TestCase):
             mock.patch.object(R, "_attr_consent_recheck",
                               return_value=None),
             mock.patch.object(R, "_attr_dismiss_dropdown_soft"),
+            # Iter 29: Batterup picks via _batterup_click_submit
+            # (click = submit, RE Q5) — the old _type_country_guess +
+            # selection-state + reselect + verify-submit steps no
+            # longer run for Batterup.
             mock.patch.object(
-                R, "_type_country_guess",
-                side_effect=lambda p1, p2, name: (True, name)),
-            mock.patch.object(
-                R, "_attr_selection_state",
-                return_value={"selected": None, "suggestion_open": None,
-                              "input_value": ""}),
-            mock.patch.object(R, "_attr_reselect"),
-            mock.patch.object(R, "_settle"),
-            mock.patch.object(
-                R, "_attr_verify_submitted",
-                return_value=(True, {"populated_rows": 1,
-                                     "dropdown_open": False,
-                                     "feedback_tiles": 18,
-                                     "failure_kind": "verified"})),
+                R, "_batterup_click_submit",
+                return_value=(True, "click-submit triple held", {})),
             mock.patch.object(R, "_attr_post_submit_probe",
                               return_value=_iter26_probe()),
             mock.patch.object(R, "_strict_win", side_effect=_win),
@@ -619,21 +611,13 @@ class TestFeedbackContinuation(unittest.TestCase):
             mock.patch.object(R, "_attr_consent_recheck",
                               return_value=None),
             mock.patch.object(R, "_attr_dismiss_dropdown_soft"),
+            # Iter 29: Batterup picks via _batterup_click_submit
+            # (click = submit, RE Q5) — the old _type_country_guess +
+            # selection-state + reselect + verify-submit steps no
+            # longer run for Batterup.
             mock.patch.object(
-                R, "_type_country_guess",
-                side_effect=lambda p1, p2, name: (True, name)),
-            mock.patch.object(
-                R, "_attr_selection_state",
-                return_value={"selected": None, "suggestion_open": None,
-                              "input_value": ""}),
-            mock.patch.object(R, "_attr_reselect"),
-            mock.patch.object(R, "_settle"),
-            mock.patch.object(
-                R, "_attr_verify_submitted",
-                return_value=(True, {"populated_rows": 1,
-                                     "dropdown_open": False,
-                                     "feedback_tiles": 6,
-                                     "failure_kind": "verified"})),
+                R, "_batterup_click_submit",
+                return_value=(True, "click-submit triple held", {})),
             mock.patch.object(R, "_attr_post_submit_probe",
                               return_value=dict(all_green)),
             mock.patch.object(R, "_strict_win",
@@ -662,21 +646,13 @@ class TestFeedbackContinuation(unittest.TestCase):
             mock.patch.object(R, "_attr_consent_recheck",
                               return_value=None),
             mock.patch.object(R, "_attr_dismiss_dropdown_soft"),
+            # Iter 29: Batterup picks via _batterup_click_submit
+            # (click = submit, RE Q5) — the old _type_country_guess +
+            # selection-state + reselect + verify-submit steps no
+            # longer run for Batterup.
             mock.patch.object(
-                R, "_type_country_guess",
-                side_effect=lambda p1, p2, name: (True, name)),
-            mock.patch.object(
-                R, "_attr_selection_state",
-                return_value={"selected": None, "suggestion_open": None,
-                              "input_value": ""}),
-            mock.patch.object(R, "_attr_reselect"),
-            mock.patch.object(R, "_settle"),
-            mock.patch.object(
-                R, "_attr_verify_submitted",
-                return_value=(True, {"populated_rows": 1,
-                                     "dropdown_open": False,
-                                     "feedback_tiles": 18,
-                                     "failure_kind": "verified"})),
+                R, "_batterup_click_submit",
+                return_value=(True, "click-submit triple held", {})),
             mock.patch.object(R, "_attr_post_submit_probe",
                               return_value=_iter26_probe()),
             mock.patch.object(R, "_strict_win",

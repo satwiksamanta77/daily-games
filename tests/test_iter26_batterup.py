@@ -300,8 +300,12 @@ class TestSolveAttrGameGates(_PatchHelpersMixin, unittest.TestCase):
         self.addCleanup(lambda: (R._PLAYED.pop("batterup", None),
                                   R._REJECTED.pop("batterup", None)))
 
-    def _base_patches(self, page, pick, selection, reselect, verify,
+    def _base_patches(self, page, click_submit,
                       query_selector=None):
+        # Iter 29: Batterup picks via _batterup_click_submit
+        # (click = submit, RE Q5). The old _type_country_guess +
+        # selection-state + reselect + verify-submit + settle steps
+        # no longer run for Batterup.
         if query_selector is not None:
             page.query_selector = query_selector
         return [
@@ -310,14 +314,8 @@ class TestSolveAttrGameGates(_PatchHelpersMixin, unittest.TestCase):
             mock.patch.object(R, "_attr_pool", return_value=[]),
             mock.patch.object(R, "_attr_consent_recheck",
                               return_value=None),
-            mock.patch.object(R, "_attr_dismiss_dropdown_soft"),
-            mock.patch.object(R, "_type_country_guess", side_effect=pick),
-            mock.patch.object(R, "_attr_selection_state",
-                              side_effect=selection),
-            mock.patch.object(R, "_attr_reselect", side_effect=reselect),
-            mock.patch.object(R, "_settle"),
-            mock.patch.object(R, "_attr_verify_submitted",
-                              side_effect=verify),
+            mock.patch.object(R, "_batterup_click_submit",
+                              side_effect=click_submit),
             mock.patch.object(R, "_attr_post_submit_probe",
                               return_value=dict(self._BOARD_PROBE)),
             mock.patch.object(R, "_strict_win",
@@ -330,78 +328,54 @@ class TestSolveAttrGameGates(_PatchHelpersMixin, unittest.TestCase):
             self.addCleanup(p.stop)
         return R.solve_attr_game(page, "Alec Burleson", "batterup")
 
-    def test_pick_ok_requires_selected_state(self):
-        # (a) Pick reports ok but no selection landed and re-select
-        # fails -> the pick does NOT count; nothing is submitted.
+    def test_click_submit_triple_failure_is_pick_failure(self):
+        # Iter 29 supersedes test_pick_ok_requires_selected_state:
+        # there is no 'selected' state on Batterup (RE Q5) — a pick
+        # counts only when the click-submit triple holds. A triple
+        # failure -> the pick does NOT count; nothing is submitted.
         page = _FakePage()
-        verify = mock.Mock()
         patches = self._base_patches(
             page,
-            pick=lambda p1, p2, name: (True, name),
-            selection=lambda p, name: {"selected": False,
-                                       "suggestion_open": True,
-                                       "input_value": name},
-            reselect=lambda p, name: (False, "selection never landed"),
-            verify=verify)
+            click_submit=lambda p, name, base: (
+                False, "click-submit triple not held", {}))
         solved, evidence = self._run(page, patches)
         self.assertFalse(solved)
         self.assertIn("pick failed", evidence)
-        verify.assert_not_called()
         self.assertEqual(page.pressed, [])
         self.assertNotIn("Alec Burleson", R._PLAYED.get("batterup", []))
 
-    def test_submit_never_fires_on_unverified_selection(self):
-        # (b) Pick confirms, but by submit time the selection is gone
-        # and re-select fails -> Enter is NEVER pressed, the submit
-        # button is never clicked, verify is never called.
+    def test_no_enter_or_button_when_click_submit_fails(self):
+        # Iter 29 supersedes
+        # test_submit_never_fires_on_unverified_selection: there is
+        # no separate submit step on Batterup (click = submit, RE
+        # Q5) — so when the click-submit triple fails, Enter is
+        # NEVER pressed, no button is clicked, nothing is counted
+        # as submitted.
         page = _FakePage()
-        verify = mock.Mock()
-        selection_calls = [
-            {"selected": True, "suggestion_open": False,
-             "input_value": "Alec Burleson"},   # pick confirm
-            {"selected": False, "suggestion_open": True,
-             "input_value": "Alec Burleson"},   # ensure before submit
-            {"selected": False, "suggestion_open": True,
-             "input_value": "Alec Burleson"},   # re-pick confirm
-        ]
         patches = self._base_patches(
             page,
-            pick=lambda p1, p2, name: (True, name),
-            selection=selection_calls,
-            reselect=lambda p, name: (False, "selection never landed"),
-            verify=verify)
+            click_submit=lambda p, name, base: (
+                False, "click-submit triple not held", {}))
         solved, _ev = self._run(page, patches)
         self.assertFalse(solved)
-        verify.assert_not_called()
         self.assertEqual(page.pressed, [])
-        self.assertTrue(any("NOT submitting" in m for m in self._msgs))
         self.assertNotIn("Alec Burleson", R._PLAYED.get("batterup", []))
 
-    def test_submit_prefers_site_submit_control_over_enter(self):
-        # (c) With a confirmed selection, the site's own submit
-        # control is clicked; Enter is not pressed.
+    def test_click_submit_succeeds_without_enter(self):
+        # Iter 29 supersedes
+        # test_submit_prefers_site_submit_control_over_enter: there
+        # is no separate submit control / Enter step on Batterup —
+        # the <li> click IS the submit (RE Q5). The preserved
+        # invariant: Enter is never pressed.
         page = _FakePage()
-        button = _FakeButton()
-
-        def _query(sel):
-            return button if "player-search" in sel else None
-
-        verify = mock.Mock(
-            return_value=(True, dict(self._BOARD_PROBE)))
         patches = self._base_patches(
             page,
-            pick=lambda p1, p2, name: (True, name),
-            selection=lambda p, name: {"selected": True,
-                                       "suggestion_open": False,
-                                       "input_value": name},
-            reselect=lambda p, name: (True, "selected via playwright-click"),
-            verify=verify,
-            query_selector=_query)
+            click_submit=lambda p, name, base: (
+                True, "click-submit triple held", {}))
         solved, _ev = self._run(page, patches)
         self.assertTrue(solved)
-        self.assertTrue(button.clicked)
         self.assertEqual(page.pressed, [])
-        verify.assert_called_once()
+        self.assertIn("Alec Burleson", R._PLAYED.get("batterup", []))
 
 
 class TestPitcherProbes(_PatchHelpersMixin, unittest.TestCase):
@@ -426,9 +400,12 @@ class TestPitcherProbes(_PatchHelpersMixin, unittest.TestCase):
                 pos & R._BATTERUP_PITCHER_POSITIONS,
                 f"pitcher {name} ({pos}) still in probe pool")
 
-    def test_pitcher_api_probe_filtered_outright(self):
-        # Miley passed in as an api_probe is dropped by the denylist
-        # before play; he is never typed, never submitted.
+    def test_pitcher_api_probe_played_not_filtered(self):
+        # Iter 29 supersedes test_pitcher_api_probe_filtered_outright:
+        # the denylist is gone (RE Q2 refuted the batter-only
+        # hypothesis — Miley IS in the suggestion index). A
+        # caller-passed pitcher probe is a valid guess and is now
+        # played, not filtered.
         page = _FakePage()
         R._PLAYED.pop("batterup", None)
         R._REJECTED.pop("batterup", None)
@@ -436,9 +413,9 @@ class TestPitcherProbes(_PatchHelpersMixin, unittest.TestCase):
                                   R._REJECTED.pop("batterup", None)))
         picked = []
 
-        def _pick(p1, p2, name):
+        def _click_submit(p, name, base):
             picked.append(name)
-            return True, name
+            return True, "click-submit triple held", {}
 
         patches = [
             mock.patch.object(R, "_close_modals"),
@@ -447,21 +424,8 @@ class TestPitcherProbes(_PatchHelpersMixin, unittest.TestCase):
                               return_value=["Aaron Judge"]),
             mock.patch.object(R, "_attr_consent_recheck",
                               return_value=None),
-            mock.patch.object(R, "_attr_dismiss_dropdown_soft"),
-            mock.patch.object(R, "_type_country_guess",
-                              side_effect=_pick),
-            mock.patch.object(
-                R, "_attr_selection_state",
-                return_value={"selected": None, "suggestion_open": None,
-                              "input_value": ""}),
-            mock.patch.object(R, "_attr_reselect"),
-            mock.patch.object(R, "_settle"),
-            mock.patch.object(
-                R, "_attr_verify_submitted",
-                return_value=(True, {"populated_rows": 1,
-                                     "dropdown_open": False,
-                                     "feedback_tiles": 3,
-                                     "failure_kind": "verified"})),
+            mock.patch.object(R, "_batterup_click_submit",
+                              side_effect=_click_submit),
             mock.patch.object(
                 R, "_attr_post_submit_probe",
                 return_value={"rows": ["x"], "dropdown_open": False,
@@ -478,8 +442,8 @@ class TestPitcherProbes(_PatchHelpersMixin, unittest.TestCase):
             page, "Alec Burleson", "batterup",
             api_probes=("Wade Miley", "Aaron Judge"))
         self.assertTrue(solved)
-        self.assertNotIn("Wade Miley", picked)
-        self.assertNotIn("Wade Miley", R._PLAYED.get("batterup", []))
+        self.assertIn("Wade Miley", picked)
+        self.assertIn("Wade Miley", R._PLAYED.get("batterup", []))
 
 
 if __name__ == "__main__":

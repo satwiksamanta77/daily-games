@@ -208,11 +208,13 @@ class TestSolveAttrGameWinGate(unittest.TestCase):
         patch("_idle_drift", lambda page, *a, **k: None)
         patch("_settle", lambda page, *a, **k: None)
         patch("_attr_pool", lambda gid: ["Probe One", "Probe Two"])
-        self._pick_calls = []
-        patch("_type_country_guess", self._fake_pick)
-        self._verify_calls = 0
-        self._verify_fn = lambda page, gid, base: (True, _probe([], False, 1, 6))
-        patch("_attr_verify_submitted", self._fake_verify)
+        # Iter 29: Batterup picks via _batterup_click_submit
+        # (click = submit, RE Q5). The old _type_country_guess +
+        # _attr_verify_submitted steps no longer run for Batterup.
+        self._click_submit_calls = []
+        self._click_submit_fn = lambda page, name, base: (
+            True, "click-submit triple held", {})
+        patch("_batterup_click_submit", self._fake_click_submit)
         self._win_calls = 0
         self._win_result = (False, "NO win signal on page")
         patch("_strict_win", self._fake_win)
@@ -233,13 +235,9 @@ class TestSolveAttrGameWinGate(unittest.TestCase):
         runner._REJECTED.clear()
         runner._REJECTED.update(self._old_rejected)
 
-    def _fake_pick(self, page, scope, name):
-        self._pick_calls.append(name)
-        return True, name
-
-    def _fake_verify(self, page, gid, baseline):
-        self._verify_calls += 1
-        return self._verify_fn(page, gid, baseline)
+    def _fake_click_submit(self, page, name, baseline):
+        self._click_submit_calls.append(name)
+        return self._click_submit_fn(page, name, baseline)
 
     def _fake_win(self, page, answer=None):
         self._win_calls += 1
@@ -248,16 +246,18 @@ class TestSolveAttrGameWinGate(unittest.TestCase):
     def test_unsubmitted_answer_never_win_checked(self):
         # Even a positive win signal must not be consulted: the answer
         # never submitted, so there is nothing to win-check.
-        self._verify_fn = lambda page, gid, base: (
-            False, _probe([], False, 0, 0))
+        # Iter 29: "never submitted" = click-submit triple never
+        # held (no separate verify step anymore); each guess gets
+        # exactly one re-click-submit (3 guesses x 2 attempts).
+        self._click_submit_fn = lambda page, name, base: (
+            False, "click-submit triple not held", {})
         self._win_result = (True, "win signal 'you won'")
         ok, ev = runner.solve_attr_game(self.page, ANSWER, "batterup")
         self.assertFalse(ok)
-        self.assertIn("NOT submitted", ev)
+        self.assertIn("pick failed", ev)
         self.assertEqual(self._win_calls, 0)
         self.assertEqual(runner._PLAYED.get("batterup"), None)
-        # Bounded retries: 3 attempts (1 pick + 2 re-picks) per guess.
-        self.assertEqual(len(self._pick_calls), 9)
+        self.assertEqual(len(self._click_submit_calls), 6)
 
     def test_answer_echo_is_not_a_win(self):
         self.page.inner = f"{ANSWER}\nGuess the player"
@@ -290,12 +290,15 @@ class TestSolveAttrGameWinGate(unittest.TestCase):
         self.assertEqual(self._win_calls, 2)
 
     def test_unsubmitted_probes_do_not_count(self):
-        # Probes fail to submit (6 verify calls: 3 attempts x 2 probes);
-        # the answer submits on its first attempt (7th call) and wins.
-        def verify(page, gid, base):
-            return (self._verify_calls > 6,
-                    _probe([ANSWER], False, 1, 6))
-        self._verify_fn = verify
+        # Probes fail to click-submit (2 attempts each: 4 failed
+        # calls); the answer click-submits on its first attempt
+        # (5th call) and wins.
+        def click_submit(page, name, base):
+            return (len(self._click_submit_calls) > 4,
+                    "click-submit triple held"
+                    if len(self._click_submit_calls) > 4 else
+                    "click-submit triple not held", {})
+        self._click_submit_fn = click_submit
         self._win_result = (True, "win signal 'you won'")
         ok, ev = runner.solve_attr_game(self.page, ANSWER, "batterup")
         self.assertTrue(ok)

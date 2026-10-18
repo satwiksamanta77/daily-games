@@ -170,9 +170,12 @@ class TestSolveAttrGameWiring(_PatchDbgMixin, unittest.TestCase):
         self.addCleanup(lambda: (R._PLAYED.pop("batterup", None),
                                   R._REJECTED.pop("batterup", None)))
 
-    def _run_solve(self, pick_side_effect, verify_side_effect):
+    def _run_solve(self, click_submit_side_effect):
+        # Iter 29: Batterup picks via _batterup_click_submit
+        # (click = submit, RE Q5). There is no separate submit /
+        # reselect / soft-close step anymore; a failed click-submit
+        # gets one re-click-submit after a consent re-check.
         rechecks = []
-        soft_closes = []
         with mock.patch.object(R, "_close_modals"), \
                 mock.patch.object(R, "_idle_drift"), \
                 mock.patch.object(R, "_attr_pool", return_value=[]), \
@@ -180,50 +183,43 @@ class TestSolveAttrGameWiring(_PatchDbgMixin, unittest.TestCase):
                     R, "_attr_consent_recheck",
                     side_effect=lambda p, g, w, full=False: rechecks.append(
                         (w, full)) or None), \
-                mock.patch.object(
-                    R, "_attr_dismiss_dropdown_soft",
-                    side_effect=lambda p: soft_closes.append(True)), \
-                mock.patch.object(R, "_type_country_guess",
-                                  side_effect=pick_side_effect), \
-                mock.patch.object(R, "_settle"), \
-                mock.patch.object(R, "_attr_verify_submitted",
-                                  side_effect=verify_side_effect), \
+                mock.patch.object(R, "_batterup_click_submit",
+                                  side_effect=click_submit_side_effect), \
                 mock.patch.object(R, "_attr_post_submit_probe",
                                   return_value=dict(self._BOARD_PROBE)), \
                 mock.patch.object(R, "_strict_win",
                                   return_value=(True, "you won")):
             solved, evidence = R.solve_attr_game(
                 _DummyPage(), "Alec Burleson", "batterup")
-        return solved, evidence, rechecks, soft_closes
+        return solved, evidence, rechecks
 
     def test_pick_failure_retries_after_consent_recheck(self):
-        # Pick 1 fails as if a CMP covered the board (click timeout);
-        # the loop re-checks consent, closes the dropdown, and the
-        # re-pick succeeds -> solved.
-        solved, _ev, rechecks, soft_closes = self._run_solve(
-            [(False, "exception: ElementHandle.click: Timeout 3000ms"),
-             (True, "Alec Burleson")],
-            [(True, dict(self._BOARD_PROBE))])
+        # Click-submit 1 fails as if a CMP covered the board (click
+        # timeout); the loop re-checks consent and the re-click
+        # succeeds -> solved.
+        solved, _ev, rechecks = self._run_solve(
+            [(False, "exception: ElementHandle.click: Timeout 3000ms",
+              {}),
+             (True, "click-submit triple held", {})])
         self.assertTrue(solved)
         whys = [w for w, _f in rechecks]
-        self.assertTrue(any("pick failed" in w for w in whys),
-                        f"no pick-failure re-check in {whys}")
-        self.assertGreaterEqual(len(soft_closes), 1)
+        self.assertTrue(any("click-submit failed" in w for w in whys),
+                        f"no click-submit-failure re-check in {whys}")
 
-    def test_submit_retry_rechecks_consent_and_closes_dropdown(self):
-        # First submit unverified (RC4 shape); the retry re-checks
-        # consent and closes the dropdown before re-picking, and the
-        # second submit verifies -> solved.
-        solved, _ev, rechecks, soft_closes = self._run_solve(
-            [(True, "Alec Burleson"), (True, "Alec Burleson")],
-            [(False, {"populated_rows": 0, "dropdown_open": True,
-                      "feedback_tiles": 0}),
-             (True, dict(self._BOARD_PROBE))])
+    def test_click_submit_retry_rechecks_consent(self):
+        # Iter 29 supersedes
+        # test_submit_retry_rechecks_consent_and_closes_dropdown:
+        # there is no separate submit step to leave unverified and
+        # no soft-close — a failed click-submit retries once after
+        # a consent re-check, and the second click-submit verifies
+        # -> solved.
+        solved, _ev, rechecks = self._run_solve(
+            [(False, "click-submit triple not held", {}),
+             (True, "click-submit triple held", {})])
         self.assertTrue(solved)
         whys = [w for w, _f in rechecks]
-        self.assertTrue(any("before re-pick" in w for w in whys),
-                        f"no pre-re-pick re-check in {whys}")
-        self.assertGreaterEqual(len(soft_closes), 1)
+        self.assertTrue(any("click-submit failed" in w for w in whys),
+                        f"no click-submit-failure re-check in {whys}")
 
 
 class TestGameplayPhase(unittest.TestCase):

@@ -370,7 +370,18 @@ GAMES = {
     "worgle": {"name": "Worgle", "url": "https://bronze-age.com/worgle/", "slug": "worgle-answer-today"},
     "countryle": {"name": "Countryle", "url": "https://countryle.com/", "slug": "countryle-answer-today"},
     "batterup": {"name": "Batterup", "url": "https://batter-up.app",
-                 "slug": "batterup-answer-today", "no_align": True},
+                 "slug": "batterup-answer-today", "no_align": True,
+                 # Fix-loop iter 29 (ANALYSIS26 RC3): the bot's OWN fake
+                 # clock served the previous-day board. The generic
+                 # 00:05-local fake instant, parsed as Kiritimati-local
+                 # (UTC+14), is 10:05 UTC on D-1 — the site's
+                 # America/New_York date is then D-1, so it serves
+                 # game D-1 (#972 for target 2026-10-18). "et_noon"
+                 # pins the fake instant to 12:00 noon ET on the target
+                 # date (16:00 UTC in EDT), whose ET date IS the
+                 # target — the site then serves the target day's
+                 # board. Other games keep the generic instant.
+                 "fake_iso_mode": "et_noon"},
     "marveldle": {"name": "Marveldle", "url": "https://marveldle.com", "slug": "marveldle-answer-today"},
     # Nerdle: 9 modes solved back-to-back in ONE video (same treatment as
     # framed all_modes). Lives in nerdle_solver.py (async, kept as-is) and is
@@ -6416,7 +6427,15 @@ def _s_searchle(page, ans, gid):
 
 
 def _type_country_guess(page, scope, country):
-    """Type a country into an autosuggest box and click the suggestion row."""
+    """Type a country into an autosuggest box and click the suggestion row.
+
+    Iter 29 (RE Q5): NOT used for Batterup anymore — its JS
+    best.click() targets the .result-box CONTAINER, which never
+    fires the <li>'s onClick (bubbling goes up, not down), so the
+    pick was a no-op on Batterup. Batterup uses
+    _batterup_click_submit (real pointer click on the <li>).
+    Retained for Marveldle, where the JS row click selects.
+    """
     import time as _time
     _t0 = _time.time()
     _gid = getattr(page, "_qp_gid", "attr")
@@ -18573,14 +18592,17 @@ def _attr_norm_name(s):
 # Batterup probe hygiene (fix-loop iter 25, ANALYSIS22 RC-new-2;
 # iter 26, ANALYSIS23 RC-new-2).
 #
-# 1. NO_SUGGESTION: names the live site's suggestion index returns
-#    nothing for, even though they ARE in the vendored pool. "Jesus
-#    Tinoco" is in batterup-players.json but the 2026-10-18 run got
-#    `pick ok=False (no suggestions ...)` for him twice — the probe
-#    was never submittable, so it burned a guess slot on nothing.
-#    Denylisted from _attr_pool (the single choke point feeding both
-#    _plan_for slides and solve_attr_game), so it can never be sampled
-#    again. Names are matched lowercased.
+# 1. NO_SUGGESTION (iter 29: REFUTED as an index fact, RE Q2).
+#    "Jesus Tinoco" got `pick ok=False (no suggestions ...)` twice
+#    in the 2026-10-18 run — but the RE read of the site's own code
+#    proves the suggestion filter is a substring .includes() on full
+#    names with NO position filter, and the LIVE players file
+#    contains Tinoco (RP), Miley (SP) and Duran (RP). The
+#    no-suggestion results were PROBE-side (the old JS .click() on
+#    the .result-box CONTAINER never fired the <li>'s onClick), not
+#    index exclusion. The denylist is therefore REMOVED: those
+#    names are valid guesses. A genuine "no suggestions" mid-solve
+#    is still handled by the replacement path in solve_attr_game.
 # 2. PROVEN_SUGGESTION: names the live site PROVABLY suggests — the
 #    iter-24 frames show their suggestion rows on the live board
 #    (f0030: "Vladimir Guerrero Jr"; f0145: "Alec Burleson"). When a
@@ -18588,23 +18610,16 @@ def _attr_norm_name(s):
 #    by the first proven name that is not the answer and not already
 #    tried — never by inventing a name, and never for the answer
 #    itself (the answer is never replaced).
-# 3. PITCHERS (iter 26): the three no-suggestion names observed so far
-#    — Tinoco, Wade Miley, Jhoan Duran (iter-25 run) — are ALL
-#    pitchers (positions SP/RP), while both suggestion-producing
-#    names are batters (1B). The "suggestion index covers batters
-#    only" hypothesis is SUPPORTED by 5/5 observed names plus the
-#    vendored answers file (all 8 answers are position players, zero
-#    pitchers), but NOT proven from site code: the site's JS bundle
-#    is not retrievable via a text fetch (rendered text only, no
-#    script URLs exposed), so the index's own filter is unconfirmed.
-#    The fix does not depend on the hypothesis being universally
-#    true: pitchers are excluded from the PROBE pool only (probes
-#    are disposable guesses; the answer always comes from the CDN,
-#    never from the pool), and a sampled batter probe that still
-#    yields no suggestions is replaced by a proven name as before.
-#    Pitcher exclusion is via _BATTERUP_PITCHER_POSITIONS below;
-#    Miley/Duran are additionally denylisted by name (a caller could
-#    still pass one in as an api_probe).
+# 3. PITCHERS (iter 29: hypothesis REFUTED by RE Q2 — the
+#    "suggestion index covers batters only" claim is FALSE: the
+#    site's filter is substring .includes() with no position
+#    filter, and the live players file contains Duran (RP),
+#    Miley (SP), Tinoco (RP)). The POOL still excludes pitchers
+#    via _BATTERUP_PITCHER_POSITIONS below — but as a
+#    PROBE-PRIORITY choice only (probes are disposable guesses;
+#    batters first), NOT as an index fact. The CDN answer (any
+#    position) is always played, and a caller-passed pitcher
+#    probe is no longer denylisted.
 # 4. .result-box (iter 26 ROOT CAUSE of the iter-25 failure): the
 #    site's suggestion rows are `.result-box` elements (the run-2 fix
 #    added that selector to _type_country_guess's pick), but the
@@ -18639,14 +18654,9 @@ def _attr_norm_name(s):
 #    served-header == target BEFORE playing anything, and the
 #    solver continues from feedback past the planned 3 guesses (up
 #    to the board's 8 rows) instead of stopping.
-# 6. PITCHER HYPOTHESIS (iter 26/27): "suggestion index covers
-#    batters only" is SUPPORTED (5/5 observed names + all 8 vendored
-#    answers are position players) but NOT proven from site code.
-#    No production guess is ever burned on a pitcher probe: pitchers
-#    stay excluded from the pool, and the hypothesis is covered by
-#    unit tests on the exclusion logic only.
-_BATTERUP_NO_SUGGESTION_NAMES = {"jesus tinoco", "wade miley",
-                                 "jhoan duran"}
+# 6. PITCHER HYPOTHESIS (iter 26/27): SUPERSEDED by iter-29 RE Q2
+#    — "suggestion index covers batters only" is REFUTED (see §3).
+#    Do NOT re-test it as an open hypothesis.
 _BATTERUP_PITCHER_POSITIONS = {"SP", "RP", "CP", "P", "CL"}
 _BATTERUP_PROVEN_SUGGESTION_NAMES = ("Vladimir Guerrero Jr",
                                      "Alec Burleson")
@@ -18658,10 +18668,12 @@ def _attr_pool(gid):
         if gid == "batterup":
             j = json.loads((HERE / "frontend_data" / "src" / "lib" / "data" /
                             "batterup-players.json").read_text(encoding="utf-8"))
+            # Iter 29: the old _BATTERUP_NO_SUGGESTION_NAMES
+            # denylist is gone (RE Q2 refuted it — those names ARE
+            # in the index). Pitcher exclusion below is a
+            # probe-priority choice only, not an index fact.
             return [p.get("player_name") for p in j
                     if isinstance(p, dict) and p.get("player_name")
-                    and p.get("player_name").lower()
-                    not in _BATTERUP_NO_SUGGESTION_NAMES
                     and not _BATTERUP_PITCHER_POSITIONS.intersection(
                         {str(x).upper()
                          for x in (p.get("position") or [])})]
@@ -19158,7 +19170,13 @@ def _attr_submit_failure_kind(probe, baseline_rows=0):
 
 
 def _attr_selection_state(page, name):
-    """Did the suggestion pick actually SELECT a player (Batterup)?
+    """Did the suggestion pick actually SELECT a player?
+
+    Iter 29 (RE Q5): Batterup NO LONGER uses this — the site has
+    no 'selected' state (click = submit, input cleared), so
+    Batterup picks verify via the _batterup_click_submit RE triple
+    instead. Retained for Marveldle, whose click selects and a
+    later Enter/button submits.
 
     The old pick check could not tell: `_type_country_guess` verified
     only that the input held the typed name — but typed text equals
@@ -19404,6 +19422,231 @@ def _attr_reselect(page, name):
     return False, "selection never landed after re-select attempts"
 
 
+def _batterup_click_submit(page, name, baseline_rows):
+    """Batterup-only pick: type + REAL pointer click on the suggestion <li>.
+
+    RE (RE_FINDINGS Q5, site's own code): the site has NO 'selected'
+    state and NO Enter handler on the input — clicking a suggestion
+    <li> IS the submit (handler y(d) clears the input, hides the
+    dropdown, submits the row). The old flow (JS .click() on the
+    .result-box CONTAINER + a 'selected' check + Enter submit) could
+    never work: a JS click on the container never fires the <li>'s
+    onClick (the event bubbles UP, never down to the <li>), and after
+    a genuine submit the input is '' so 'selected' read False forever
+    (iter-26: 3 rows submitted on screen, bot counted 0).
+
+    The <li> text is "Name (debut-last_game)"; the match compares
+    the name part before " (" (normalized). The click is a real
+    pointer click at the <li>'s centre (Playwright mouse), because
+    only a hit-tested click reaches the <li>'s onClick.
+
+    Returns (ok, detail, probe): ok=True ONLY when the RE triple
+    holds — input '' + dropdown hidden + a new populated row past
+    baseline — after waiting out the site's 250ms
+    colour-application delay (RE Q3: colours land 250ms after the
+    guess list changes; a probe reading immediately sees white).
+    Duplicate guard: the site silently ignores a click for a name
+    already guessed, so a name already on the board returns
+    ok=False immediately (no retry — retrying a duplicate can
+    never work). "no suggestions" stays in the detail string so
+    the caller's replacement path still triggers. Never raises.
+    """
+    import time as _t
+    _gid = "batterup"
+    _name = str(name or "").strip()
+    if not _name:
+        return False, "empty name", {}
+    try:
+        _pr0 = _attr_post_submit_probe(page)
+    except Exception:
+        _pr0 = {}
+    for _r in (_pr0 or {}).get("row_details") or []:
+        if _attr_norm_name(_r.get("name") or "") == \
+                _attr_norm_name(_name):
+            return False, (f"duplicate — {_name!r} already on the board; "
+                           "site ignores a re-click"), _pr0
+    try:
+        inp = None
+        for _wq in range(6):
+            inp = page.query_selector(
+                "#input-box, input[name=guess], input[type=text], "
+                "input:not([type]), input[type=search], "
+                "input[placeholder], [role=combobox] input, "
+                "[role=combobox]")
+            if inp:
+                break
+            page.wait_for_timeout(1500)
+        if not inp:
+            return False, "no text input", _pr0
+        try:
+            inp.scroll_into_view_if_needed(timeout=3000)
+        except Exception:
+            pass
+        inp.click(timeout=3000)
+        page.wait_for_timeout(600)
+        try:
+            page.keyboard.press("ControlOrMeta+a")
+        except Exception:
+            pass
+        page.wait_for_timeout(300)
+        _type_like_a_person(page, _name, base_delay=90)
+        # Poll for visible suggestion <li> rows (playersList may
+        # still be loading when typing starts).
+        _rows = []
+        _t_end = _t.time() + 4.0
+        while _t.time() < _t_end:
+            try:
+                _rows = page.evaluate("""() => {
+                  const lis = Array.from(document.querySelectorAll(
+                    '#result-id li, .result-box li, ' +
+                    '#player-search .result-box li'));
+                  return lis.filter(e => e && e.offsetParent !== null)
+                    .map(e => (e.innerText || '').trim())
+                    .filter(t => t);
+                }""") or []
+            except Exception:
+                _rows = []
+            if _rows:
+                break
+            page.wait_for_timeout(250)
+        if not _rows:
+            try:
+                _drop_disp = page.evaluate("""() => {
+                  const el = document.querySelector(
+                    '#result-id, .result-box');
+                  if (!el) return 'no .result-box';
+                  return window.getComputedStyle(el).display;
+                }""") or "?"
+                _inp_val = page.evaluate(
+                    "() => (document.querySelector('#input-box') || "
+                    "{value: ''}).value || ''") or ""
+            except Exception:
+                _drop_disp, _inp_val = "?", "?"
+            _dbg(_gid, f"batterup click-submit {_name!r}: no suggestions "
+                       f"(input={_inp_val!r} result-box display="
+                       f"{_drop_disp})")
+            return False, (f"no suggestions (rows=0 input={_inp_val!r} "
+                           f"result-box display={_drop_disp})"), _pr0
+        _want = _attr_norm_name(_name)
+        _match = None
+        for _txt in _rows:
+            _part = _txt.split(" (")[0].strip()
+            if _attr_norm_name(_part) == _want:
+                _match = _txt
+                break
+        if _match is None:
+            for _txt in _rows:
+                _part = _txt.split(" (")[0].strip()
+                if _attr_norm_name(_part).startswith(_want):
+                    _match = _txt
+                    break
+        if _match is None:
+            _dbg(_gid, f"batterup click-submit {_name!r}: no exact "
+                       f"suggestion row (rows={_rows})")
+            return False, (f"no suggestions (no exact row for "
+                           f"{_name!r} in {_rows})"), _pr0
+        # Real pointer click on the MATCHED <li> (not the container):
+        # find the <li> whose name part equals the match, click its
+        # centre. The container-centre click the old code used could
+        # land on a DIFFERENT row's <li>.
+        try:
+            _clicked = page.evaluate("""(want) => {
+              const lis = Array.from(document.querySelectorAll(
+                '#result-id li, .result-box li, ' +
+                '#player-search .result-box li'));
+              const norm = s => (s || '').toLowerCase()
+                .replace(/\\s+/g, ' ').trim();
+              const w = norm(want);
+              const el = lis.find(e => e && e.offsetParent !== null &&
+                norm(((e.innerText || '').split(' (')[0] || '')
+                  .trim()) === w)
+                || lis.find(e => e && e.offsetParent !== null &&
+                  norm(((e.innerText || '').split(' (')[0] || '')
+                    .trim()).startsWith(w));
+              if (!el) return false;
+              el.scrollIntoView({block: 'center'});
+              const r = el.getBoundingClientRect();
+              return {x: r.x + r.width / 2, y: r.y + r.height / 2,
+                      text: (el.innerText || '').trim().slice(0, 60)};
+            }""", _name) or False
+        except Exception:
+            _clicked = False
+        if not _clicked:
+            return False, (f"suggestion row for {_name!r} not "
+                           "clickable"), _pr0
+        try:
+            QP.ev_push(_clicked.get("x", 0), _clicked.get("y", 0),
+                       "click")
+        except Exception:
+            pass
+        page.mouse.click(_clicked["x"], _clicked["y"])
+        _dbg(_gid, f"batterup click-submit {_name!r}: clicked <li> "
+                   f"row={_clicked.get('text')!r} at "
+                   f"({_clicked['x']:.0f},{_clicked['y']:.0f})")
+        # Verify the RE triple: input '' + dropdown hidden + a new
+        # populated row past baseline.
+        _pr = {}
+        _t_end = _t.time() + 6.0
+        while _t.time() < _t_end:
+            try:
+                _pr = _attr_post_submit_probe(page) or {}
+                _inp_val = page.evaluate(
+                    "() => (document.querySelector('#input-box') || "
+                    "{value: ''}).value || ''") or ""
+                _open_lis = page.evaluate("""() => {
+                  const lis = Array.from(document.querySelectorAll(
+                    '#result-id li, .result-box li'));
+                  return lis.filter(e => e && e.offsetParent !== null &&
+                    (e.innerText || '').trim()).length;
+                }""") or 0
+            except Exception:
+                _pr, _inp_val, _open_lis = {}, "?", 99
+            if (not str(_inp_val).strip()) and _open_lis == 0 and \
+                    int(_pr.get("populated_rows") or 0) > \
+                    int(baseline_rows or 0):
+                break
+            page.wait_for_timeout(250)
+        if (str(_inp_val).strip()) or _open_lis != 0 or \
+                int(_pr.get("populated_rows") or 0) <= \
+                int(baseline_rows or 0):
+            _dbg(_gid, f"batterup click-submit {_name!r}: triple NOT "
+                       f"held (input={_inp_val!r} open_lis={_open_lis} "
+                       f"populated_rows={_pr.get('populated_rows')} "
+                       f"baseline={baseline_rows})")
+            return False, ("click-submit triple not held "
+                           f"(input={_inp_val!r} open_lis={_open_lis} "
+                           f"rows={_pr.get('populated_rows')})"), _pr
+        # Wait out the site's 250ms colour-application delay, then
+        # re-probe so the caller reads applied colours, not white.
+        page.wait_for_timeout(400)
+        try:
+            _pr = _attr_post_submit_probe(page) or {}
+        except Exception:
+            pass
+        try:
+            _borders = page.evaluate("""() => {
+              const tiles = Array.from(
+                document.querySelectorAll('h6.tile'));
+              return tiles.slice(-6).map(
+                e => window.getComputedStyle(e).borderStyle || '');
+            }""") or []
+        except Exception:
+            _borders = []
+        _new = None
+        for _r in (_pr or {}).get("row_details") or []:
+            if _attr_norm_name(_r.get("name") or "") == _want:
+                _new = _r
+                break
+        _dbg(_gid, f"batterup click-submit {_name!r}: TRIPLE HELD "
+                   f"(input='' dropdown hidden rows="
+                   f"{_pr.get('populated_rows')}); new row cells="
+                   f"{[str(c.get('state')) for c in (_new or {}).get('cells') or []]} "
+                   f"tile borders={_borders}")
+        return True, f"click-submit triple held ({_name!r})", _pr
+    except Exception as _e:
+        return False, f"exception: {str(_e)[:110]}", {}
+
+
 def solve_attr_game(page, answer_name, gid, api_probes=()):
     """Attribute search-box games (batterup, marveldle): 2 real probes with
     on-screen column feedback, then the answer. Suggestion rows are picked by
@@ -19450,11 +19693,6 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
         return False, "empty answer"
     pool = [n for n in _attr_pool(gid) if n and n.lower() != answer_name.lower()]
     probes = [str(p) for p in (list(api_probes or [])[:2]) if p]
-    if gid == "batterup":
-        # Never play a denylisted no-suggestion name even if a caller
-        # passed it in as an api_probe.
-        probes = [p for p in probes
-                  if p.lower() not in _BATTERUP_NO_SUGGESTION_NAMES]
     # Date-seeded sample, same seed as _plan_for (fix-loop iter 11):
     # the old pool[0] / pool[mid] picks opened every video with the
     # same two probes. Never the answer (excluded from pool above).
@@ -19471,20 +19709,40 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
     _submit_failed = []  # names picked but never verified submitted
     _dbg(gid, f"plan: probes={probes} answer={answer_name!r}")
 
-    def _pick_and_confirm(_name, _label="pick"):
-        """Type + click the suggestion, then CONFIRM a real selection.
+    def _pick_and_confirm(_name, _label="pick", _baseline=0):
+        """Pick a guess and CONFIRM it landed.
 
-        Returns (ok, detail). For batterup, ok=True means SELECTED:
-        after _type_country_guess reports ok, _attr_selection_state
-        must report the dropdown closed with the input holding exactly
-        the name; if it does not, the row is re-selected (real click /
-        mouse events / keyboard) and only a confirmed selection keeps
-        ok=True. A pick that fails outright is retried once after a
-        consent re-check + soft dropdown close (the iter-24 CMP path),
-        then confirmed again. For other games this is just the pick:
-        their pick paths are proven and their dropdowns may
-        legitimately stay open, so no dropdown-closed gate is applied.
+        Returns (ok, detail, already_submitted).
+
+        Batterup (fix-loop iter 29, RE Q5): the site has NO
+        'selected' state and NO Enter handler — clicking a
+        suggestion <li> IS the submit. So the pick IS
+        _batterup_click_submit (type + real <li> click + RE-triple
+        verify); already_submitted=True when the triple held, and
+        the caller must NOT run the Enter/button submit loop
+        afterwards. The old 'selected' check (dropdown closed +
+        input == name) can never pass for Batterup — a genuine
+        submit CLEARS the input — and the old JS container click
+        never fired the <li>'s onClick.
+
+        Other games: the pick is _type_country_guess (their click
+        selects, a later Enter/button submits); already_submitted
+        is always False and the submit loop runs as before.
         """
+        if gid == "batterup":
+            _ok, _detail, _pr = _batterup_click_submit(
+                page, _name, _baseline)
+            if not _ok:
+                _attr_consent_recheck(
+                    page, gid, f"click-submit failed for {_name!r}",
+                    full=True)
+                _ok2, _detail2, _pr2 = _batterup_click_submit(
+                    page, _name, _baseline)
+                _dbg(gid, f"guess {_label} {_name!r}: re-click-submit "
+                          f"ok={_ok2} ({_detail2})")
+                if _ok2:
+                    _ok, _detail, _pr = _ok2, _detail2, _pr2
+            return _ok, _detail, bool(_ok)
         _ok, _detail = _type_country_guess(page, page, _name)
         if not _ok:
             # A pick that fails while a CMP covers the board
@@ -19497,29 +19755,7 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
             _ok, _detail = _type_country_guess(page, page, _name)
             _dbg(gid, f"guess {_label} {_name!r}: re-pick ok={_ok} "
                       f"({_detail})")
-        if _ok and gid == "batterup":
-            try:
-                _st = _attr_selection_state(page, _name)
-            except Exception:
-                _st = {"selected": None}
-            if _st.get("selected") is False:
-                _dbg(gid, f"guess {_label} {_name!r}: pick reported ok "
-                          f"but no selection landed "
-                          f"(suggestion_open={_st.get('suggestion_open')} "
-                          f"input={_st.get('input_value')!r}); re-selecting")
-                _sel_ok, _sel_detail = _attr_reselect(page, _name)
-                if _sel_ok:
-                    _detail = (f"{_detail} (selection confirmed via "
-                               f"{_sel_detail})")
-                else:
-                    _ok = False
-                    _detail = (f"suggestion never selected "
-                               f"({_sel_detail}); pick ok=False")
-            elif _st.get("selected") is None:
-                _dbg(gid, f"guess {_label} {_name!r}: selection probe "
-                          f"unavailable; accepting pick verdict "
-                          f"({_detail})")
-        return _ok, _detail
+        return _ok, _detail, False
 
     _continuation = []  # batterup feedback-driven guesses past the plan
 
@@ -19571,7 +19807,8 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
                 _attr_post_submit_probe(page).get("populated_rows") or 0)
         except Exception:
             _baseline_rows = 0
-        ok, detail = _pick_and_confirm(name, f"{n + 1}/{len(seq)}")
+        ok, detail, _already_submitted = _pick_and_confirm(
+            name, f"{n + 1}/{len(seq)}", _baseline_rows)
         _dbg(gid, f"guess {n + 1}/{len(seq)} {name!r}: pick ok={ok} ({detail})")
         if not ok and gid == "batterup" and not last \
                 and "no suggestions" in str(detail):
@@ -19589,8 +19826,8 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
                         or _attr_norm_name(_fb) == \
                         _attr_norm_name(answer_name):
                     continue
-                _fb_ok, _fb_detail = _pick_and_confirm(
-                    _fb, f"{n + 1}/{len(seq)}")
+                _fb_ok, _fb_detail, _fb_submitted = _pick_and_confirm(
+                    _fb, f"{n + 1}/{len(seq)}", _baseline_rows)
                 _dbg(gid, f"guess {n + 1}/{len(seq)}: probe {name!r} "
                           f"had no suggestions; replacement {_fb!r} "
                           f"pick ok={_fb_ok} ({_fb_detail})")
@@ -19598,6 +19835,7 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
                     _pick_failed.append(name)
                     _REJECTED[gid] = list(_pick_failed)
                     name, detail, ok = _fb, _fb_detail, True
+                    _already_submitted = _fb_submitted
                     break
         if not ok:
             # suggestion missed: drop this probe and continue like a human.
@@ -19622,7 +19860,19 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
                "failure_kind": "no-row-growth"}
         _reselect_tried = False  # re-select already attempted this guess
         _skip_soft_dismiss = False  # confirmed selection already closed it
-        for _attempt in range(3):
+        if gid == "batterup" and _already_submitted:
+            # Iter 29 (RE Q5): the pick's <li> click ALREADY
+            # submitted — the site has no Enter handler and no
+            # selection state, so the Enter/button loop below must
+            # not run (it would re-pick a submitted guess).
+            # The triple already verified row growth.
+            _verified = True
+            try:
+                _pr = _attr_post_submit_probe(page) or _pr
+            except Exception:
+                pass
+        for _attempt in range(
+                0 if (gid == "batterup" and _already_submitted) else 3):
             if gid == "batterup":
                 # NEVER submit without a confirmed selection: an Enter
                 # sent while the autocomplete is open is consumed by
@@ -19758,12 +20008,16 @@ def solve_attr_game(page, answer_name, gid, api_probes=()):
                 _attr_consent_recheck(
                     page, gid, "before re-pick after unverified submit")
                 _attr_dismiss_dropdown_soft(page)
-                ok, detail = _pick_and_confirm(
-                    name, f"{n + 1}/{len(seq)}")
+                ok, detail, _repick_submitted = _pick_and_confirm(
+                    name, f"{n + 1}/{len(seq)}", _baseline_rows)
                 _dbg(gid, f"guess {n + 1}/{len(seq)} {name!r}: re-pick "
                           f"ok={ok} ({detail})")
                 _reselect_tried = False
                 if not ok:
+                    break
+                if ok and gid == "batterup" and _repick_submitted:
+                    # Re-pick click-submitted (RE Q5): no Enter submit.
+                    _verified = True
                     break
             else:
                 _dbg(gid, f"guess {n + 1}/{len(seq)} {name!r}: submit "
@@ -20093,6 +20347,69 @@ def _batterup_site_header(page):
             "iso": f"20{yr}-{int(mo):02d}-{int(dy):02d}"}
 
 
+def _batterup_control_probe(page, name):
+    """Control-name probe (RE Q2): type a KNOWN in-index name and
+    require >=1 suggestion, BEFORE any real guess. A 'no
+    suggestions' result is only meaningful in a session where the
+    control produced suggestions — otherwise it means playersList
+    had not loaded / the dropdown was broken, not 'not in index'.
+    Types the name, counts visible <li> rows, clears the input
+    (Ctrl+A + Backspace; NO click, so nothing submits). WARN +
+    proceed on control failure — never block the solve on the
+    control (the real guesses' own suggestion checks still apply).
+    Never raises.
+    """
+    try:
+        _name = str(name or "").strip()
+        if not _name:
+            return
+        inp = page.query_selector(
+            "#input-box, input[name=guess], input[type=text], "
+            "input:not([type]), input[type=search], input[placeholder]")
+        if not inp:
+            _dbg("batterup", "control probe: no text input")
+            return
+        try:
+            inp.scroll_into_view_if_needed(timeout=3000)
+        except Exception:
+            pass
+        inp.click(timeout=3000)
+        page.wait_for_timeout(600)
+        try:
+            page.keyboard.press("ControlOrMeta+a")
+        except Exception:
+            pass
+        page.wait_for_timeout(300)
+        _type_like_a_person(page, _name, base_delay=90)
+        _n = 0
+        for _try in range(2):
+            page.wait_for_timeout(2500)
+            try:
+                _n = page.evaluate("""() => {
+                  const lis = Array.from(document.querySelectorAll(
+                    '#result-id li, .result-box li'));
+                  return lis.filter(e => e && e.offsetParent !== null &&
+                    (e.innerText || '').trim()).length;
+                }""") or 0
+            except Exception:
+                _n = 0
+            if _n:
+                break
+            page.wait_for_timeout(3000)
+        _dbg("batterup", f"control probe: name={_name!r} "
+             f"suggestions={_n} "
+             f"({'PASS' if _n else 'WARN - proceeding anyway'})")
+        try:
+            page.keyboard.press("ControlOrMeta+a")
+            page.wait_for_timeout(200)
+            page.keyboard.press("Backspace")
+            page.wait_for_timeout(500)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
 def _s_batterup(page, ans, gid):
     _close_modals(page)
     # Date-keying, fix-loop iter 27 (ANALYSIS24 RC2). The iter-26
@@ -20116,6 +20433,38 @@ def _s_batterup(page, ans, gid):
     # continues from feedback (see solve_attr_game's continuation),
     # and the post-solve log records the feedback the CDN answer's
     # row actually received.
+    # Fix-loop iter 29 (RE Q1): force a FULL document reload
+    # BEFORE reading the header — a stale SPA page (archive -> home
+    # client-side nav, or a page mounted before ET midnight) keeps
+    # the previous day's games file and a stuck #972 header, because
+    # the file-selection effect never re-runs. A reload re-boots
+    # the app with the (ET-noon) fake clock and fetches the current
+    # day's file. Log the discriminator: pathname (an /archive/<n>
+    # URL overrides the date entirely) + page-load timestamp.
+    try:
+        if str(page.url or "").startswith("http"):
+            page.reload(wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(1500)
+    except Exception as _e:
+        _dbg(gid, f"header-read reload failed ({_e}); continuing")
+    try:
+        _pn = page.evaluate("() => window.location.pathname") or ""
+        _load_ts = page.evaluate("() => performance.timeOrigin") or ""
+    except Exception:
+        _pn, _load_ts = "?", "?"
+    _dbg(gid, f"batterup header-read: url={getattr(page, 'url', '?')} "
+              f"pathname={_pn} load_timeOrigin={_load_ts}")
+    if str(_pn).startswith("/archive/"):
+        # /archive/<n> forces game <n> regardless of date (RE Q1)
+        # — wrong page, not wrong day: go to the root board.
+        try:
+            page.goto("https://batter-up.app",
+                      wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(1500)
+            _dbg(gid, "batterup header-read: archive URL -> "
+                      "reloaded root /")
+        except Exception as _e:
+            _dbg(gid, f"archive->root reload failed ({_e})")
     _cdn = _BATTERUP_CDN.get(gid) or {}
     _cdn_date = str(_cdn.get("game_date") or "")
     _cdn_num = _cdn.get("game_number")
@@ -20157,6 +20506,9 @@ def _s_batterup(page, ans, gid):
         _dbg(gid, f"WARNING: CDN game_number={_cdn_num} != served "
                   f"#{_hdr.get('number')}; CDN answer treated as a seed "
                   f"only, never as the served board's answer")
+    # Control-name probe (RE Q2) on the KNOWN in-index CDN answer
+    # name, before any real guess.
+    _batterup_control_probe(page, _cdn_answer)
     solved, evidence = solve_attr_game(page, ans, gid)
     # Post-solve date evidence: what feedback did the CDN answer's
     # row actually receive on the served board? (Iter-26: Burleson's
@@ -21472,6 +21824,42 @@ def _solver_typeerror_is_signature_mismatch(exc, solver):
     return bool(sig and (names_solver or "'gid'" in msg))
 
 
+def _fake_iso_for(gid, tgt):
+    """Fake-clock ISO instant for `gid` (pure, except env read).
+
+    Fix-loop iter 29 (ANALYSIS26 RC3): the generic instant is
+    target-date 00:05 with NO timezone suffix, parsed by JS as the
+    context's LOCAL time (Pacific/Kiritimati, UTC+14) — i.e. 10:05
+    UTC on D-1. Games whose site keys its day off another timezone
+    then serve the previous day's board (Batterup: site uses
+    America/New_York, so it served #972 for target 2026-10-18).
+
+    - GAMES entry `fake_iso_mode == "et_noon"`: target-date 12:00
+      noon America/New_York, rendered as an explicit-offset UTC ISO
+      (e.g. 2026-10-18T16:00:00+00:00 in EDT). JS parses the offset,
+      so the fake instant's ET date IS the target date whatever the
+      context timezone is. DST-safe via zoneinfo (EDT UTC-4, EST
+      UTC-5).
+    - Otherwise: the generic `YYYY-MM-DDT00:05:00` instant.
+    An explicit FAKE_DATE_ISO env value always wins (operator
+    override) — the per-game override applies only to the default.
+    """
+    _env = os.environ.get("FAKE_DATE_ISO", "")
+    if _env:
+        return _env
+    try:
+        if (GAMES.get(gid) or {}).get("fake_iso_mode") == "et_noon":
+            from datetime import datetime as _dt, timezone as _tz
+            from zoneinfo import ZoneInfo as _ZI
+            _noon = _dt(tgt.year, tgt.month, tgt.day, 12, 0, 0,
+                        tzinfo=_ZI("America/New_York"))
+            return _noon.astimezone(_tz.utc).strftime(
+                "%Y-%m-%dT%H:%M:%S+00:00")
+    except Exception:
+        pass
+    return tgt.strftime("%Y-%m-%dT00:05:00")
+
+
 def run_one(gid):
     g = GAMES[gid]
     tgt = A.target_date()
@@ -21592,7 +21980,15 @@ def run_one(gid):
         # (observed 09/28 where the engine answered 09/27), so the answer was
         # scored 8136 - nowhere near - and a real solve was impossible.
         if not GAMES[gid].get("no_fake") and HAS:
-            iso = os.environ.get("FAKE_DATE_ISO", tgt.strftime("%Y-%m-%dT00:05:00"))
+            # Fix-loop iter 29: per-game fake instant (Batterup:
+            # ET-noon override, so the site's America/New_York date
+            # is the target date — the generic 00:05-local instant
+            # made the site serve the previous day's board).
+            iso = _fake_iso_for(gid, tgt)
+            if (GAMES.get(gid) or {}).get("fake_iso_mode"):
+                _dbg(gid, f"fake clock: per-game override "
+                          f"iso={iso} (mode="
+                          f"{GAMES[gid].get('fake_iso_mode')})")
             try:
                 ctx.add_init_script(script=QP.get_fake_date_init_script(iso))
             except Exception:
