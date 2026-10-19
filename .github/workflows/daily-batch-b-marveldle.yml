@@ -111,6 +111,9 @@ jobs:
             videos/marveldle/result.json
             videos/marveldle/stall_*.png
             videos/marveldle/shot_win.png
+            videos/marveldle/seo.json
+            videos/marveldle/thumb.png
+            videos/marveldle/captions.srt
             videos/marveldle/board_*.png
           retention-days: 7
           if-no-files-found: error

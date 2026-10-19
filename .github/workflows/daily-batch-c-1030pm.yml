@@ -122,6 +122,9 @@ jobs:
             videos/nerdle/result.json
             videos/nerdle/stall_*.png
             videos/nerdle/shot_win.png
+            videos/nerdle/seo.json
+            videos/nerdle/thumb.png
+            videos/nerdle/captions.srt
             videos/nerdle/board_*.png
           retention-days: 7
           if-no-files-found: error

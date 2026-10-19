@@ -121,6 +121,9 @@ jobs:
             videos/betweenle/result.json
             videos/betweenle/stall_*.png
             videos/betweenle/shot_win.png
+            videos/betweenle/seo.json
+            videos/betweenle/thumb.png
+            videos/betweenle/captions.srt
             videos/betweenle/board_*.png
           retention-days: 7
           if-no-files-found: error
@@ -217,6 +220,9 @@ jobs:
             videos/colordle/result.json
             videos/colordle/stall_*.png
             videos/colordle/shot_win.png
+            videos/colordle/seo.json
+            videos/colordle/thumb.png
+            videos/colordle/captions.srt
             videos/colordle/board_*.png
           retention-days: 7
           if-no-files-found: error
@@ -313,6 +319,9 @@ jobs:
             videos/colorfle/result.json
             videos/colorfle/stall_*.png
             videos/colorfle/shot_win.png
+            videos/colorfle/seo.json
+            videos/colorfle/thumb.png
+            videos/colorfle/captions.srt
             videos/colorfle/board_*.png
           retention-days: 7
           if-no-files-found: error
@@ -409,6 +418,9 @@ jobs:
             videos/framed/result.json
             videos/framed/stall_*.png
             videos/framed/shot_win.png
+            videos/framed/seo.json
+            videos/framed/thumb.png
+            videos/framed/captions.srt
             videos/framed/board_*.png
           retention-days: 7
           if-no-files-found: error
@@ -505,6 +517,9 @@ jobs:
             videos/searchle/result.json
             videos/searchle/stall_*.png
             videos/searchle/shot_win.png
+            videos/searchle/seo.json
+            videos/searchle/thumb.png
+            videos/searchle/captions.srt
             videos/searchle/board_*.png
           retention-days: 7
           if-no-files-found: error
@@ -601,6 +616,9 @@ jobs:
             videos/phrazle/result.json
             videos/phrazle/stall_*.png
             videos/phrazle/shot_win.png
+            videos/phrazle/seo.json
+            videos/phrazle/thumb.png
+            videos/phrazle/captions.srt
             videos/phrazle/board_*.png
           retention-days: 7
           if-no-files-found: error
@@ -697,6 +715,9 @@ jobs:
             videos/phoodle/result.json
             videos/phoodle/stall_*.png
             videos/phoodle/shot_win.png
+            videos/phoodle/seo.json
+            videos/phoodle/thumb.png
+            videos/phoodle/captions.srt
             videos/phoodle/board_*.png
           retention-days: 7
           if-no-files-found: error
@@ -793,6 +814,9 @@ jobs:
             videos/contexto/result.json
             videos/contexto/stall_*.png
             videos/contexto/shot_win.png
+            videos/contexto/seo.json
+            videos/contexto/thumb.png
+            videos/contexto/captions.srt
             videos/contexto/board_*.png
           retention-days: 7
           if-no-files-found: error
@@ -889,6 +913,9 @@ jobs:
             videos/semantle/result.json
             videos/semantle/stall_*.png
             videos/semantle/shot_win.png
+            videos/semantle/seo.json
+            videos/semantle/thumb.png
+            videos/semantle/captions.srt
             videos/semantle/board_*.png
           retention-days: 7
           if-no-files-found: error
@@ -985,6 +1012,9 @@ jobs:
             videos/worldle/result.json
             videos/worldle/stall_*.png
             videos/worldle/shot_win.png
+            videos/worldle/seo.json
+            videos/worldle/thumb.png
+            videos/worldle/captions.srt
             videos/worldle/board_*.png
           retention-days: 7
           if-no-files-found: error
@@ -1081,6 +1111,9 @@ jobs:
             videos/worgle/result.json
             videos/worgle/stall_*.png
             videos/worgle/shot_win.png
+            videos/worgle/seo.json
+            videos/worgle/thumb.png
+            videos/worgle/captions.srt
             videos/worgle/board_*.png
           retention-days: 7
           if-no-files-found: error
@@ -1177,6 +1210,9 @@ jobs:
             videos/countryle/result.json
             videos/countryle/stall_*.png
             videos/countryle/shot_win.png
+            videos/countryle/seo.json
+            videos/countryle/thumb.png
+            videos/countryle/captions.srt
             videos/countryle/board_*.png
           retention-days: 7
           if-no-files-found: error
@@ -1273,6 +1309,9 @@ jobs:
             videos/nerdle/result.json
             videos/nerdle/stall_*.png
             videos/nerdle/shot_win.png
+            videos/nerdle/seo.json
+            videos/nerdle/thumb.png
+            videos/nerdle/captions.srt
             videos/nerdle/board_*.png
           retention-days: 7
           if-no-files-found: error
@@ -1369,6 +1408,9 @@ jobs:
             videos/canuckle/result.json
             videos/canuckle/stall_*.png
             videos/canuckle/shot_win.png
+            videos/canuckle/seo.json
+            videos/canuckle/thumb.png
+            videos/canuckle/captions.srt
             videos/canuckle/board_*.png
           retention-days: 7
           if-no-files-found: error
@@ -1465,6 +1507,9 @@ jobs:
             videos/globle/result.json
             videos/globle/stall_*.png
             videos/globle/shot_win.png
+            videos/globle/seo.json
+            videos/globle/thumb.png
+            videos/globle/captions.srt
             videos/globle/board_*.png
           retention-days: 7
           if-no-files-found: error
@@ -1561,6 +1606,9 @@ jobs:
             videos/batterup/result.json
             videos/batterup/stall_*.png
             videos/batterup/shot_win.png
+            videos/batterup/seo.json
+            videos/batterup/thumb.png
+            videos/batterup/captions.srt
             videos/batterup/board_*.png
           retention-days: 7
           if-no-files-found: error
@@ -1657,6 +1705,9 @@ jobs:
             videos/waffle/result.json
             videos/waffle/stall_*.png
             videos/waffle/shot_win.png
+            videos/waffle/seo.json
+            videos/waffle/thumb.png
+            videos/waffle/captions.srt
             videos/waffle/board_*.png
           retention-days: 7
           if-no-files-found: error
