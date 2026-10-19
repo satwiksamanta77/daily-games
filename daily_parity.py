@@ -665,8 +665,13 @@ def generate_facts(out_path, game, date_str, answer, steps,
     return stats
 
 
-def generate_teaser(out_path, game, date_str, slug):
-    """End-card CTA: tomorrow's puzzle + site link."""
+def generate_teaser(out_path, game, date_str, slug, hide_hints_chip=False):
+    """End-card CTA: tomorrow's puzzle + site link.
+
+    hide_hints_chip (iter-39): Colorfle videos carry no hints, so the
+    teaser must not advertise "Free hints" for Colorfle. Other games
+    keep the chip.
+    """
     img, d, f = _base(f"{game} · tomorrow", date_str)
     _glow_band(img, 380, 220, color=TEAL, alpha=30)
     d = ImageDraw.Draw(img)
@@ -677,7 +682,9 @@ def generate_teaser(out_path, game, date_str, slug):
     d = ImageDraw.Draw(img)
     d.text((110, 662), f"wordsolverx.com/{slug}", fill=GREEN, font=f["m"])
     x = 70
-    for chip in ("Subscribe", "Daily solve", "Free hints"):
+    _chips = ("Subscribe", "Daily solve") + (
+        () if hide_hints_chip else ("Free hints",))
+    for chip in _chips:
         x = _chip(d, x, 810, chip, f["xs"], TEXT, (16, 24, 42, 220),
                   border=TEAL + (160,)) + 18
     img.convert("RGB").save(out_path, "PNG", optimize=True)

@@ -66,13 +66,15 @@ def format_chapter_timestamp(sec):
     return f"{sec // 60}:{sec % 60:02d}"
 
 
-def _title_variants(game, date_short, guesses, puzzle_number):
+def _title_variants(game, date_short, guesses, puzzle_number, no_hints=False):
     """Three rotating title variants for one game.
 
     Every variant leads with the exact head keyword
     '{Game} Answer Today' (well inside the first ~35-40 chars for
     every game name). Puzzle # and guess count are included when
     known; the variants degrade gracefully when either is missing.
+    no_hints (iter-39): the video carries no hints segment (Colorfle) —
+    the "Hints & Solution" fallback becomes plain "Solution".
     """
     head = f"{game} Answer Today"
     if puzzle_number is not None and guesses is not None:
@@ -83,7 +85,7 @@ def _title_variants(game, date_short, guesses, puzzle_number):
         ]
     if puzzle_number is not None:
         return [
-            f"{head} \u2014 #{puzzle_number} Hints & Solution ({date_short})",
+            f"{head} \u2014 #{puzzle_number} {'Solution' if no_hints else 'Hints & Solution'} ({date_short})",
             f"{head} ({date_short}) \u2014 Puzzle #{puzzle_number} Solved!",
             f"{head} \u2014 {date_short} Puzzle #{puzzle_number}",
         ]
@@ -94,13 +96,14 @@ def _title_variants(game, date_short, guesses, puzzle_number):
             f"{head} \u2014 {date_short} \u00b7 {guesses} Guesses",
         ]
     return [
-        f"{head} \u2014 Hints & Solution ({date_short})",
+        f"{head} \u2014 {'Solution' if no_hints else 'Hints & Solution'} ({date_short})",
         f"{head} ({date_short}) \u2014 Solved!",
         f"{head} \u2014 {date_short} Solved!",
     ]
 
 
-def build_title(game, date_short, guesses=None, puzzle_number=None, seed=None):
+def build_title(game, date_short, guesses=None, puzzle_number=None, seed=None,
+                no_hints=False):
     """Pick one of three SEO title variants, rotated by puzzle number/date.
 
     Caps at 100 chars (YouTube limit). seed defaults to the puzzle
@@ -108,7 +111,8 @@ def build_title(game, date_short, guesses=None, puzzle_number=None, seed=None):
     puzzle always gets the same variant and variants rotate across
     days/numbers.
     """
-    variants = _title_variants(str(game), str(date_short), guesses, puzzle_number)
+    variants = _title_variants(str(game), str(date_short), guesses, puzzle_number,
+                               no_hints=no_hints)
     if seed is None:
         seed = puzzle_number if puzzle_number is not None else hash(str(date_short))
     try:
@@ -125,11 +129,14 @@ def build_title(game, date_short, guesses=None, puzzle_number=None, seed=None):
     return title
 
 
-def build_tags(game, date_short, date_num=None, puzzle_number=None):
+def build_tags(game, date_short, date_num=None, puzzle_number=None,
+               no_hints=False):
     """Tag list: head keyword first, then date/number variants.
 
     Total joined length capped at 500 chars (YouTube limit) by
     dropping trailing tags — the head keyword is never dropped.
+    no_hints (iter-39): drop the Hints tags for games whose video
+    carries no hints segment (Colorfle).
     """
     g = str(game)
     gl = g.lower()
@@ -148,8 +155,13 @@ def build_tags(game, date_short, date_num=None, puzzle_number=None):
         f"{g} Today",
         f"Today's {g} Answer",
         f"{g} Solution",
-        f"{g} Hints",
-        f"{g} Hint Today",
+    ])
+    if not no_hints:
+        tags.extend([
+            f"{g} Hints",
+            f"{g} Hint Today",
+        ])
+    tags.extend([
         f"{g} Solver",
         "Daily Puzzle",
         "Word Game",
@@ -226,7 +238,8 @@ def build_description(game, slug, date_long, date_short, answer=None,
                       guesses=None, chapters=None, puzzle_number=None,
                       analysis=None, yesterday=None, tomorrow=None,
                       stats=None, mode_lines=None, solver_url=None,
-                      cross_links=None):
+                      cross_links=None, no_hints=False,
+                      skip_letter_faq=False):
     """SEO-rich description. Caps at 5000 chars (YouTube limit).
 
     Parameters (all optional except game/slug/dates):
@@ -249,6 +262,11 @@ def build_description(game, slug, date_long, date_short, answer=None,
         games (Framed/Nerdle/Quordle-style).
       solver_url: solver page URL when one exists (None -> omitted).
       cross_links: list of (label, url) for other games' answer pages.
+      no_hints (iter-39): the video carries no hints segment (Colorfle) —
+        the description must not promise "hints" it does not contain.
+      skip_letter_faq (iter-39): the answer is not a word (Colorfle's
+        colour triple) — the "What letter does it start with?" FAQ is
+        nonsense there and is omitted.
     """
     g = str(game)
     lines = []
@@ -259,18 +277,19 @@ def build_description(game, slug, date_long, date_short, answer=None,
     else:
         lines.append(f"\U0001f7e9 {g} Answer Today \u2014 {date_long} \U0001f7e9")
     lines.append("")
+    _hint_txt = "" if no_hints else " with hints"
     if answer:
         lines.append(
-            f"Today's {g} answer is {answer}. Watch the full solve with "
-            f"hints, then the analysis and yesterday's recap.")
+            f"Today's {g} answer is {answer}. Watch the full solve"
+            f"{_hint_txt}, then the analysis and yesterday's recap.")
     elif mode_lines:
         lines.append(
             f"Today's {g} answers are all solved in this video. Watch "
-            f"the full solve with hints, then the analysis and "
+            f"the full solve{_hint_txt}, then the analysis and "
             f"yesterday's recap.")
     else:
         lines.append(
-            f"Watch today's {g} solved step by step with hints, then "
+            f"Watch today's {g} solved step by step{_hint_txt}, then "
             f"the analysis and yesterday's recap.")
     lines.append("")
     lines.append("Did you get today's puzzle? Comment your result below! \U0001f447")
@@ -290,7 +309,7 @@ def build_description(game, slug, date_long, date_short, answer=None,
         faq.append(f"\u2022 What is today's {g} answer? \u2192 {answer}"
                    + (f" (#{puzzle_number})" if puzzle_number is not None else ""))
         _first = next((c for c in str(answer) if c.isalnum()), None)
-        if _first:
+        if _first and not skip_letter_faq:
             faq.append(f"\u2022 What letter does today's {g} start with? \u2192 {_first.upper()}")
         if guesses is not None:
             faq.append(f"\u2022 How many guesses did it take? \u2192 {guesses}")
@@ -386,9 +405,10 @@ def build_description(game, slug, date_long, date_short, answer=None,
         _tags.append(f"#{g.replace(' ', '')}{puzzle_number}")
     lines.append(" ".join(_tags))
     lines.append("")
+    _kw_hints = "" if no_hints else f", {g.lower()} hints"
     lines.append(f"{g.lower()} answer today, {g.lower()} solver, "
-                 f"{g.lower()} answers, how to play {g.lower()} today, "
-                 f"{g.lower()} hints, {g.lower()} answer {date_short}")
+                 f"{g.lower()} answers, how to play {g.lower()} today"
+                 f"{_kw_hints}, {g.lower()} answer {date_short}")
     lines.append("")
     lines.append(f"{g} is a daily puzzle game. Subscribe for daily solutions!")
 

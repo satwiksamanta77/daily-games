@@ -558,11 +558,15 @@ def plan_colorfle(secret, max_guesses=6, n_colors=20):
     the feedback the site actually produced, so the narrowing shown in the
     video is the same narrowing the solver used.
 
-    The site allows SIX tries, so at most five deduction probes are planned and
-    the secret is always the sixth and final guess. An exhaustive search does
-    not always isolate the board in five probes, but the narrowing shown is
-    real up to that point and the final guess is still a legal, winning move -
-    which is what the six-try board allows.
+    The caller chooses max_guesses: the runner passes 4 (user rule: Colorfle
+    solves in 2-4 attempts, final guess = the verified answer), so at most
+    three deduction probes are planned and the secret is the final guess.
+    Probing stops early the moment the pool collapses to the secret alone,
+    so lucky boards solve in 2-3 attempts instead of burning probes.
+    An exhaustive search does not always isolate the board in the available
+    probes, but the narrowing shown is real up to that point and the final
+    guess is still a legal, winning move - which is what the six-try board
+    allows.
     """
     secret = list(secret)
     n = len(secret)
@@ -639,6 +643,11 @@ def plan_colorfle(secret, max_guesses=6, n_colors=20):
         if list(guess) == secret:
             _cache[memo] = (seq, steps)
             return seq, steps
+        # Iter-39: the pool collapsed to the secret alone — stop probing
+        # and play the answer next instead of burning the remaining
+        # probes on a one-candidate pool.
+        if len(cands) == 1:
+            break
         # Next guess: the consistent candidate that best splits what is left.
         # Deliberately NOT the secret - that is the deduction, not a shortcut.
     if not seq or list(seq[-1]) != secret:

@@ -586,7 +586,8 @@ def _thumb_fonts():
     return {k: d for k in ('display', 'title', 'number', 'badge', 'tile')}
 
 
-def thumb(out, game, date_str, answer_txt, puzzle_number=None, partial=None):
+def thumb(out, game, date_str, answer_txt, puzzle_number=None, partial=None,
+          no_hints=False):
     """YouTube thumbnail (1280x720) — iteration 37.
 
     Curiosity gap: the tile row shows the FIRST TWO letters revealed
@@ -594,7 +595,9 @@ def thumb(out, game, date_str, answer_txt, puzzle_number=None, partial=None):
     drawn on the thumbnail (it lives in the video + description).
     Puzzle # card when known, date banner, brand. Font-fit logic
     (never truncate) is kept: game name shrinks to fit, tile size
-    shrinks to fit the row.
+    shrinks to fit the row. no_hints (iter-39): the CTA badge reads
+    "SOLUTION >>" instead of "SOLUTION + HINTS >>" for games whose
+    video carries no hints segment (Colorfle).
     """
     if not HAS_PIL:
         return None
@@ -702,7 +705,7 @@ def thumb(out, game, date_str, answer_txt, puzzle_number=None, partial=None):
                             radius=14, fill=(15, 23, 42),
                             outline=yellow, width=4)
         d.text((dx, dy - 2), d_txt, fill=yellow, font=d_font)
-    cta_txt = "SOLUTION + HINTS >>"
+    cta_txt = "SOLUTION >>" if no_hints else "SOLUTION + HINTS >>"
     try:
         cb = d.textbbox((0, 0), cta_txt, font=f["badge"])
         cw, ch = cb[2] - cb[0], cb[3] - cb[1]
@@ -3509,6 +3512,19 @@ def _colorfle_swatches(page):
 
     One evaluate call returns every button's colour at once; the old version
     did a getComputedStyle round-trip per button and took forever on camera.
+
+    Iter-39 ROOT CAUSE (9pm run 39286970529, Oct-20 board): the old code
+    matched EVERY button by background colour and took the FIRST match per
+    colour. White #FFFFFF collides with non-palette UI buttons (header /
+    modal close buttons sort before the palette in DOM order), so sw[0]
+    pointed at a non-palette white button and every click on "white" placed
+    NOTHING: the site recorded [1,2,3] for the planned [0,1,2] and a partial
+    [19,3,?] for the planned [0,19,3] — the answer was never submitted,
+    yet the old win check still reported solved=True. The palette buttons
+    are the ONLY buttons carrying a data-color attribute (the site's own
+    picker reads it), so a candidate must BOTH claim its palette index via
+    data-color AND have that index's background colour. Anything without
+    data-color is never a swatch.
     """
     import re as _re
     sw = {}
@@ -3516,7 +3532,8 @@ def _colorfle_swatches(page):
         items = page.evaluate("""() => {
           const all = Array.from(document.querySelectorAll('button'));
           return all.map(e => ({bg: getComputedStyle(e).backgroundColor,
-            vis: !!e.offsetParent, i: all.indexOf(e)})); }""") or []
+            vis: !!e.offsetParent, i: all.indexOf(e),
+            dc: e.getAttribute('data-color')})); }""") or []
     except Exception:
         items = []
     btns = page.query_selector_all("button") or []
@@ -3524,15 +3541,22 @@ def _colorfle_swatches(page):
         try:
             if not it.get("vis"):
                 continue
+            dc = it.get("dc")
+            if dc is None:
+                continue
+            try:
+                idx = int(dc)
+            except (TypeError, ValueError):
+                continue
+            if idx < 0 or idx >= len(COLORFLE_HEX):
+                continue
             m = _re.match(r"rgb\((\d+),\s*(\d+),\s*(\d+)\)", it.get("bg") or "")
             if not m:
                 continue
             rgb = tuple(map(int, m.groups()))
-            for i, hx in enumerate(COLORFLE_HEX):
-                if _hex_to_rgb(hx) == rgb and i not in sw \
-                        and it["i"] < len(btns):
-                    sw[i] = btns[it["i"]]
-                    break
+            if _hex_to_rgb(COLORFLE_HEX[idx]) == rgb and idx not in sw \
+                    and it["i"] < len(btns):
+                sw[idx] = btns[it["i"]]
         except Exception:
             continue
     return sw
@@ -3574,6 +3598,87 @@ def _dismiss_colorfle_modal(page):
         pass
 
 
+def _colorfle_verify_win(page, colors):
+    """Verify a Colorfle win from the SITE's own state, never hidden DOM text.
+
+    Iter-39 ROOT CAUSE (9pm run 39286970529, Oct-20): the old check probed
+    every div/section/span/p for the WORDS "wins" + "accuracy". The
+    Statistics modal's DOM is always present (it renders "0 Wins" / "0 Hard
+    Mode Wins" even on an unsolved board), so the check passed while the
+    site had only 4 submitted rows and the answer was never played — and
+    the run published a "solve" to YouTube. A win is real only when the
+    site's own gameOver state is 2 (win) AND the last submitted board row
+    is exactly the answer. localStorage is the site's authoritative record
+    (it writes gameOver + guessBoard on every submit); the visible-stats
+    fallback requires the modal actually DISPLAYED plus a wins count >= 1,
+    never bare hidden text.
+    Returns (won: bool, detail: str) — detail names the observed board so
+    a future failure is diagnosable instead of a bare boolean.
+    """
+    try:
+        st = page.evaluate("""() => {
+          const out = {mode: null, gameOver: null, board: null,
+                       modal: null, winStat: null, hardWinStat: null};
+          try { out.mode = localStorage.getItem('mode'); } catch (e) {}
+          const m = (out.mode === '1') ? 1 : 0;
+          const goKeys = ['gameOver', 'gameOverHard'];
+          const bdKeys = ['guessBoard', 'guessBoardHard'];
+          try { out.gameOver = localStorage.getItem(goKeys[m]); } catch (e) {}
+          try { out.board = localStorage.getItem(bdKeys[m]); } catch (e) {}
+          try {
+            const el = document.getElementById('statsModal');
+            out.modal = el ? getComputedStyle(el).display : null;
+          } catch (e) {}
+          try {
+            const w = document.getElementById('winStat');
+            out.winStat = w ? (w.innerText || '').trim() : null;
+          } catch (e) {}
+          try {
+            const h = document.getElementById('hardWinStat');
+            out.hardWinStat = h ? (h.innerText || '').trim() : null;
+          } catch (e) {}
+          out.mode = m;
+          return out;
+        }""") or {}
+    except Exception as e:
+        return False, f"win probe failed: {str(e)[:100]}"
+    colors = [int(c) for c in colors]
+    try:
+        go = int(st.get("gameOver")) if st.get("gameOver") is not None else None
+    except (TypeError, ValueError):
+        go = None
+    board = None
+    try:
+        import json as _json
+        board = _json.loads(st.get("board")) if st.get("board") else None
+    except Exception:
+        board = None
+    last = None
+    if isinstance(board, list):
+        for row in board:
+            if isinstance(row, list) and any(
+                    x != -1 and x != "-1" for x in row):
+                try:
+                    last = [int(x) for x in row]
+                except (TypeError, ValueError):
+                    last = None
+    detail = (f"gameOver={go} last_row={last} expected={colors} "
+              f"modal={st.get('modal')} winStat={st.get('winStat')} "
+              f"hardWinStat={st.get('hardWinStat')}")
+    if go == 2 and last == colors:
+        return True, detail
+    # Fallback: modal actually DISPLAYED plus a real wins count (>= 1).
+    # Hidden "0 Wins" DOM text alone is NOT a win (the old false positive).
+    try:
+        wins = int(st.get("winStat") if st.get("mode") == 0
+                   else st.get("hardWinStat"))
+    except (TypeError, ValueError):
+        wins = 0
+    if st.get("modal") == "block" and wins >= 1 and last == colors:
+        return True, detail
+    return False, detail
+
+
 def solve_colorfle(page, ans):
     """Real Colorfle solve: Mastermind deduction, then the winning board.
 
@@ -3599,7 +3704,8 @@ def solve_colorfle(page, ans):
         return False, "ENTER button not found"
 
     try:
-        seq, _cf_steps = S.plan_colorfle(colors)
+        # Iter-39: at most 4 attempts (<=3 probes + the verified answer).
+        seq, _cf_steps = S.plan_colorfle(colors, max_guesses=4)
     except Exception as e:
         print(f"[colorfle] planner failed: {e}")
         seq, _cf_steps = [colors], []
@@ -3650,34 +3756,17 @@ def solve_colorfle(page, ans):
         except Exception:
             pass
 
-    # The game's own end state. On a win Colorfle opens a Statistics panel
-    # reading "1 Wins" / "Your average color accuracy was ...%", and the
-    # winning row is ringed green at 100%. The old check was
-    # `"100%" in page.content()`, which matched the static How-to-Play
-    # instructions before any guess was made.
-    try:
-        stats = page.evaluate("""() => {
-            const out = [];
-            for (const e of document.querySelectorAll('div,section,span,p')) {
-                const t = (e.innerText || '').trim();
-                if (!t || t.length > 400) continue;
-                if (/Wins|average color accuracy|NEXT COLORFLE|Statistics/i.test(t)) {
-                    out.push(t);
-                }
-            }
-            return out.join(' || ');
-        }""") or ""
-    except Exception:
-        stats = ""
-    won = False
-    if "wins" in stats.lower() and "accuracy" in stats.lower():
-        # "1 Wins" only appears once a board has actually been solved.
-        won = True
+    # The game's own end state: verify the win from the SITE's authoritative
+    # state (localStorage gameOver == 2 + last submitted row == answer).
+    # The old check matched the WORDS "wins" + "accuracy" in the always-
+    # present Statistics modal DOM ("0 Wins" on an unsolved board) and
+    # reported a win while the answer was never submitted (iter-39).
+    won, _win_detail = _colorfle_verify_win(page, colors)
     if won:
-        return True, (f"Statistics panel confirms a win after {len(seq)} "
-                       f"guesses ({stats[:120]!r})")
-    return False, (f"no win panel after {len(seq)} guesses "
-                   f"(stats={stats[:120]!r})")
+        return True, (f"site win verified after {len(seq)} guesses "
+                       f"({_win_detail})")
+    return False, (f"no site win after {len(seq)} guesses "
+                   f"({_win_detail})")
 
 
 def _framed_wait_board_ready(page, cap_ms=6000):
@@ -5431,9 +5520,10 @@ def _plan_for(gid, answer):
     elif gid == "colorfle":
         cols = _COLORS.get(gid)
         if cols:
-            p = S.plan_colorfle([int(c) for c in cols])
+            # Iter-39: same 4-attempt cap as the solver (<=3 probes + answer).
+            p = S.plan_colorfle([int(c) for c in cols], max_guesses=4)
         else:
-            p = _honest_fallback(a, max_guesses=6, seed=_day_seed(gid))
+            p = _honest_fallback(a, max_guesses=4, seed=_day_seed(gid))
     elif gid in ("semantle", "contexto"):
         # Semantic games score a guess 0-100 with no letter feedback, so the
         # honest plan is a spread of real probes ending on the answer. Both
@@ -23164,6 +23254,27 @@ def _fake_iso_for(gid, tgt):
     return tgt.strftime("%Y-%m-%dT00:05:00")
 
 
+def _assembly_segments(gid, game_name, nguess, gd, recap_p, hints_p,
+                       reveal_p, facts_p, teaser_p):
+    """Video segment list (path, seconds, chapter title) for one game.
+
+    Shared order for every game: puzzle recap -> hints -> full solve ->
+    answer/deduction -> solve breakdown -> tomorrow teaser. Iter-39:
+    Colorfle drops THREE segments (user: no hints, no answer+deduction,
+    no solve breakdown) — recap -> solve -> teaser only. Every other
+    game keeps the full six-segment order.
+    """
+    segments = [(recap_p, 5, f"Today's {game_name} puzzle")]
+    if gid != "colorfle":
+        segments.append((hints_p, 10, "Hints before the solve"))
+    segments.append((None, gd, f"Full solve ({nguess} guesses)"))
+    if gid != "colorfle":
+        segments.append((reveal_p, 8, "Answer & deduction path"))
+        segments.append((facts_p, 8, "Solve breakdown"))
+    segments.append((teaser_p, 5, "Tomorrow's puzzle"))
+    return segments
+
+
 def run_one(gid):
     g = GAMES[gid]
     tgt = A.target_date()
@@ -23729,9 +23840,14 @@ def run_one(gid):
                            "Green row = exact colour"])
             else:
                 _hints = S.compute_hints(str(aval))
-            DP.generate_hints(str(hints_p), g["name"], today,
-                              _hints, str(aval), kind=_kind, palette=_pal)
-            if gid == "waffle" and _LAST_BOARD_SHOT and Path(_LAST_BOARD_SHOT).exists():
+            # Iter-39: Colorfle has NO hints segment — do not build the slide.
+            if gid != "colorfle":
+                DP.generate_hints(str(hints_p), g["name"], today,
+                                  _hints, str(aval), kind=_kind, palette=_pal)
+            if gid == "colorfle":
+                # Iter-39: Colorfle has NO answer/deduction segment.
+                pass
+            elif gid == "waffle" and _LAST_BOARD_SHOT and Path(_LAST_BOARD_SHOT).exists():
                 _bb = Image.open(_LAST_BOARD_SHOT).convert("RGB")
                 _bg = Image.new("RGB", (1920, 1080), (13, 20, 38))
                 _bgy = 240
@@ -23750,21 +23866,24 @@ def run_one(gid):
                 DP.generate_reveal(str(reveal_p), g["name"], today, str(aval),
                                    steps, kind=_kind, palette=_pal,
                                    scoring=gid not in _NO_LETTER_SCORING)
-            DP.generate_facts(str(facts_p), g["name"], today, str(aval),
-                                steps, kind=_kind, palette=_pal,
-                                scoring=gid not in _NO_LETTER_SCORING,
-                                # Iter-21 (ANALYSIS18 §2j): the
-                                # Waffle card read "0 green rows" —
-                                # a meaningless generic metric for a
-                                # swap puzzle. Pass the
-                                # waffle-appropriate stat (swaps
-                                # used, parsed from the solver
-                                # evidence); the card drops the
-                                # stat if the parse fails.
-                                extra_stat=(
-                                    _waffle_facts_stat(evidence)
-                                    if gid == "waffle" else None))
-            DP.generate_teaser(str(teaser_p), g["name"], today, g["slug"])
+            # Iter-39: Colorfle has NO solve-breakdown segment.
+            if gid != "colorfle":
+                DP.generate_facts(str(facts_p), g["name"], today, str(aval),
+                                    steps, kind=_kind, palette=_pal,
+                                    scoring=gid not in _NO_LETTER_SCORING,
+                                    # Iter-21 (ANALYSIS18 §2j): the
+                                    # Waffle card read "0 green rows" —
+                                    # a meaningless generic metric for a
+                                    # swap puzzle. Pass the
+                                    # waffle-appropriate stat (swaps
+                                    # used, parsed from the solver
+                                    # evidence); the card drops the
+                                    # stat if the parse fails.
+                                    extra_stat=(
+                                        _waffle_facts_stat(evidence)
+                                        if gid == "waffle" else None))
+            DP.generate_teaser(str(teaser_p), g["name"], today, g["slug"],
+                               hide_hints_chip=(gid == "colorfle"))
 
             def _still(p, secs):
                 return (ImageClip(str(p)).set_duration(secs).set_fps(24)
@@ -23778,13 +23897,9 @@ def run_one(gid):
             gd = float(gameplay.duration or 0)
 
             parts, chapters, cur = [], [], 0.0
-            for p, secs, title in (
-                    (recap_p, 5, f"Today's {g['name']} puzzle"),
-                    (hints_p, 10, "Hints before the solve"),
-                    (None, gd, f"Full solve ({nguess} guesses)"),
-                    (reveal_p, 8, "Answer & deduction path"),
-                    (facts_p, 8, "Solve breakdown"),
-                    (teaser_p, 5, "Tomorrow's puzzle")):
+            for p, secs, title in _assembly_segments(
+                    gid, g["name"], nguess, gd, recap_p, hints_p,
+                    reveal_p, facts_p, teaser_p):
                 chapters.append((round(cur, 1), title))
                 parts.append(gameplay if p is None else _still(p, secs))
                 cur += gd if p is None else secs
@@ -23890,12 +24005,18 @@ def run_one(gid):
                 "tomorrow": None, "stats": None, "mode_lines": None,
                 "solver_url": None,
                 "cross_links": _cross_links(gid),
+                # Iter-39: Colorfle videos carry no hints; the answer
+                # is a colour triple, not a word (no letter FAQ).
+                "no_hints": gid == "colorfle",
+                "skip_letter_faq": gid == "colorfle",
             }
             _title = SEO.build_title(g["name"], short, guesses=nguess,
-                                     puzzle_number=_pnum)
+                                     puzzle_number=_pnum,
+                                     no_hints=(gid == "colorfle"))
             _desc = SEO.build_description(**seo_ctx)
             _tags = SEO.build_tags(g["name"], short, date_num=_date_num,
-                                   puzzle_number=_pnum)
+                                   puzzle_number=_pnum,
+                                   no_hints=(gid == "colorfle"))
             _comment = SEO.build_pinned_comment(
                 g["name"], list(chapters), solver_url=None,
                 answer_url=f"https://wordsolverx.com/{g['slug']}")
@@ -23923,7 +24044,7 @@ def run_one(gid):
         tp = vdir / "thumb.png"
         try:
             thumb(str(tp), g["name"], today, _answer_txt,
-                  puzzle_number=_pnum)
+                  puzzle_number=_pnum, no_hints=(gid == "colorfle"))
         except Exception:
             tp = None
         if _publish_enabled():
