@@ -375,6 +375,12 @@ GAMES = {
                "all_modes": True},
     "searchle": {"name": "Searchle", "url": "https://searchle.net", "slug": "searchle-answer-today"},
     "semantle": {"name": "Semantle", "url": "https://semantle.com", "slug": "semantle-answer-today"},
+    # Iteration 41: Spotle (spotle.io) — daily ARTIST game, 10 guesses,
+    # attribute feedback (debut / group / rank / gender / genre / country).
+    # no_fake: the board is server-dated (NY-midnight flip); the fake
+    # clock cannot move it, and the real clock keeps client countdowns /
+    # storage keys sane. The answers.py SSR gate proves the served board.
+    "spotle": {"name": "Spotle", "url": "https://spotle.io", "slug": "spotle-answer-today", "no_fake": True},
     # solitaired.com/phrazle.html is a 404; the live path has a trailing slash
     "phrazle": {"name": "Phrazle", "url": "https://solitaired.com/phrazle/", "slug": "phrazle-answer-today"},
     "canuckle": {"name": "Canuckle", "url": "https://www.canucklegame.ca", "slug": "canuckle-answer-today"},
@@ -2496,6 +2502,7 @@ _READY_SELECTORS = {
     "colorfle": ["button:has-text('ENTER')"],
     "searchle": ["input"],
     "semantle": ["input[placeholder='Enter a word...']"],
+    "spotle": ["button:has-text('PLAY')", "#search", "input[name=search]"],
     "phrazle": [".wordhunt-row"],
     "canuckle": ["flt-glass-pane", "canvas"],
     "phoodle": [".letter-container", "input"],
@@ -2543,7 +2550,7 @@ def _wait_ready(page, gid):
 # Framed gives no feedback at all, Semantle/Contexto give a similarity
 # score. A pattern on any of these would render as fabricated letter
 # scoring ("2 in the word, wrong spot").
-_NO_LETTER_SCORING = {"betweenle", "framed", "semantle", "contexto"}
+_NO_LETTER_SCORING = {"betweenle", "framed", "semantle", "contexto", "spotle"}
 
 
 def _result_steps(gid, aval):
@@ -2589,7 +2596,12 @@ def _result_steps(gid, aval):
     # plan fabricated "HOW EACH GUESS SCORED" for 6 planned words when
     # real submitted = 3 (SLATE, DINER, BIKER, run 39043936480). With no
     # confirmed-submitted ledger there are zero true steps, not 6.
-    if gid == "betweenle":
+    # Spotle (iter-41): same rule. The generic honest-fallback plan is a
+    # letter-game sequence (CRANE-style filler + the answer), which is
+    # meaningless for an attribute game and would leak the answer into
+    # an unsolved run's steps. The solver's _PLAYED ledger is the only
+    # source of Spotle steps.
+    if gid in ("betweenle", "spotle"):
         return []
     # Plan fallback: strip planner patterns for no-letter-scoring games
     # (same fabricated-scoring rule as the played-steps merge above).
@@ -6545,6 +6557,10 @@ def _live_day_provenance(gid):
         "semantle": ("semantle",),
         "phoodle": ("phoodle",),
         "countryle": ("countryle",),
+        # Iteration 41: Spotle's own requests carry no date-bearing URL
+        # (server-dated via SSR). The hint keeps the align probe silent
+        # for Spotle; the answers.py SSR gate is the date authority.
+        "spotle": ("spotle.io",),
     }.get(gid, ())
     for host, iso in hosts.items():
         if any(h in host.lower() for h in hints):
@@ -21824,6 +21840,408 @@ def _marveldle_browser_solve(page, gid, max_guesses=14):
     return False, f"browser-solve exhausted {len(tried)} candidates"
 
 
+# ---------------------------------------------------------------- spotle
+# Iteration 41: Spotle (spotle.io) — daily artist game, 10 guesses.
+#
+# Solver contract (same standard as Framed's bundled list / Nerdle's game
+# API): the solver uses ONLY the game's own data and feedback. It never
+# reads the answers page, never pastes the gate artist as a guess, and
+# the ONLY win signal is the game's own board (all 6 feedback tiles
+# `correct` on the latest guess card). The answers.py SSR gate proves the
+# served board is the target's; the solver converges from feedback alone.
+#
+# Pool: the game's own bundled artist chunk (DGeHDaAM.js, 1,113 artists),
+# captured from the resources the game ITSELF loaded (performance entries
+# -> fetch in-page -> JSON.parse wrapper). The chunk filename hash changes
+# on redeploy, so the URL is never hard-coded.
+#
+# Feedback (ports the game's own ee() / GameInfo): 6 tiles in DOM order
+# [Debut, Members, Popularity, Gender, Genre, Country]; class `correct`
+# (green) / `close` (yellow) / neither (miss). Debut + Popularity carry
+# up/down arrows when the values differ. The probe reads classList + SVG
+# path d (ground truth), never pixel colour. High-contrast mode is never
+# enabled, so green/yellow class semantics hold.
+#
+# Submission (Batterup-style): type the full artist name, wait for the
+# dropdown, CLICK the <li> whose <h3> exactly equals the intended artist.
+# Enter submits the FIRST dropdown result, not the raw text, so Enter is
+# never used. No exact <h3> match => do NOT submit (never play a wrong
+# artist); the candidate is marked unplayable and skipped.
+_SPOTLE_POOL_JS = """async () => {
+  const urls = performance.getEntriesByType('resource')
+    .map(e => e.name)
+    .filter(u => u.includes('/_app/immutable/') && u.endsWith('.js'));
+  for (const u of urls) {
+    try {
+      const t = await fetch(u).then(r => r.text());
+      if (!t.includes('listener_rank')) continue;
+      const m = t.match(/JSON\\.parse\\(`([\\s\\S]*?)`\\)/);
+      if (m) return m[1];
+    } catch (e) {}
+  }
+  return null;
+}"""
+
+_SPOTLE_FEEDBACK_JS = """() => {
+  const cards = Array.from(document.querySelectorAll('.guess-wrapper'));
+  let items = [];
+  let artist = '';
+  if (cards.length) {
+    const card = cards[cards.length - 1];
+    const h2 = card.querySelector('.header-row h2');
+    artist = h2 ? (h2.innerText || '').trim() : '';
+    items = Array.from(card.querySelectorAll('.item'));
+  } else {
+    const all = Array.from(document.querySelectorAll('.item'));
+    if (all.length >= 6) items = all.slice(-6);
+  }
+  const tiles = items.map(it => {
+    const h3 = it.querySelector('h3');
+    const hv = it.querySelector('h2');
+    const arrows = Array.from(
+      it.querySelectorAll('.arrow-icon svg path')
+    ).map(p => p.getAttribute('d') || '');
+    return {label: h3 ? (h3.innerText || '').trim() : '',
+            classes: Array.from(it.classList),
+            value: hv ? (hv.innerText || '').trim() : '',
+            has_flag: !!it.querySelector('.flag-img'),
+            arrows: arrows};
+  });
+  const body = document.body ? (document.body.innerText || '') : '';
+  return {cards: cards.length, artist: artist, tiles: tiles,
+          has_congrats: /congratulations/i.test(body)};
+}"""
+
+# Arrow SVG path fragments (game's own GameInfo icon set): down = the
+# "M7.41 8.59..." path, up = the "M7.41 15.41..." path.
+_SPOTLE_ARROW_DOWN = "8.59L12 13.17"
+_SPOTLE_ARROW_UP = "15.41L12 10.83"
+_SPOTLE_TILE_LABELS = ("Debut", "Members", "Popularity", "Gender", "Genre")
+
+
+def _spotle_parse_pool(raw, gid):
+    """Normalize the captured pool chunk text into artist dicts.
+
+    Returns [] when the capture is not the game's artist list (wrong
+    chunk, truncated JSON, too few entries) — the solver then defers
+    rather than playing from a bad pool.
+    """
+    import json as _json
+    try:
+        data = _json.loads(raw or "")
+    except Exception:
+        return []
+    if not isinstance(data, list) or len(data) < 100:
+        return []
+    pool, dropped = [], 0
+    for e in data:
+        try:
+            name = str(e.get("artist") or "").strip()
+            entry = {"artist": name,
+                     "listener_rank": int(e.get("listener_rank")),
+                     "country": str(e.get("country") or "").strip(),
+                     "genre": str(e.get("genre") or "").strip(),
+                     "gender": str(e.get("gender") or "").strip(),
+                     "group_size": int(e.get("group_size")),
+                     "debut_album_year": int(e.get("debut_album_year"))}
+        except Exception:
+            dropped += 1
+            continue
+        if not name:
+            dropped += 1
+            continue
+        pool.append(entry)
+    if dropped:
+        _dbg(gid, f"spotle pool: dropped {dropped} malformed entries")
+    return pool
+
+
+def _spotle_capture_pool(page, gid):
+    """The game's own artist pool, from resources the game loaded.
+
+    Primary: performance resource entries -> fetch each in-page chunk ->
+    the one containing `listener_rank`. Fallback: one reload (re-registers
+    resources) then retry. Never a hard-coded chunk URL (hash rotates).
+    """
+    for attempt in (1, 2):
+        try:
+            raw = page.evaluate(_SPOTLE_POOL_JS)
+        except Exception as e:
+            _dbg(gid, f"spotle pool capture attempt {attempt} failed: {e}")
+            raw = None
+        if raw:
+            pool = _spotle_parse_pool(raw, gid)
+            if pool:
+                _dbg(gid, f"spotle pool captured: {len(pool)} artists "
+                          f"(attempt {attempt})")
+                return pool
+            _dbg(gid, "spotle pool capture returned non-pool JSON")
+        if attempt == 1:
+            try:
+                page.reload(wait_until="domcontentloaded")
+                _settle(page, base=2500)
+            except Exception as e:
+                _dbg(gid, f"spotle pool reload failed: {e}")
+                break
+    return []
+
+
+def _spotle_read_feedback(page, gid):
+    """(statuses, arrows, artist, cards, congrats) from the latest card.
+
+    statuses: 6-tuple in ee() order [debut, group, rank, gender, genre,
+    country], each correct/close/miss from the tile classList.
+    arrows: (debut_arrow, rank_arrow), each up/down/None from the SVG
+    path d inside .arrow-icon. Returns None when the latest card does
+    not carry exactly 6 tiles (probe failure, never guessed-at).
+    """
+    try:
+        fb = page.evaluate(_SPOTLE_FEEDBACK_JS) or {}
+    except Exception as e:
+        _dbg(gid, f"spotle feedback probe failed: {e}")
+        return None
+    tiles = fb.get("tiles") or []
+    if len(tiles) != 6:
+        _dbg(gid, f"spotle feedback probe: {len(tiles)} tiles (want 6)")
+        return None
+    by_label = {}
+    country_tile = None
+    for t in tiles:
+        lab = str(t.get("label") or "")
+        if lab in _SPOTLE_TILE_LABELS:
+            by_label[lab] = t
+        elif t.get("has_flag") or country_tile is None:
+            # The country tile has NO "Country" label (its h3 shows the
+            # country name) but carries the flag image. First unlabeled
+            # tile with a flag wins; else first unlabeled tile.
+            if t.get("has_flag"):
+                country_tile = t
+            elif country_tile is None:
+                country_tile = t
+    if len(by_label) != 5 or country_tile is None:
+        _dbg(gid, "spotle feedback probe: tile labels unmapped "
+                  f"({sorted(by_label)})")
+        return None
+
+    def _status(t):
+        cls = t.get("classes") or []
+        if "correct" in cls:
+            return "correct"
+        if "close" in cls:
+            return "close"
+        return "miss"
+
+    def _arrow(t):
+        for d in (t.get("arrows") or []):
+            if _SPOTLE_ARROW_DOWN in str(d):
+                return "down"
+            if _SPOTLE_ARROW_UP in str(d):
+                return "up"
+        return None
+
+    ordered = [by_label["Debut"], by_label["Members"],
+               by_label["Popularity"], by_label["Gender"],
+               by_label["Genre"], country_tile]
+    statuses = tuple(_status(t) for t in ordered)
+    arrows = (_arrow(by_label["Debut"]), _arrow(by_label["Popularity"]))
+    return (statuses, arrows, str(fb.get("artist") or ""),
+            int(fb.get("cards") or 0), bool(fb.get("has_congrats")))
+
+
+def _spotle_card_count(page):
+    try:
+        return int(page.evaluate(
+            "() => document.querySelectorAll('.guess-wrapper').length") or 0)
+    except Exception:
+        return -1
+
+
+def _spotle_submit(page, gid, name):
+    """Submit `name` by clicking its exact-match dropdown row.
+
+    Returns (True, "submitted") when a new guess card appears, else
+    (False, reason). Never presses Enter, never submits a non-exact
+    row — a missing exact match means the candidate is unplayable, not
+    a guess the game rejected.
+    """
+    try:
+        inp = page.query_selector("#search, input[name=search]")
+        if not inp:
+            return False, "no #search input"
+        try:
+            inp.fill("")
+        except Exception:
+            pass
+        inp.fill(str(name))
+    except Exception as e:
+        return False, f"typing failed: {e}"
+    page.wait_for_timeout(500)  # search debounce is 150ms
+    try:
+        rows = page.query_selector_all("ul.results li") or []
+    except Exception:
+        rows = []
+    target = None
+    for row in rows:
+        try:
+            h3 = row.query_selector("h3")
+            text = (h3.inner_text() or "").strip() if h3 else ""
+        except Exception:
+            continue
+        if text == str(name):
+            target = row
+            break
+    if target is None:
+        return False, f"no exact dropdown match for {name!r}"
+    before = _spotle_card_count(page)
+    try:
+        target.scroll_into_view_if_needed(timeout=2000)
+        target.click(timeout=4000)
+    except Exception as e:
+        return False, f"dropdown click failed: {e}"
+    for _ in range(24):  # up to ~6s for the card to appear
+        page.wait_for_timeout(250)
+        if _spotle_card_count(page) > before:
+            return True, "submitted"
+    return False, "no guess card after dropdown click"
+
+
+def _s_spotle(page, ans, gid):
+    """Feedback-driven Spotle solve: opener -> filter -> maximin -> win.
+
+    `ans` (the gate artist) is logged, never played: the solver converges
+    from the game's own tile feedback alone. Win = all 6 tiles `correct`
+    on the latest card (the game's own state). 10 guesses max; pool
+    exhaustion or unreadable feedback => honest defer (solved=False).
+    """
+    _close_modals(page)
+    _dbg(gid, f"spotle gate artist (logged, NEVER played directly): "
+              f"{str(ans)[:60]!r}")
+    # Stale-progress guard: the prepurge clears localStorage, but if the
+    # landing still says "View Results" the board is pre-played in this
+    # profile — never trust it. Clear + reload once, then require PLAY.
+    try:
+        body = page.evaluate("() => document.body.innerText || ''") or ""
+    except Exception:
+        body = ""
+    if "View Results" in body:
+        _dbg(gid, "spotle: 'View Results' shown (stale progress) — "
+                  "clearing storage + reload")
+        try:
+            page.evaluate("() => { try { localStorage.clear(); } catch(e){} "
+                          "try { sessionStorage.clear(); } catch(e){} }")
+            page.reload(wait_until="domcontentloaded")
+            _settle(page, base=2500)
+        except Exception as e:
+            return False, f"spotle stale-progress reload failed: {e}"
+    try:
+        play = page.query_selector("button:has-text('PLAY')")
+    except Exception:
+        play = None
+    if play:
+        try:
+            play.click(timeout=4000)
+            _settle(page, base=1200)
+        except Exception as e:
+            _dbg(gid, f"spotle PLAY click failed: {e}")
+    pool = _spotle_capture_pool(page, gid)
+    if not pool:
+        return False, "spotle: artist pool unavailable (capture failed)"
+    by_name = {p["artist"]: p for p in pool}
+    survivors = list(pool)
+    # Date-seeded opener from the curated well-known set (same
+    # determinism convention as the other games: randomized by date).
+    try:
+        tgt = A.target_date().isoformat()
+    except Exception:
+        tgt = ""
+    import random as _random
+    openers = [o for o in S.SPOTLE_OPENERS if o in by_name]
+    opener_name = (_random.Random(f"spotle:{tgt}").choice(openers)
+                   if openers else None)
+    opener = by_name.get(opener_name) if opener_name else None
+    if opener is None:
+        opener = pool[len(pool) // 2]
+    _dbg(gid, f"spotle opener: {opener.get('artist')!r} "
+              f"(pool {len(pool)}, seed spotle:{tgt})")
+    played, rejected = [], []
+    history = []
+    attempts = 0
+    while len(played) < 10 and attempts < 14:
+        attempts += 1
+        if not played:
+            cand = by_name.get(opener.get("artist")) or opener
+        elif len(survivors) == 1:
+            cand = survivors[0]
+        else:
+            cand = S.spotle_pick_next(survivors, survivors,
+                                      guessed_names=[p["artist"]
+                                                     for p in played])
+        if cand is None:
+            return False, ("spotle: no candidate left "
+                            f"(played {len(played)}, survivors 0)")
+        name = str(cand.get("artist") or "")
+        if not name or name in [p["artist"] for p in played]:
+            survivors = [s for s in survivors if s.get("artist") != name]
+            continue
+        ok, detail = _spotle_submit(page, gid, name)
+        if not ok:
+            # Not a game rejection — the candidate was never submitted.
+            # Mark unplayable, drop it, try the next candidate (no guess
+            # consumed: the game never saw this artist).
+            _dbg(gid, f"spotle guess {name!r} NOT submitted ({detail}) — "
+                      "dropping candidate, no guess consumed")
+            rejected.append(name)
+            survivors = [s for s in survivors if s.get("artist") != name]
+            continue
+        page.wait_for_timeout(2600)  # tile flip animation is 1.65s
+        fb = _spotle_read_feedback(page, gid)
+        if fb is None:
+            page.wait_for_timeout(2000)
+            fb = _spotle_read_feedback(page, gid)
+        if fb is None:
+            return False, (f"spotle: feedback unreadable after guess "
+                           f"{len(played) + 1} ({name!r})")
+        statuses, arrows, card_artist, cards, congrats = fb
+        played.append(cand)
+        _PLAYED[gid] = [p["artist"] for p in played]
+        _REJECTED[gid] = list(rejected)
+        history.append({"guess": cand, "statuses": statuses,
+                        "arrows": arrows})
+        _dbg(gid, f"spotle guess {len(played)}/10 {name!r}: "
+                  f"statuses={statuses} arrows={arrows} "
+                  f"card_artist={card_artist!r} congrats={congrats} "
+                  f"survivors_before={len(survivors)}")
+        if all(s == "correct" for s in statuses):
+            # Win = game's own board state. Re-probe once: the win must
+            # be stable, not a mid-animation read.
+            page.wait_for_timeout(1500)
+            fb2 = _spotle_read_feedback(page, gid)
+            if fb2 and all(s == "correct" for s in fb2[0]):
+                return True, (f"spotle solved in {len(played)} guesses: "
+                              f"{name!r} (feedback-converged, "
+                              f"board-verified)")
+            _dbg(gid, "spotle win probe unstable on re-read — continuing")
+        survivors = S.spotle_filter_pool(survivors, history)
+        if not survivors:
+            # Pool emptied: one feedback re-read before giving up
+            # (a transient mis-probe must not end the run).
+            page.wait_for_timeout(2000)
+            fb3 = _spotle_read_feedback(page, gid)
+            if fb3 and fb3[0] != statuses:
+                history[-1] = {"guess": cand, "statuses": fb3[0],
+                               "arrows": fb3[1]}
+                survivors = S.spotle_filter_pool(pool, history)
+            if not survivors:
+                return False, ("spotle: pool emptied after guess "
+                               f"{len(played)} ({name!r}) — honest defer, "
+                               "never fabricating")
+        _dbg(gid, f"spotle survivors after guess {len(played)}: "
+                  f"{len(survivors)}")
+    return False, (f"spotle: 10 guesses used without a win "
+                   f"(played {[p['artist'] for p in played]})")
+
+
+
 SOLVERS = {
     "betweenle": ("betweenle", _s_betweenle),
     "colordle": ("colordle", lambda p, a: solve_colordle(p, a)),
@@ -21831,6 +22249,7 @@ SOLVERS = {
     "framed": ("framed", None),          # handled by the multi-mode path
     "searchle": ("searchle", _s_searchle),
     "semantle": ("semantle", _s_semantle),
+    "spotle": ("spotle", _s_spotle),
     "phrazle": ("phrazle", _s_phrazle),
     "canuckle": ("canuckle", _s_wordle),
     "phoodle": ("phoodle", _s_phoodle),
@@ -21898,7 +22317,9 @@ def _puzzle_number_for(gid, date_key):
     fetch (Batterup CDN #, Waffle board #, Countryle, ...). The SEO
     layer treats None as 'omit the number', never invents one.
     Verified anchors: Framed classic 2026-10-19 -> 1683,
-    Nerdle classic 2026-10-19 -> 1734, Semantle 2026-10-19 -> 1723.
+    Nerdle classic 2026-10-19 -> 1734, Semantle 2026-10-19 -> 1723,
+    Spotle 2026-10-19 -> 1634 (game's own SSR number, NOT the answers
+    page's #1677 for 2026-10-20).
     """
     try:
         d = date.fromisoformat(str(date_key))
@@ -21913,6 +22334,8 @@ def _puzzle_number_for(gid, date_key):
             return int((d - _SEMANTLE_EPOCH).days)
         if gid == "nerdle":
             return int((d - date(2022, 1, 20)).days + 1)
+        if gid == "spotle":
+            return int(A.spotle_number_for(d))
     except Exception:
         return None
     return None
@@ -23883,6 +24306,14 @@ def run_one(gid):
             elif gid == "marveldle":
                 _hints = ["Comics hero or villain", "Check gender, type, era",
                           "Columns light up as you narrow it"]
+            elif gid == "spotle":
+                # Iteration 41: attribute hints only — never the artist
+                # name, never a letter hint. Same 3-hint shape as the
+                # other games; the hints slide still shows the standard
+                # first-letter answer shape (Wordle parity).
+                _hints = ["Guess the mystery artist",
+                          "Arrows narrow rank + debut year",
+                          "Green = exact, yellow = close, grey = miss"]
             elif gid in ("colorfle", "colordle"):
                 _n = len(_pal or []) or 3
                 _hints = ([f"{len((ans or {}).get('colors') or aval.strip('[]').split(','))} "

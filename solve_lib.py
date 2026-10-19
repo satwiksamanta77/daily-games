@@ -1107,3 +1107,250 @@ def plan_phrase(answer, phrases, max_guesses=5, shape=None, seed=None):
                       "pattern": "G" * len(answer), "pool_before": 1,
                       "pool_after": 0})
     return guesses, steps
+
+# ---------------------------------------------------------------- spotle
+# Iteration 41: Spotle (spotle.io) — daily artist game. Pure functions:
+# compare() ports the game's own ee() (chunks_Boi-SCPl.js); the filter
+# applies the exact constraints from the RE note (rea-spotle/RE_FINDINGS.md
+# §6-§7). The continent map is the game's own `Ie` table (251 codes).
+# The solver plays feedback-driven: opener (date-seeded) -> filter ->
+# maximin split pick -> converge. The game's own win state (all 6 tiles
+# `correct`) is the only win signal; these helpers never see the answer.
+
+SPOTLE_CONTINENTS = {
+    'north_america': ['AG', 'BS', 'BB', 'BM', 'BZ', 'VG', 'CA', 'KY', 'CR', 'CU', 'DM', 'DO', 'SV', 'GL', 'GD', 'GP', 'GT', 'HT', 'HN', 'JM', 'MQ', 'MX', 'MS', 'AN', 'CW', 'AW', 'SX', 'BQ', 'NI', 'UM', 'PA', 'PR', 'BL', 'KN', 'AI', 'LC', 'MF', 'PM', 'VC', 'TT', 'TC', 'US', 'VI'],
+    'europe': ['AL', 'AD', 'AZ', 'AT', 'AM', 'BE', 'BA', 'BG', 'BY', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FO', 'FI', 'AX', 'FR', 'GE', 'DE', 'GI', 'GR', 'VA', 'HU', 'IS', 'IE', 'IT', 'KZ', 'LV', 'LI', 'LT', 'LU', 'MT', 'MC', 'MD', 'ME', 'NL', 'NO', 'PL', 'PT', 'RO', 'RU', 'SM', 'RS', 'SK', 'SI', 'ES', 'SJ', 'SE', 'CH', 'TR', 'UA', 'MK', 'GB', 'GB-ENG', 'UK', 'GG', 'JE', 'IM'],
+    'oceania': ['AS', 'AU', 'SB', 'CK', 'FJ', 'PF', 'KI', 'GU', 'NR', 'NC', 'VU', 'NZ', 'NU', 'NF', 'MP', 'FM', 'MH', 'PW', 'PG', 'PN', 'TK', 'TO', 'TV', 'WF', 'WS', 'XX'],
+    'south_america': ['AR', 'BO', 'BR', 'CL', 'CO', 'EC', 'FK', 'GF', 'GY', 'PY', 'PE', 'SR', 'UY', 'VE'],
+    'asia': ['AF', 'BH', 'BD', 'BT', 'IO', 'BN', 'MM', 'KH', 'LK', 'CN', 'TW', 'CX', 'CC', 'PS', 'HK', 'IN', 'ID', 'IR', 'IQ', 'IL', 'JP', 'JO', 'KP', 'KR', 'KW', 'KG', 'LA', 'LB', 'MO', 'MY', 'MV', 'MN', 'OM', 'NP', 'PK', 'PH', 'TL', 'QA', 'SA', 'SG', 'VN', 'SY', 'TJ', 'TH', 'AE', 'TM', 'UZ', 'YE', 'XE', 'XD', 'XS'],
+    'africa': ['DZ', 'AO', 'BW', 'BI', 'CM', 'CV', 'CF', 'TD', 'KM', 'YT', 'CG', 'CD', 'BJ', 'GQ', 'ET', 'ER', 'DJ', 'GA', 'GM', 'GH', 'GN', 'CI', 'KE', 'LS', 'LR', 'LY', 'MG', 'MW', 'ML', 'MR', 'MU', 'MA', 'MZ', 'NA', 'NE', 'NG', 'GW', 'RE', 'RW', 'SH', 'ST', 'SN', 'SC', 'SL', 'SO', 'ZA', 'ZW', 'SS', 'EH', 'SD', 'SZ', 'TG', 'TN', 'UG', 'EG', 'TZ', 'BF', 'ZM'],
+}
+
+
+def _spotle_continent(country):
+    """Continent for a lowercase ISO country code, or 'unknown'.
+
+    Ports the game's q() (same `Ie` table).
+    """
+    cc = str(country or "").upper()
+    for cont, codes in SPOTLE_CONTINENTS.items():
+        if cc in codes:
+            return cont
+    return "unknown"
+
+
+def spotle_compare(guess, mystery):
+    """(debut, group, rank, gender, genre, country) statuses.
+
+    Each is "correct" / "close" / "miss", porting the game's own ee():
+    debut close iff |year diff| < 6; rank close iff |rank diff| < 51;
+    country close iff same continent (different country); group /
+    gender / genre have NO close state (correct or miss only).
+    `guess` / `mystery` are artist dicts with debut_album_year,
+    group_size, listener_rank, gender, genre, country.
+    """
+    def _num(x):
+        try:
+            return int(x)
+        except Exception:
+            return None
+    gy, my = _num(guess.get("debut_album_year")), _num(mystery.get("debut_album_year"))
+    gr, mr = _num(guess.get("listener_rank")), _num(mystery.get("listener_rank"))
+    if gy is None or my is None:
+        debut = "miss"
+    elif gy == my:
+        debut = "correct"
+    elif abs(gy - my) < 6:
+        debut = "close"
+    else:
+        debut = "miss"
+    group = ("correct" if str(guess.get("group_size")) == str(mystery.get("group_size"))
+             else "miss")
+    if gr is None or mr is None:
+        rank = "miss"
+    elif gr == mr:
+        rank = "correct"
+    elif abs(gr - mr) < 51:
+        rank = "close"
+    else:
+        rank = "miss"
+    gender = ("correct" if str(guess.get("gender")) == str(mystery.get("gender"))
+              else "miss")
+    genre = ("correct" if str(guess.get("genre")) == str(mystery.get("genre"))
+             else "miss")
+    gc, mc = str(guess.get("country") or ""), str(mystery.get("country") or "")
+    if gc == mc:
+        country = "correct"
+    elif _spotle_continent(gc) == _spotle_continent(mc) and _spotle_continent(gc) != "unknown":
+        country = "close"
+    else:
+        country = "miss"
+    return (debut, group, rank, gender, genre, country)
+
+
+def spotle_arrows(guess, mystery):
+    """(debut_arrow, rank_arrow) — "up" / "down" / None.
+
+    Ports the GameInfo arrow rules: debut guess > mystery -> "down"
+    (mystery earlier); debut guess < mystery -> "up" (mystery later).
+    Rank is inverted (lower number = more popular): guess rank > mystery
+    -> "up" (mystery more popular); guess rank < mystery -> "down".
+    Equal -> None (no arrow, tile is correct).
+    """
+    def _num(x):
+        try:
+            return int(x)
+        except Exception:
+            return None
+    gy, my = _num(guess.get("debut_album_year")), _num(mystery.get("debut_album_year"))
+    gr, mr = _num(guess.get("listener_rank")), _num(mystery.get("listener_rank"))
+    debut = None if gy is None or my is None or gy == my else ("down" if gy > my else "up")
+    rank = None if gr is None or mr is None or gr == mr else ("up" if gr > mr else "down")
+    return (debut, rank)
+
+
+def spotle_consistent(cand, guess, statuses, arrows):
+    """True when candidate `cand` could be the mystery given one guess's
+    observed feedback (6 statuses + 2 arrows).
+
+    Exact constraint model from the RE note §7: close+arrow brackets the
+    mystery into a 5-year / 50-rank window on the arrow's side;
+    miss+arrow pushes it outside that window on the arrow's side;
+    country close = same continent AND different country.
+    """
+    try:
+        debut, group, rank, gender, genre, country = statuses
+        d_arrow, r_arrow = arrows
+        g_year = int(guess.get("debut_album_year"))
+        c_year = int(cand.get("debut_album_year"))
+        g_rank = int(guess.get("listener_rank"))
+        c_rank = int(cand.get("listener_rank"))
+    except Exception:
+        return False
+    # debut year
+    if debut == "correct" and c_year != g_year:
+        return False
+    if debut == "close":
+        if d_arrow == "down" and not (g_year - 5 <= c_year <= g_year - 1):
+            return False
+        if d_arrow == "up" and not (g_year + 1 <= c_year <= g_year + 5):
+            return False
+        if d_arrow is None and abs(c_year - g_year) >= 6:
+            return False
+    if debut == "miss":
+        if abs(c_year - g_year) < 6:
+            return False
+        if d_arrow == "down" and not (c_year <= g_year - 6):
+            return False
+        if d_arrow == "up" and not (c_year >= g_year + 6):
+            return False
+    # group size
+    if group == "correct" and str(cand.get("group_size")) != str(guess.get("group_size")):
+        return False
+    if group == "miss" and str(cand.get("group_size")) == str(guess.get("group_size")):
+        return False
+    # listener rank
+    if rank == "correct" and c_rank != g_rank:
+        return False
+    if rank == "close":
+        if r_arrow == "up" and not (g_rank - 50 <= c_rank <= g_rank - 1):
+            return False
+        if r_arrow == "down" and not (g_rank + 1 <= c_rank <= g_rank + 50):
+            return False
+        if r_arrow is None and abs(c_rank - g_rank) >= 51:
+            return False
+    if rank == "miss":
+        if abs(c_rank - g_rank) < 51:
+            return False
+        if r_arrow == "up" and not (c_rank <= g_rank - 51):
+            return False
+        if r_arrow == "down" and not (c_rank >= g_rank + 51):
+            return False
+    # gender / genre
+    if gender == "correct" and str(cand.get("gender")) != str(guess.get("gender")):
+        return False
+    if gender == "miss" and str(cand.get("gender")) == str(guess.get("gender")):
+        return False
+    if genre == "correct" and str(cand.get("genre")) != str(guess.get("genre")):
+        return False
+    if genre == "miss" and str(cand.get("genre")) == str(guess.get("genre")):
+        return False
+    # country
+    if country == "correct" and str(cand.get("country")) != str(guess.get("country")):
+        return False
+    if country == "close":
+        if str(cand.get("country")) == str(guess.get("country")):
+            return False
+        if _spotle_continent(cand.get("country")) != _spotle_continent(guess.get("country")):
+            return False
+    if country == "miss" and _spotle_continent(cand.get("country")) == _spotle_continent(guess.get("country")):
+        return False
+    return True
+
+
+def spotle_filter_pool(pool, history):
+    """Pool survivors after applying every (guess, statuses, arrows) in
+    `history`. `history` entries are dicts with keys guess / statuses /
+    arrows. Returns the filtered list (order preserved).
+    """
+    out = list(pool or [])
+    for h in history or []:
+        g, st, ar = h.get("guess"), h.get("statuses"), h.get("arrows")
+        if g is None or st is None or ar is None:
+            continue
+        out = [c for c in out if spotle_consistent(c, g, st, ar)]
+    return out
+
+
+def spotle_pick_next(candidates, pool, guessed_names=()):
+    """Next guess = the candidate that best splits the remaining pool.
+
+    Maximin on feedback signature: for each candidate (as a hypothetical
+    guess), partition the pool by (statuses, arrows) signature and keep
+    the candidate whose LARGEST partition is smallest (ties: lower
+    listener_rank = more popular first). Candidates already guessed are
+    excluded. Returns None when no candidate remains.
+    """
+    guessed = set(guessed_names or ())
+    cands = [c for c in (candidates or [])
+             if str(c.get("artist")) not in guessed]
+    if not cands:
+        return None
+    pool = list(pool or [])
+    if len(pool) == 1:
+        return pool[0] if str(pool[0].get("artist")) not in guessed else None
+    best, best_key = None, None
+    for cand in cands:
+        parts = {}
+        for other in pool:
+            sig = (spotle_compare(cand, other), spotle_arrows(cand, other))
+            parts[sig] = parts.get(sig, 0) + 1
+        worst = max(parts.values()) if parts else 0
+        try:
+            rank = int(cand.get("listener_rank", 10 ** 9))
+        except Exception:
+            rank = 10 ** 9
+        key = (worst, rank)
+        if best_key is None or key < best_key:
+            best, best_key = cand, key
+    return best
+
+
+# Date-seeded openers: well-known artists spanning eras / genres /
+# countries / group sizes, so the first guess is a real human-style
+# opener and the feedback splits the pool. The solver picks one by
+# date seed; later guesses are feedback-driven (maximin), never fixed.
+SPOTLE_OPENERS = [
+    'Taylor Swift',
+    'The Beatles',
+    'Beyoncé',
+    'Drake',
+    'Queen',
+    'Eminem',
+    'ABBA',
+    'Bad Bunny',
+    'Adele',
+    'Coldplay',
+    'Rihanna',
+    'Elton John',
+]

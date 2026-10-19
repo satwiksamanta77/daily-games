@@ -1,6 +1,7 @@
 """Local daily-answer engine — ports wordsolverx frontend /src/lib logic to Python.
 
-No network except contexto + phoodle (official/worker APIs, with failure -> None).
+No network except contexto + phoodle (official/worker APIs, with failure -> None),
+marveldle (live guess API + pick-id gate) and spotle (home-page SSR date gate).
 All date math uses the TARGET date (browser day), not host clock.
 """
 import json
@@ -1898,6 +1899,110 @@ def marveldle(d=None, mode="comics"):
     raise SystemExit(f"marveldle: no answer for {d.isoformat()}")
 
 
+# ---------- spotle ----------
+# Iteration 41: Spotle (spotle.io) — daily artist game, 1 mystery artist,
+# 10 guesses, attribute feedback (debut year, group size, listener rank,
+# gender, genre, country). The daily entry is SERVER-provided in the home
+# page SSR data (todaysDate / spotleNumber / todaysEntry) — the bot reads
+# the GAME's own served data, never an answers site.
+#
+# Numbering (PROVEN from the game's own SSR, 2026-10-19 17:56 UTC):
+#   spotleNumber 1634 == 2026-10-19.
+# CORRECTION: the wordsolverx answers page numbers Spotle #1677 for
+# 2026-10-20 — that is NOT the game's number (the game says 1634 for
+# 10/19, i.e. 1635 for 10/20). The gate MUST use the game's number.
+# Sequentiality is anchored on that ONE observed point; the verification
+# run (target 10/20, expected 1635) is the second-point test. The gate
+# checks BOTH served todaysDate == target AND served number == expected,
+# fail-closed — a mismatch defers, never solves yesterday's board.
+#
+# Day boundary (PROVEN from the game's own client source): the client
+# pins America/New_York (moment.tz default + NY-midnight countdown), so
+# the board flips at NY midnight = 04:00 UTC (EST) / 05:00 UTC (EDT) =
+# 09:30 IST (EDT) / 10:30 IST (EST). Spotle is therefore DAWN-ONLY
+# (11:30 IST, NY date == JST target); at 9pm IST the game still serves
+# the previous NY day and the gate correctly defers.
+SPOTLE_ANCHOR_DATE = date(2026, 10, 19)
+SPOTLE_ANCHOR_NUMBER = 1634
+SPOTLE_URL = "https://spotle.io"
+
+
+def spotle_number_for(d):
+    """Expected game spotleNumber for date `d` (sequential daily)."""
+    d = d or target_date()
+    return SPOTLE_ANCHOR_NUMBER + (d - SPOTLE_ANCHOR_DATE).days
+
+
+def _spotle_parse_ssr(html):
+    """(served_date, served_number, artist) from spotle.io home SSR.
+
+    Returns (None, None, None) when any field is missing/unparseable —
+    the caller treats that as fail-closed (cannot prove the board).
+    """
+    import re as _re
+    try:
+        m_date = _re.search(r'todaysDate\s*:\s*"(\d{1,2})/(\d{1,2})/(\d{4})"',
+                            html or "")
+        m_num = _re.search(r'(?<![A-Za-z])spotleNumber\s*:\s*(\d+)', html or "")
+        m_entry = _re.search(r'todaysEntry\s*:\s*\{([^}]*)\}', html or "")
+        if not (m_date and m_num and m_entry):
+            return None, None, None
+        served = date(int(m_date.group(3)), int(m_date.group(1)),
+                      int(m_date.group(2)))
+        number = int(m_num.group(1))
+        body = m_entry.group(1)
+        m_artist = _re.search(r'artist\s*:\s*"([^"]+)"', body)
+        if not m_artist:
+            return None, None, None
+        return served, number, m_artist.group(1).strip()
+    except Exception:
+        return None, None, None
+
+
+def spotle(d=None):
+    """Spotle: fail-closed date gate on the game's own SSR data.
+
+    Fetches https://spotle.io/ and requires the served todaysDate AND
+    spotleNumber to match the target. Any fetch/parse/gate failure raises
+    SystemExit so the runner DEFERS (never solves a stale board).
+    The returned artist is the game's own served entry; the solver plays
+    feedback-driven (pool + tile feedback) and never pastes it as guess 1.
+    """
+    import requests
+    d = d or target_date()
+    try:
+        r = requests.get(SPOTLE_URL, headers={
+            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                           "AppleWebKit/537.36 Chrome/120 Safari/537.36"),
+        }, timeout=30)
+        r.raise_for_status()
+        served, number, artist = _spotle_parse_ssr(r.text or "")
+    except SystemExit:
+        raise
+    except Exception as e:
+        raise SystemExit(
+            f"spotle: SSR fetch failed ({str(e)[:110]}) - cannot prove "
+            "target published, defer")
+    if served is None or number is None or not artist:
+        raise SystemExit("spotle: SSR parse failed (no todaysDate / "
+                         "spotleNumber / todaysEntry artist) - cannot prove "
+                         "target published, defer")
+    want_number = spotle_number_for(d)
+    if served != d:
+        raise SystemExit(
+            f"spotle: served {served.isoformat()} != target {d.isoformat()} "
+            f"(not published yet / stale, defer)")
+    if number != want_number:
+        raise SystemExit(
+            f"spotle: served number {number} != expected {want_number} "
+            f"for {d.isoformat()} (stale board, defer)")
+    print(f"[spotle] date gate PASS: served={served.isoformat()} "
+          f"number={number} artist={artist!r}")
+    return {"answer": artist, "number": number,
+            "served_date": served.isoformat(), "date": d.isoformat(),
+            "via": "spotle.io SSR"}
+
+
 # Registry so tooling (verify_solver.py, audits) can drive every game by id
 # without duplicating the id -> function mapping that runner.py also maintains.
 ANSWER_FNS = {
@@ -1916,6 +2021,7 @@ ANSWER_FNS = {
     "phrazle": phrazle,
     "searchle": searchle,
     "semantle": semantle,
+    "spotle": spotle,
     "waffle": waffle,
     "worgle": worgle,
     "worldle": worldle,

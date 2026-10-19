@@ -57,6 +57,8 @@ DEFAULT_CROSS_LINKS = [
      "https://wordsolverx.com/marveldle-answer-today"),
     ("Nerdle Answer Today",
      "https://wordsolverx.com/nerdle-answer-today"),
+    ("Spotle Answer Today",
+     "https://wordsolverx.com/spotle-answer-today"),
 ]
 
 

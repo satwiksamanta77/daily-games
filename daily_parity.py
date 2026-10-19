@@ -34,7 +34,7 @@ TILE_G, TILE_Y, TILE_X = (46, 204, 113), (255, 205, 0), (68, 78, 92)
 # failure, so generate_facts drops that stat for these games (same
 # treatment as Waffle with no extra_stat). Compared lower-cased
 # against the display game name passed to generate_facts.
-_ATTRIBUTE_WIN_GAMES = {"batterup", "marveldle", "countryle"}
+_ATTRIBUTE_WIN_GAMES = {"batterup", "marveldle", "countryle", "spotle"}
 
 
 def _fonts():

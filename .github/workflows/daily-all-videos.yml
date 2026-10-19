@@ -1849,8 +1849,109 @@ jobs:
           git diff --cached --quiet || git commit -m "db: marveldle $(date -u +%F)"
           for i in 1 2 3 4 5 6 7 8; do git pull --rebase -X theirs --autostash 2>/dev/null && git push 2>/dev/null && break; git rebase --abort 2>/dev/null; sleep 6; done || true
 
+  batch-b-spotle:
+    name: batch-b (spotle)
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Workflow-honesty (fix-loop iter 10): game selection lives at the
+    # JOB level. A job whose game is not selected shows SKIPPED,
+    # never Success. The old step-level skip + always() upload/commit
+    # let unselected jobs report green with zero work (hollow-green).
+    # schedule-triggered runs always run (event_name clause).
+    # Iteration 41: Spotle. In scheduled batches Spotle is dawn-only
+    # (NY-midnight flip); this ALL job covers it on manual FULL runs.
+    # The SSR gate defers when the served board is not the target's.
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.game || '') == '' || inputs.game == 'spotle' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+      - name: Install deps
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg xvfb
+          python -m pip install --upgrade pip
+          pip install --prefer-binary -r requirements.txt
+          python -m playwright install --with-deps chromium
+          npm init -y >/dev/null 2>&1 || true
+          npm install --no-save seedrandom 2>&1 | tail -1 || true
+      - name: Run game (fails on unsolved - saves artifact)
+        id: run-game
+        env:
+          HEADLESS: 'true'
+          TZ_OFFSET_MINUTES: '540'
+          BROWSER_TZ: 'Pacific/Kiritimati'
+          CURSOR_OVERLAY: 'off'
+          FORCE_REGENERATE: ${{ inputs.force }}
+        run: |
+          if [ -n "${{ inputs.date }}" ]; then export FAKE_DATE_ISO="${{ inputs.date }}T00:05:00"; echo "PINNED DATE $FAKE_DATE_ISO"; fi
+          RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ] || [ "$1" = "betweenle" ]; then
+            HEADLESS=false xvfb-run -a python -u runner.py --game "$1";
+          else python -u runner.py --game "$1"; fi; }
+          RUN spotle
+      - name: Verify game produced output (fail on zero work)
+        id: verify-output
+        # Runs only when Run game SUCCEEDED (default success() condition).
+        # If Run game failed (unsolved), this step is skipped and the job
+        # stays failed while Upload still ships the failure artifact.
+        # A no-duplicate skip (result.json skipped=true, no fresh video)
+        # is legitimate auditable work and passes. Anything else with no
+        # result.json, or a fresh attempt with no video, FAILS the job.
+        run: |
+          python - <<'PYEOF'
+          import json, pathlib, sys
+          d = pathlib.Path("videos/spotle")
+          res = d / "result.json"
+          if not res.is_file():
+              print(f"::error::Run game produced no result.json in {d} (zero auditable work)")
+              sys.exit(1)
+          try:
+              r = json.loads(res.read_text())
+          except Exception as e:
+              print(f"::error::result.json in {d} is not valid JSON: {e}")
+              sys.exit(1)
+          if r.get("skipped") is True:
+              print(f"verify-output: legit no-duplicate skip (evidence={r.get('evidence')})")
+              sys.exit(0)
+          if not list(d.glob("*.mp4")):
+              print(f"::error::Run game produced no video artifact in {d} (fresh attempt, no .mp4)")
+              sys.exit(1)
+          print(f"verify-output: result.json + video present in {d}")
+          PYEOF
+      - name: Upload video artifact
+        if: ${{ always() && steps.run-game.outcome != 'skipped' && steps.verify-output.outcome != 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-spotle
+          path: |
+            videos/spotle/*.mp4
+            videos/spotle/*.log
+            videos/spotle/qc_*.json
+            videos/spotle/telemetry_*.json
+            videos/spotle/result.json
+            videos/spotle/stall_*.png
+            videos/spotle/shot_win.png
+            videos/spotle/seo.json
+            videos/spotle/thumb.png
+            videos/spotle/captions.srt
+            videos/spotle/board_*.png
+          retention-days: 7
+          if-no-files-found: error
+      - name: Commit database record
+        if: ${{ always() && steps.run-game.outcome != 'skipped' && steps.verify-output.outcome != 'failure' }}
+        run: |
+          git config user.name "video-bot"
+          git config user.email "video-bot@users.noreply.github.com"
+          git add database/ browser_state.json || true
+          git diff --cached --quiet || git commit -m "db: spotle $(date -u +%F)"
+          for i in 1 2 3 4 5 6 7 8; do git pull --rebase -X theirs --autostash 2>/dev/null && git push 2>/dev/null && break; git rebase --abort 2>/dev/null; sleep 6; done || true
+
   bundle:
-    needs: [batch-a-betweenle, batch-a-colordle, batch-a-colorfle, batch-a-framed, batch-a-searchle, batch-a-phrazle, batch-a-phoodle, batch-a-contexto, batch-a-semantle, batch-a-worldle, batch-a-worgle, batch-a-countryle, batch-a-nerdle, batch-b-waffle, batch-b-canuckle, batch-b-globle, batch-b-batterup, batch-b-marveldle]
+    needs: [batch-a-betweenle, batch-a-colordle, batch-a-colorfle, batch-a-framed, batch-a-searchle, batch-a-phrazle, batch-a-phoodle, batch-a-contexto, batch-a-semantle, batch-a-worldle, batch-a-worgle, batch-a-countryle, batch-a-nerdle, batch-b-waffle, batch-b-canuckle, batch-b-globle, batch-b-batterup, batch-b-marveldle, batch-b-spotle]
     runs-on: ubuntu-latest
     if: always()
     steps:

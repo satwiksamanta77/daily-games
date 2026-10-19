@@ -152,11 +152,12 @@ class TestSEOBuilders(unittest.TestCase):
         self.assertIn("00:00:00,000 --> 00:01:00,000", srt)
         self.assertIn("Intro - Betweenle October 19, 2026", srt)
 
-    def test_default_cross_links_18_games(self):
-        self.assertEqual(len(SEO.DEFAULT_CROSS_LINKS), 18)
+    def test_default_cross_links_19_games(self):
+        self.assertEqual(len(SEO.DEFAULT_CROSS_LINKS), 19)
         urls = [u for _, u in SEO.DEFAULT_CROSS_LINKS]
         self.assertIn("https://wordsolverx.com/nerdle-answer-today", urls)
-        self.assertEqual(len(set(urls)), 18)
+        self.assertIn("https://wordsolverx.com/spotle-answer-today", urls)
+        self.assertEqual(len(set(urls)), 19)
 
 
 # ---------------------------------------------------------------- gate
@@ -214,7 +215,8 @@ class TestPublishGate(unittest.TestCase):
 
     def test_cross_links_exclude_self(self):
         links = R._cross_links("betweenle")
-        self.assertEqual(len(links), 17)
+        # 19 cross-links total minus self.
+        self.assertEqual(len(links), 18)
         self.assertNotIn("betweenle-answer-today",
                          [u for _, u in links])
         self.assertIn("https://wordsolverx.com/nerdle-answer-today",
