@@ -277,7 +277,14 @@ def _write_preliminary_result(gid, date_key, solved, evidence, video=None,
              "video": str(video) if video else None,
              "guesses": ([str(x) for x in _PLAYED[gid]]
                          if _PLAYED.get(gid) else []),
-             "qc": {"pending": True}}, indent=1), encoding="utf-8")
+             "qc": {"pending": True},
+             # Iteration 37: every result.json carries the publish
+             # contract, including defers/crashes (published=False
+             # with a reason, never a missing field).
+             **{k: _empty_publish(
+                 "not published (run did not produce a publishable "
+                 "video)").get(k) for k in PUBLISH_FIELDS}}, indent=1),
+            encoding="utf-8")
         _dbg(gid, f"preliminary result.json written "
                   f"(solved={bool(solved)}, qc=pending)")
     except Exception as e:
@@ -23003,7 +23010,13 @@ def run_one(gid):
         _db_save(date_key, gid, {"game": gid, "date": date_key,
                                  "solved": False,
                                  "evidence": f"answer unavailable: {e}",
-                                 "video": None})
+                                 "video": None,
+                                 # Iteration 37: defer records carry the
+                                 # publish contract too (unpublished).
+                                 **{k: _empty_publish(
+                                     "not published (defer: answer "
+                                     "unavailable)").get(k)
+                                     for k in PUBLISH_FIELDS}})
         return {"game": gid, "solved": False, "video": None,
                 "evidence": f"answer unavailable: {e}"}
     aval = ans.get("answer") or ans.get("name") or str(ans.get("colors"))
