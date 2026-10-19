@@ -5,15 +5,87 @@
  "evidence": "win banner You found the COUNTRYLE (picked 'ANDORRA')",
  "answer": "Andorra",
  "video": "/home/runner/work/daily-games/daily-games/videos/countryle/countryle_final_2026-10-20.mp4",
- "published": false,
- "youtube_video_id": null,
- "youtube_url": null,
- "published_at": null,
- "publish_attempts": 0,
- "last_publish_error": "publish gate off (YOUTUBE_PUBLISH not truthy)",
- "enrichment": {},
- "enrichment_deferred": [],
- "quota_estimate": {},
+ "published": true,
+ "youtube_video_id": "1WhO-sUucME",
+ "youtube_url": "https://www.youtube.com/watch?v=1WhO-sUucME",
+ "published_at": "2026-10-19T16:46:03Z",
+ "publish_attempts": 1,
+ "last_publish_error": null,
+ "enrichment": {
+  "thumbnail": {
+   "status": "done",
+   "reason": "",
+   "cost": 50
+  },
+  "playlist": {
+   "status": "skipped",
+   "reason": "upload-only scopes (token granted youtube.upload only; playlists need youtube scope \u2014 re-consent with full scopes to enable)",
+   "cost": 0
+  },
+  "comment": {
+   "status": "skipped",
+   "reason": "upload-only scopes (token granted youtube.upload only; playlists need youtube scope \u2014 re-consent with full scopes to enable)",
+   "cost": 0
+  },
+  "captions": {
+   "status": "deferred",
+   "reason": "captions upload returned failure",
+   "cost": 0
+  }
+ },
+ "enrichment_deferred": [
+  "captions"
+ ],
+ "quota_estimate": {
+  "upload_calls": 1,
+  "general_units_estimated": 50
+ },
  "shorts_video_id": null,
- "enrichment_context": {}
+ "enrichment_context": {
+  "comment_text": "What was your first guess today? \ud83e\udd14\n\ud83d\udfe9 = got it    \ud83d\udfe8 = close    \u2b1b = stumped\n\n\u23f1\ufe0f Chapters:\n0:00 Intro\n0:20 Today's Countryle puzzle\n0:25 Hints before the solve\n0:35 Full solve (4 guesses)\n1:14 Answer & deduction path\n1:22 Solve breakdown\n1:30 Tomorrow's puzzle\nCountryle answer archive: https://wordsolverx.com/countryle-answer-today\n\n\ud83d\udd14 Subscribe for a new Countryle answer every day!",
+  "playlist_titles": [
+   [
+    "Countryle Answers \u2014 October 2026",
+    "Daily Countryle solution videos for October 2026."
+   ],
+   [
+    "Countryle Answers \u2014 2026",
+    "All daily Countryle solution videos from 2026."
+   ]
+  ],
+  "duration_s": 95.03,
+  "date_str": "October 20, 2026",
+  "game": "Countryle",
+  "chapters": [
+   [
+    0,
+    "Intro"
+   ],
+   [
+    20.0,
+    "Today's Countryle puzzle"
+   ],
+   [
+    25.0,
+    "Hints before the solve"
+   ],
+   [
+    35.0,
+    "Full solve (4 guesses)"
+   ],
+   [
+    74.0,
+    "Answer & deduction path"
+   ],
+   [
+    82.0,
+    "Solve breakdown"
+   ],
+   [
+    90.0,
+    "Tomorrow's puzzle"
+   ]
+  ],
+  "thumbnail_path": "/home/runner/work/daily-games/daily-games/videos/countryle/thumb.png"
+ }
 }
