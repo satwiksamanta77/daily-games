@@ -6800,9 +6800,160 @@ def _s_wordle(page, ans, gid):
     return solve_wordle_like(page, ans, _guesses(gid, ans))
 
 
+# ---------------- Searchle: verified guess acceptance (iter 38) ----
+# Run 39279697490 root cause (NOT the win detector): the bot typed
+# MOCKTAIL, the game REJECTED it (not in its valid-word list `ec`:
+# jiggle + "Word not found", guess not submitted, row stays stuck),
+# and the bot typed ACCURATE + DOLPHINS into the still-full row, so
+# nothing ever submitted and the win check correctly found no win.
+# The old path (solve_keyboard_game -> _play_guesses) assumed every
+# typed guess lands and never verified. The Searchle loop below
+# verifies each guess against the board itself and recovers from a
+# rejection: clear the stuck row, record the word rejected, play the
+# next planned guess. The final guess is always the verified answer,
+# which the game accepts via its `guess === solution` bypass.
+#
+# Board shape (Searchle bundle main.js): the grid is 6 rows x N
+# cells; each cell is a div whose class carries absent/correct/present
+# once scored, and whose child div.letter-container holds the letter.
+# A submitted row shows its letters WITH a status class on every
+# cell; the current (unsubmitted) row shows letters with NO status
+# class. Grouping is by the solution length (the grid's column
+# count equals the answer length).
+
+def _searchle_board_rows(page, n):
+    """Read the Searchle grid: [{letters, scored}] per row, or [] when
+    the probe fails. Pure probe (no clicks)."""
+    try:
+        return page.evaluate("""(n) => {
+          const cells = Array.from(
+            document.querySelectorAll('.letter-container'));
+          const rows = [];
+          for (let i = 0; i + n <= cells.length; i += n) {
+            const chunk = cells.slice(i, i + n);
+            const letters = chunk.map(
+              c => (c.textContent || '').trim()).join('');
+            const scored = chunk.every(c => {
+              const cls = (c.parentElement &&
+                c.parentElement.className) || '';
+              return /\\b(absent|correct|present)\\b/.test(cls);
+            });
+            rows.push({letters: letters, scored: scored});
+          }
+          return rows;
+        }""", int(n)) or []
+    except Exception:
+        return []
+
+
+def _searchle_guess_accepted(page, guess, n, polls=3):
+    """Did the game accept `guess`? True = a scored row shows the
+    guess; False = the guess sits in an unscored row (rejected:
+    "Word not found") or never landed at all; None = the probe saw
+    no rows (inconclusive — caller keeps the legacy assume-accepted
+    behaviour rather than clearing a row it cannot see). Polls up
+    to `polls` times because the tile reveal is staggered: a just
+    submitted row can read unscored on the first poll."""
+    g = str(guess or "").upper()
+    for attempt in range(max(1, int(polls))):
+        rows = _searchle_board_rows(page, n)
+        if not rows:
+            return None
+        for r in rows:
+            if str(r.get("letters") or "").upper() == g:
+                if r.get("scored"):
+                    return True
+                # Unscored row holding the guess: still revealing, or
+                # rejected. One more poll tells them apart.
+                break
+        else:
+            # No row shows the guess at all: it never landed (row
+            # was full with a stuck word, or typing failed). The
+            # letters cannot appear later, so no polling helps.
+            return False
+        if attempt + 1 < max(1, int(polls)):
+            try:
+                page.wait_for_timeout(1000)
+            except Exception:
+                pass
+    # Still unscored after all polls: rejected, not revealing.
+    return False
+
+
+def _searchle_clear_row(page, n):
+    """Delete the current row's letters (recovery after a rejection).
+    On-screen Delete clicks first (same mechanism as typing);
+    physical Backspace fallback. No verification here — the next
+    guess's acceptance probe covers a failed clear."""
+    done = 0
+    try:
+        kb = _on_screen_keyboard(page)
+        if kb is not None:
+            for _ in range(max(0, int(n))):
+                try:
+                    kb.evaluate(
+                        "m => m['__DEL__'] && m['__DEL__'].click()")
+                    done += 1
+                except Exception:
+                    break
+                page.wait_for_timeout(120)
+    except Exception:
+        pass
+    if done < max(0, int(n)):
+        try:
+            for _ in range(max(0, int(n)) - done):
+                page.keyboard.press("Backspace")
+                page.wait_for_timeout(120)
+        except Exception:
+            pass
+
+
 def _s_searchle(page, ans, gid):
     _close_modals(page)
-    return solve_keyboard_game(page, ans, guesses=_guesses(gid, ans))
+    plan = _guesses(gid, ans) or []
+    if not plan:
+        return False, "no Searchle plan"
+    accepted, rejected = [], []
+    n = len(str(ans or "")) or 5
+    for i, g in enumerate(plan):
+        _dismiss_login_wall(page)
+        _idle_drift(page)
+        _kb(page, str(g), delay=120)
+        _settle(page, base=2600)
+        try:
+            _rows = _searchle_board_rows(page, n)
+            _dbg(getattr(page, "_qp_gid", "searchle"),
+                 f"board after guess {i + 1}: "
+                 f"{[(r.get('letters'), r.get('scored')) for r in _rows]}")
+        except Exception:
+            pass
+        verdict = _searchle_guess_accepted(page, g, n)
+        if verdict is True:
+            accepted.append(g)
+        elif verdict is False:
+            _dbg(getattr(page, "_qp_gid", "searchle"),
+                 f"searchle guess {str(g)!r} REJECTED by game "
+                 f"(row stuck / never landed) — clearing row, "
+                 f"playing next planned guess")
+            rejected.append(g)
+            _searchle_clear_row(page, n)
+        else:
+            # Probe inconclusive (no rows seen): keep the legacy
+            # assume-accepted behaviour; never clear a row we
+            # cannot see.
+            _dbg(getattr(page, "_qp_gid", "searchle"),
+                 f"searchle guess {str(g)!r}: board probe "
+                 f"inconclusive, assuming accepted")
+            accepted.append(g)
+    _PLAYED[gid] = list(accepted)
+    _REJECTED[gid] = list(rejected)
+    # Phoodle reveals its cells with a staggered animation; the same
+    # settle applies before the strict win check here.
+    page.wait_for_timeout(4000)
+    _enable_flutter_semantics(page)
+    ok, ev = _strict_win(page, ans)
+    return ok, (ev if ok else f"{ev} (typed {accepted}, "
+                              f"rejected {rejected})")
 
 
 def _type_country_guess(page, scope, country):
@@ -14077,10 +14228,29 @@ def _s_worldle_play_language(page, gid, day):
         return "skipped", [], \
             f"language round needs exactly 2 languages, have {len(codes)}"
     try:
-        names = page.evaluate("""(codes) => codes.map(c => {
-          try { return new Intl.DisplayNames(['en'], {type: 'language'})
-            .of(c); } catch (e) { return null; }
-        })""", codes) or []
+        # Fix-loop iter 38: PRIMARY name source = the game's own
+        # common/languages.json names.en (day["language_names"], built
+        # in answers.worldle_all_modes) — the exact strings the game
+        # renders on its option buttons. Intl.DisplayNames in-page is
+        # only a per-code fallback: ICU has NO display name for some
+        # codes (verified: DisplayNames.of('acf') returns 'acf'), and
+        # the old code skipped the WHOLE mode when any code failed
+        # (run 39279697490: acf unresolvable, although both correct
+        # options — 'Saint Lucian Creole', 'English' — were on screen).
+        _game_names = day.get("language_names") or {}
+        names = []
+        for _c in codes:
+            _n = _game_names.get(_c)
+            if not _n:
+                try:
+                    _n = page.evaluate(
+                        """(c) => { try { return new """
+                        """Intl.DisplayNames(['en'], """
+                        """{type: 'language'}).of(c); } """
+                        """catch (e) { return null; } }""", _c)
+                except Exception:
+                    _n = None
+            names.append(_n)
     except Exception:
         names = []
     # Intl.DisplayNames returns the raw code for languages missing from
@@ -14105,8 +14275,9 @@ def _s_worldle_play_language(page, gid, day):
     if len(names) != 2 or not all(names):
         dump = _s_worldle_dom_dump(page, gid, "spokenLanguages")
         return "skipped", [], \
-            "language display names not resolvable via Intl.DisplayNames " \
-            f"in-page for {codes} (DOM dump logged)"
+            "language display names not resolvable (game languages.json "\
+            "names.en + Intl.DisplayNames + fallback table) " \
+            f"for {codes} (DOM dump logged)"
     opts = _s_worldle_visible_options(page)
     _dbg(gid, "worldle language: codes=" + str(codes)
          + " displayNames=" + str(names)
@@ -14508,46 +14679,86 @@ def _s_worldle_population_bucket(page, pop):
     """Click the population bucket button containing `pop`.
 
     The Population & Currency q0 widget is BUCKET BUTTONS, not a
-    numeric input. Parse each button's bounds (million =
-    1_000_000) and click the bucket with low <= pop < high
-    ('< X' -> high=X; 'X+ ...' -> low=X, no high). Thresholds
-    are DYNAMIC per country — parse the live button texts,
-    never hardcode them (Canada: '< 15 / 15-25 / 25-35 / 35+
-    million'; Kuwait: '< 3 / 3-5 / 5-8 / 8+ million').
-    Returns the clicked button text or None.
-    Iter-35: the open-ended branch used to test for a trailing
-    '+', but the live top bucket is '35+ million' (the '+' is
-    mid-string), so no top-bucket population ever matched and
-    the mode failed with 'population input not found'. The
-    branch now tests for '+' anywhere in the text."""
+    numeric input. Parse each button's bounds and click the bucket
+    with low <= pop < high ('< X' -> high=X; 'X+ ...' -> low=X, no
+    high). Thresholds are DYNAMIC per country \u2014 parse the live
+    button texts, never hardcode them (Canada: '< 15 / 15-25 / 25-35
+    / 35+ million'; Saint Lucia: '< 50 thousand / 50-500 thousand /
+    500k-1 million / 1+ million'). Returns the clicked button text
+    or None.
+
+    Iter-35: the open-ended branch used to test for a trailing '+',
+    but the live top bucket is '35+ million' (the '+' is mid-string),
+    so no top-bucket population ever matched. The branch now tests
+    for '+' anywhere in the text.
+
+    Iter-38 (run 39279697490, Saint Lucia pop 184,100): TWO bugs
+    compounded and the bot clicked '1+ million' (wrong \u2014 184,100
+    is in '50 - 500 thousand'):
+    (1) the button filter required /million/i, so thousand-only
+    buckets ('< 50 thousand', '50 - 500 thousand') were never even
+    considered \u2014 the correct bucket was invisible to the picker;
+    (2) the open-ended branch parsed ONLY the pre-'+' part
+    (parse('1') = 1, the 'million' unit was lost), so ANY population
+    >= 1 matched '1+ million'. The range branch had the same
+    detached-unit flaw (parse('15') = 15 for '15-25 million').
+    Fix: parse every number WITH its own unit (thousand/million/
+    billion/k/M), falling back to the button's unit when a part
+    carries none, and consider every button that parses as a bucket
+    (no /million/ gate).
+    """
     try:
         hit = page.evaluate("""(num) => {
           const vis = e => e && e.offsetParent !== null;
-          const parse = s => {
-            const m = (s||'').replace(/[,\\s]/g,'').match(/([\\d.]+)/);
+          // Unit multiplier for a text fragment: million/billion/
+          // thousand words, or an attached k/M suffix. Falls back
+          // to `fb` (the button's dominant unit) when the fragment
+          // carries no unit of its own.
+          const unitOf = (s, fb) => {
+            const t = (s || '');
+            if (/billion/i.test(t)) return 1000000000;
+            if (/million/i.test(t)) return 1000000;
+            if (/thousand/i.test(t)) return 1000;
+            const digits = t.replace(/[^0-9kKmM.]/g, '');
+            if (/[kK]$/.test(digits)) return 1000;
+            if (/M$/.test(digits)) return 1000000;
+            return fb || 1;
+          };
+          const parseNum = (part, fb) => {
+            const m = (part || '').replace(/[$,]/g, '')
+              .match(/([\\d.]+)/);
             if (!m) return null;
-            let v = parseFloat(m[1]);
-            if (/million/i.test(s)) v *= 1000000;
-            else if (/[kK]/.test(s)) v *= 1000;
-            return v;
+            return parseFloat(m[1]) * unitOf(part, fb);
+          };
+          // Parse a button's full text into [lo, hi] (hi null =
+          // open-ended), or null when it is not a bucket button.
+          const bucketOf = t => {
+            const u = unitOf(t, 1);
+            if (/^\\s*</.test(t)) {
+              const hi = parseNum(t.slice(1), u);
+              return hi === null ? null : [0, hi];
+            }
+            if (t.includes('+')) {
+              const lo = parseNum(t.split('+')[0], u);
+              return lo === null ? null : [lo, null];
+            }
+            if (t.includes('-')) {
+              const parts = t.split('-');
+              const lo = parseNum(parts[0], u);
+              const hi = parseNum(parts[1], u);
+              if (lo === null || hi === null) return null;
+              return [lo, hi];
+            }
+            return null;
           };
           const els = Array.from(document.querySelectorAll('button'))
             .filter(vis).filter(e => !e.closest('nav, header, footer'));
           for (const e of els) {
             const t = (e.innerText || '').trim();
-            if (!/million/i.test(t)) continue;
-            if (t.startsWith('<')) {
-              const hi = parse(t.slice(1));
-              if (hi !== null && num < hi) { e.click(); return t; }
-            } else if (t.includes('+')) {
-              const lo = parse(t.split('+')[0]);
-              if (lo !== null && num >= lo) { e.click(); return t; }
-            } else if (t.includes('-')) {
-              const parts = t.split('-');
-              const lo = parse(parts[0]), hi = parse(parts[1]);
-              if (lo !== null && hi !== null && num >= lo && num < hi) {
-                e.click(); return t;
-              }
+            const b = bucketOf(t);
+            if (!b) continue;
+            if (num >= b[0] && (b[1] === null || num < b[1])) {
+              e.click(); return t;
             }
           }
           return null;
@@ -14664,6 +14875,11 @@ def _worldle_populous_probe(page, want):
     each slot label is TWO separate leaves side by side — a
     rank-numeral leaf ("1.") + a bucket leaf ("3M") — reading
     "1. 3M" but with NO single leaf carrying the full text.
+    Iter-38: the bucket unit is M only for large-city boards; small-
+    city boards use K ("1. 20K", "2. 13K", "3. 8K", "4. 5K" —
+    run 39279697490, Saint Lucia), so the bucket matcher must
+    accept K as well as M, and the slot label must carry the
+    matched unit (a K slot labeled "20M" would be a lie).
     That is why BOTH the iter-35 probe (single-leaf regex
     /^(\\d+)\\.\\s*(\\d+)\\s*M$/) and a bucket-only probe fail
     in production: the first matches no leaf at all, the
@@ -14717,8 +14933,9 @@ def _worldle_populous_probe(page, want):
               ranks.push({rank: parseInt(rm[1], 10), ...rec});
               continue;
             }
-            const bm = t.match(/^(\\d+(?:\\.\\d+)?)\\s*M$/);
-            if (bm) buckets.push({bucket: bm[1], ...rec});
+            const bm = t.match(/^(\\d+(?:\\.\\d+)?)\\s*([KM])$/i);
+            if (bm) buckets.push({bucket: bm[1] + bm[2].toUpperCase(),
+                                   ...rec});
           }
           // Pair each rank leaf with the bucket leaf on its row:
           // bucket centre within ~30px vertically, bucket just
@@ -14772,7 +14989,7 @@ def _worldle_populous_probe(page, want):
               if (gap < -2 || gap > 120) continue;
               const t = (e.innerText || '').trim();
               if (t.length > 2) continue;
-              if (/^\\d+(\\.\\d+)?\\s*M$/.test(t)) continue;
+              if (/^\\d+(\\.\\d+)?\\s*[KM]$/i.test(t)) continue;
               if (/^\\d+\\.$/.test(t)) continue;
               if (gap < bestGap) {
                 bestGap = gap;
@@ -14780,7 +14997,7 @@ def _worldle_populous_probe(page, want):
               }
             }
             slots.push({rank: pr.rank,
-                        label: pr.rank + '. ' + pr.bucket + 'M',
+                        label: pr.rank + '. ' + pr.bucket,
                         x: best ? best.x : pr.cx,
                         y: best ? best.y : pr.cy,
                         pill: !!best});

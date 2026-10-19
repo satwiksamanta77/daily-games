@@ -278,6 +278,41 @@ def words_canuckle():
     return _cache["canuckle"]
 
 
+# Searchle bank words the GAME ITSELF rejects (fix-loop iter 38).
+# The game validates every submitted guess against its own valid-word
+# list `ec` (Searchle bundle main.js, 285,544 words): on Enter it runs
+# `we && !ec.includes(guess) && guess !== solution` -> jiggle + toast
+# "Word not found", the guess is NOT submitted and the row stays stuck
+# on it. allsearches.json contributes words that are NOT in `ec`:
+# luckyGuess suggestions (fun, never validated — MOCKTAIL), plus
+# guess/answer entries (BLOGGING, FACEBOOK, YOUTUBER, ...). Derived by
+# intersecting allsearches.json (alpha-only) against `ec` from the
+# 2026-10-16 bundle; 73 words. Run 39279697490: MOCKTAIL was the
+# date-seeded opener, got rejected, and the bot typed the next two
+# guesses into the still-full row, so nothing ever submitted and the
+# win detector (correctly) reported no win. The bank is probe
+# candidates only — plan_sequence re-adds the day's answer itself, and
+# the game accepts the answer via the `guess === solution` bypass, so
+# excluding answer-words here never blocks the final guess. The
+# runtime rejection recovery in runner._s_searchle covers any future
+# drift (site updates `ec` / allsearches.json gains new words).
+_SEARCHLE_NOT_IN_GAME_DICT = frozenset([
+    "ADHD", "AI", "BBQ", "BIODEGRADABLE", "BITCOIN", "BLOG", "BLOGGING",
+    "BOREDS", "BOTOX", "CERTIFICATION", "COMMUNICATION", "CONSCIOUSNESS",
+    "CONSPIRACIES", "CRYPTOCURRENCY", "DESTINATIONS", "DNA", "EMOJI",
+    "ENCELADUS", "ENTERTAINING", "EX", "EXPATS", "FACEBOOK", "FAMILYS",
+    "GLITCHING", "HD", "HEARTWORMS", "HIJAB", "HOTSPOT", "HOUSEWARMING",
+    "INSTAGRAM", "INTELLIGENCE", "IPHONE", "LAGGY", "LASIK", "MEME",
+    "MEMES", "MICROSOFT", "MOCKTAIL", "MOJITO", "MULTIPLAYER", "NETFLIX",
+    "NUKED", "OVERPROTECTIVE", "PARVO", "PODCAST", "PODCASTING",
+    "POTATOS", "REFRIGERATOR", "RELATIONSHIP", "SCAMMER", "SHEIKAH",
+    "SNAPCHAT", "SONY", "SPAMMER", "SPOTIFY", "SPYWARE", "STRAWBERRIES",
+    "THANKSGIVING", "THUNDERSTORM", "TIKTOK", "TWERKING", "UNO",
+    "USERNAME", "VAPE", "WALMART", "WARIO", "WEBSITE", "WHATSAPP",
+    "WHITEBOARD", "WIFI", "WOOO", "YOUTUBE", "YOUTUBER",
+])
+
+
 def words_searchle():
     """Searchle: the site's own answer pool, grouped by answer length.
 
@@ -285,6 +320,12 @@ def words_searchle():
     site's own solver uses. The previous bank came from static/words.json,
     which contains ONLY 5-letter words - so for a 4-letter answer like "fight"
     the bank was empty and the planner collapsed to a single guess.
+
+    Fix-loop iter 38: the bank is filtered against the game's own
+    valid-word list (see _SEARCHLE_NOT_IN_GAME_DICT) — every probe
+    candidate must be a word the game will actually accept, or the
+    guess is rejected, the row stays stuck, and every later guess
+    types into a full row (run 39279697490: MOCKTAIL).
     """
     if "searchle" not in _cache:
         by_len = {}
@@ -296,7 +337,7 @@ def words_searchle():
             for w in ([e.get("answer")] + list(e.get("guesses") or [])
                       + [e.get("luckyGuess")]):
                 w = str(w or "").strip().upper()
-                if w.isalpha():
+                if w.isalpha() and w not in _SEARCHLE_NOT_IN_GAME_DICT:
                     by_len.setdefault(len(w), set()).add(w)
         _cache["searchle"] = {n: sorted(v) for n, v in by_len.items() if v}
     return _cache["searchle"]

@@ -863,6 +863,99 @@ def _worldle_phrase_map(languages_doc, codes):
     return out
 
 
+def _worldle_language_names_map(languages_doc, codes):
+    """{languageCode.lower(): names.en} for `codes` from the game's own
+    common/languages.json [{languageCode, names:{en,...}, phrases,
+    ...}] — the SAME doc _worldle_phrase_map reads, and the source the
+    game renders its Spoken-languages option buttons from.
+
+    Fix-loop iter 38: the solver resolved codes to display names via
+    Intl.DisplayNames in-page, but ICU has NO display name for some
+    codes (verified: DisplayNames.of('acf') returns 'acf'), and the
+    hardcoded fallback table had no entry either — so the whole mode
+    skipped even though both correct options were on screen
+    ('Saint Lucian Creole', 'English' — exactly names.en for acf/eng).
+    Using the game's own names.en removes the ICU + table dependence.
+    Pure function (unit-tested). Returns only codes present in the doc
+    with a non-empty names.en."""
+    out = {}
+    try:
+        _want = {str(x).lower() for x in (codes or [])}
+        for e in (languages_doc or []):
+            if not isinstance(e, dict):
+                continue
+            c = str(e.get("languageCode") or "").lower()
+            if c in _want:
+                v = (e.get("names") or {}).get("en") or ""
+                if v:
+                    out[c] = v
+    except Exception:
+        pass
+    return out
+
+
+def _worldle_country_bounds(code, _get):
+    """Country lat/lon bbox for the capital pinpoint (country-bbox ->
+    outline-path fit). Source: Natural Earth admin-0 GeoJSON, matched
+    on the feature's ISO_A2 property.
+
+    Fix-loop iter 38: the old code fetched ONLY ne_110m (1:110m), whose
+    177 features OMIT small island nations entirely (no LC, VC, BB,
+    GD, AG, DM, KN, ...) — so bounds was always None for those
+    countries and the pin skipped with 'projection NOT determinable'.
+    ne_50m (242 features) INCLUDES them (verified: LC lon
+    -61.073..-60.887, lat 13.718..14.093). Try 110m first (smaller,
+    faster, covers most countries), then 50m when 110m has no feature
+    for the code. `_get` is the caller's fetcher (url, required) ->
+    parsed JSON or None. Pure logic over the fetcher (unit-tested
+    with a stub fetcher). Returns {minLon, maxLon, minLat, maxLat}
+    or None."""
+    code = str(code or "").upper()
+    if not code:
+        return None
+    for _ne_url in (
+            "https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector"
+            "@master/geojson/ne_110m_admin_0_countries.geojson",
+            "https://raw.githubusercontent.com/nvkelso/"
+            "natural-earth-vector/master/geojson/"
+            "ne_110m_admin_0_countries.geojson",
+            "https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector"
+            "@master/geojson/ne_50m_admin_0_countries.geojson",
+            "https://raw.githubusercontent.com/nvkelso/"
+            "natural-earth-vector/master/geojson/"
+            "ne_50m_admin_0_countries.geojson"):
+        try:
+            _doc = _get(_ne_url, required=False)
+        except Exception:
+            continue
+        if not isinstance(_doc, dict):
+            continue
+        _lons, _lats = [], []
+        _found = False
+        for _feat in (_doc.get("features") or []):
+            _props = _feat.get("properties") or {}
+            if str(_props.get("ISO_A2") or "").upper() != code:
+                continue
+            _found = True
+            _geom = _feat.get("geometry") or {}
+
+            def _walk_coords(c):
+                if isinstance(c, (list, tuple)) and c \
+                        and isinstance(c[0], (int, float)):
+                    _lons.append(float(c[0]))
+                    _lats.append(float(c[1]))
+                elif isinstance(c, (list, tuple)):
+                    for _sub in c:
+                        _walk_coords(_sub)
+
+            _walk_coords(_geom.get("coordinates") or [])
+            break
+        if _found and _lons and _lats:
+            return {"minLon": min(_lons), "maxLon": max(_lons),
+                    "minLat": min(_lats), "maxLat": max(_lats)}
+    return None
+
+
 def worldle_all_modes(d=None):
     """Worldle ALL daily rounds, derived from the day's countryCode.
 
@@ -1102,6 +1195,12 @@ def worldle_all_modes(d=None):
     # from the game's own common/languages.json (see _worldle_phrase_map).
     phrases = _worldle_phrase_map(
         languages_doc, [x["languageCode"] for x in languages])
+    # Spoken-languages DISPLAY names (iter 38): {code.lower(): names.en}
+    # from the same doc — the source the game renders its option
+    # buttons from (Intl.DisplayNames has no name for some codes, e.g.
+    # acf, and the old fallback table missed them too).
+    language_names = _worldle_language_names_map(
+        languages_doc, [x["languageCode"] for x in languages])
 
     # Availability: the game's own removal rules (see docstring). True =
     # available; a string = removed + reason. Emblem/landmark need the live
@@ -1135,51 +1234,10 @@ def worldle_all_modes(d=None):
     # the game's country-outline SVG exposes no bounds/projection, so
     # the pin needs the country's bbox mapped onto the rendered path's
     # bbox (country-bbox -> path-bbox linear fit, Mercator latitude).
-    # Source: Natural Earth 110m admin-0 GeoJSON via jsDelivr, matched
-    # on the feature's ISO_A2 property (single fetch, no alpha-3
-    # lookup). Non-required: any fetch failure -> bounds=None and the
-    # capital pin falls back to the old behaviour (decline).
-    bounds = None
-    try:
-        _ne = None
-        for _ne_url in (
-                "https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector"
-                "@master/geojson/ne_110m_admin_0_countries.geojson",
-                "https://raw.githubusercontent.com/nvkelso/"
-                "natural-earth-vector/master/geojson/"
-                "ne_110m_admin_0_countries.geojson"):
-            try:
-                _cand = _rq.get(_ne_url, timeout=30,
-                                headers={"User-Agent": "WordSolverX Video"})
-            except Exception:
-                continue
-            if _cand.ok:
-                _ne = _cand
-                break
-        if _ne is not None and _ne.ok:
-            _lons, _lats = [], []
-            for _feat in (_ne.json().get("features") or []):
-                _props = _feat.get("properties") or {}
-                if str(_props.get("ISO_A2") or "").upper() != code:
-                    continue
-                _geom = _feat.get("geometry") or {}
-
-                def _walk_coords(c):
-                    if isinstance(c, (list, tuple)) and c \
-                            and isinstance(c[0], (int, float)):
-                        _lons.append(float(c[0]))
-                        _lats.append(float(c[1]))
-                    elif isinstance(c, (list, tuple)):
-                        for _sub in c:
-                            _walk_coords(_sub)
-
-                _walk_coords(_geom.get("coordinates") or [])
-                break
-            if _lons and _lats:
-                bounds = {"minLon": min(_lons), "maxLon": max(_lons),
-                          "minLat": min(_lats), "maxLat": max(_lats)}
-    except Exception:
-        bounds = None
+    # See _worldle_country_bounds: 110m first, 50m fallback for small
+    # island nations missing from 110m (iter 38: LC et al). Non-required:
+    # any fetch failure -> bounds=None and the capital pin declines.
+    bounds = _worldle_country_bounds(code, _get)
 
     cur = rec.get("currencyData") or {}
     return {"date": d.isoformat(), "code": code, "bounds": bounds,
@@ -1189,6 +1247,7 @@ def worldle_all_modes(d=None):
             "populous": populous, "landmark": landmark, "facts": facts,
             "languages": languages,
             "phrases": phrases,
+            "language_names": language_names,
             "gdp": {"number": rec.get("gdpPerCapita"),
                     "compare_answer": gdp_compare,
                     "compare_candidates": cands},
