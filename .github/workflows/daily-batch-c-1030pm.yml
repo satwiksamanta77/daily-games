@@ -28,6 +28,15 @@ on:
         description: 'Force re-render even if database says done (true/false)'
         required: false
         default: 'false'
+      publish:
+        description: 'Publish solved videos to YouTube (true/false). Scheduled runs publish automatically; test runs must leave this false.'
+        required: false
+        default: 'false'
+env:
+  # Iteration 37 (publish gate): scheduled runs publish automatically;
+  # manual dispatches publish only when publish=true is passed.
+  # Test/fix-loop dispatches must leave publish false.
+  YOUTUBE_PUBLISH: ${{ github.event_name == 'schedule' || (inputs.publish || '') == 'true' }}
 
 jobs:
   generate-nerdle:

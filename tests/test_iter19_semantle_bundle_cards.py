@@ -374,7 +374,11 @@ class TestCardTruncation(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
-    def test_runner_thumb_draws_full_answer(self):
+    def test_runner_thumb_draws_partial_answer_only(self):
+        # Iteration 37 REPLACED the old contract (full answer drawn on
+        # the thumbnail) with a curiosity gap: first 2 letters
+        # revealed as single-letter tiles, the rest '?'. The full
+        # answer lives in the video + description, NOT the thumbnail.
         tmp = tempfile.mkdtemp(prefix="iter19-thumb-")
         try:
             texts = []
@@ -386,10 +390,18 @@ class TestCardTruncation(unittest.TestCase):
                     R.ImageDraw, "Draw",
                     side_effect=lambda img: _RecDraw(img, texts,
                                                      real_draw)):
-                R.thumb(str(out), "Phrazle", "Oct 18, 2026", ans)
+                R.thumb(str(out), "Phrazle", "Oct 18, 2026", ans,
+                        puzzle_number=123)
             self.assertTrue(out.exists())
-            self.assertIn(ans, " ".join(texts))
+            joined = " ".join(texts)
+            self.assertNotIn(ans, joined)
             self.assertNotIn(ans[:34], texts)
+            # Curiosity-gap tiles: first 2 letters as single draws,
+            # '?' tiles for the rest.
+            self.assertIn("L", texts)
+            self.assertIn("I", texts)
+            self.assertIn("?", texts)
+            self.assertIn("#123", joined)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

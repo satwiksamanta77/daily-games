@@ -42,11 +42,20 @@ for _p in (HERE,
     sys.path.insert(0, str(_p))
 try:
     import quordle_parity as QP
-    from youtube_upload import upload_to_youtube
+    from youtube_upload import upload_to_youtube, upload_game_video, \
+        retry_deferred_enrichment
     HAS = True
 except Exception as e:
     print(f"[deps] parity/upload missing: {e}")
     HAS = False
+
+try:
+    import seo as SEO
+    HAS_SEO = True
+except Exception as e:
+    print(f"[deps] seo missing: {e}")
+    SEO = None
+    HAS_SEO = False
 
 try:
     from moviepy.editor import VideoFileClip, ImageClip, concatenate_videoclips, AudioFileClip, CompositeVideoClip
@@ -539,26 +548,164 @@ def card(out, kicker, title, lines, date_str):
     return out
 
 
-def thumb(out, game, date_str, answer_txt):
+def _thumb_fonts():
+    """Bold display fonts for thumbnails (Linux CI + Windows dev).
+
+    _fonts() falls back to Pillow's bitmap default on Linux (tiny);
+    thumbnails need real bold faces, so try DejaVu/Liberation first.
+    """
+    import os as _os
+    candidates = [
+        ("C:/Windows/Fonts/impact.ttf", "C:/Windows/Fonts/arialbd.ttf"),
+        ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        ("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
+    ]
+    for display_path, fallback_path in candidates:
+        try:
+            if _os.path.exists(display_path):
+                return {
+                    'display': ImageFont.truetype(display_path, 150),
+                    'title': ImageFont.truetype(display_path, 108),
+                    'number': ImageFont.truetype(display_path, 120),
+                    'badge': ImageFont.truetype(
+                        fallback_path or display_path, 40),
+                    'tile': ImageFont.truetype(display_path, 72),
+                }
+        except Exception:
+            continue
+    d = ImageFont.load_default()
+    return {k: d for k in ('display', 'title', 'number', 'badge', 'tile')}
+
+
+def thumb(out, game, date_str, answer_txt, puzzle_number=None, partial=None):
+    """YouTube thumbnail (1280x720) — iteration 37.
+
+    Curiosity gap: the tile row shows the FIRST TWO letters revealed
+    and the rest '?' (SEO.partial_tiles) — the FULL answer is never
+    drawn on the thumbnail (it lives in the video + description).
+    Puzzle # card when known, date banner, brand. Font-fit logic
+    (never truncate) is kept: game name shrinks to fit, tile size
+    shrinks to fit the row.
+    """
     if not HAS_PIL:
         return None
     W, H = 1280, 720
     img = Image.new("RGB", (W, H), (13, 20, 38))
     d = ImageDraw.Draw(img)
-    f = _fonts()
-    d.rounded_rectangle([40, 40, 620, 110], radius=14, fill=(255, 205, 0))
-    d.text((65, 50), f"{game.upper()} ANSWER TODAY", fill=(15, 15, 15), font=f["b"])
-    d.text((46, 150), "TODAY'S", fill=(255, 255, 255), font=f["t"])
-    d.text((46, 240), game.upper(), fill=(46, 204, 113), font=f["t"])
-    d.text((46, 340), "SOLVED STEP BY STEP", fill=(255, 205, 0), font=f["b"])
-    d.rounded_rectangle([46, 440, 700, 520], radius=12, fill=(15, 23, 42),
-                        outline=(46, 204, 113), width=3)
-    # Iter-19: no [:34] slice — shrink the font so the full answer
-    # fits the thumbnail box instead of truncating it.
-    _ans = str(answer_txt or "?")
-    _af = _fit_font_r(d, _ans, f["b"], 700 - 70 - 24)
-    d.text((70, 455), _ans, fill=(255, 255, 255), font=_af)
-    d.text((46, 560), date_str.upper(), fill=(255, 205, 0), font=f["b"])
+    f = _thumb_fonts()
+    # Vertical gradient background.
+    for y in range(H):
+        t = y / H
+        d.line([(0, y), (W, y)],
+               fill=(int(13 + (30 - 13) * t), int(20 + (45 - 20) * t),
+                     int(38 + (80 - 38) * t)))
+    outline = (10, 14, 25)
+    text_c = (255, 255, 255)
+    accent = (46, 204, 113)
+    yellow = (255, 205, 0)
+    gray = (110, 118, 132)
+
+    def _shadow(pos, txt, fill, font, anchor=None):
+        x, y = pos
+        d.text((x + 5, y + 5), txt, fill=outline, font=font, anchor=anchor)
+        d.text(pos, txt, fill=fill, font=font, anchor=anchor,
+               stroke_width=3, stroke_fill=outline)
+
+    # Right side: big puzzle-number card.
+    if puzzle_number is not None:
+        card_w, card_h = 430, 330
+        card_x, card_y = W - card_w - 50, 55
+        d.rounded_rectangle(
+            [card_x + 10, card_y + 12, card_x + card_w + 10,
+             card_y + card_h + 12], radius=36, fill=(8, 12, 22))
+        d.rounded_rectangle(
+            [card_x, card_y, card_x + card_w, card_y + card_h],
+            radius=36, fill=accent, outline=text_c, width=6)
+        d.text((card_x + card_w // 2, card_y + 52), "PUZZLE",
+               fill=(220, 255, 235), font=f["badge"], anchor="mm")
+        _shadow((card_x + card_w // 2, card_y + 155), f"#{puzzle_number}",
+                text_c, f["number"], anchor="mm")
+
+    # Left side: kicker badge + headline.
+    kick_txt = f"{str(game).upper()} ANSWER TODAY"
+    kb_font = _fit_font_r(d, kick_txt, f["badge"], 660)
+    try:
+        kb_box = d.textbbox((0, 0), kick_txt, font=kb_font)
+        kw, kh = kb_box[2] - kb_box[0], kb_box[3] - kb_box[1]
+    except Exception:
+        kw, kh = len(kick_txt) * 20, 40
+    kx, ky = 55, 70
+    d.rounded_rectangle([kx - 22, ky - 16, kx + kw + 22, ky + kh + 26],
+                        radius=14, fill=yellow)
+    d.text((kx, ky - 4), kick_txt, fill=(15, 15, 15), font=kb_font)
+    _shadow((52, 140), "TODAY'S", text_c, f["display"])
+    _game_font = _fit_font_r(d, str(game).upper(), f["display"], 660)
+    _shadow((52, 290), str(game).upper(), accent, _game_font)
+
+    # Curiosity tile row: first 2 letters revealed, rest '?'.
+    tiles = list(partial) if partial else None
+    if tiles is None:
+        try:
+            tiles = SEO.partial_tiles(answer_txt) if HAS_SEO else None
+        except Exception:
+            tiles = None
+    if not tiles:
+        tiles = ["?", "?", "?", "?", "?"]
+    tiles = list(tiles)[:10]
+    tile_size, gap = 96, 14
+    total = len(tiles) * tile_size + (len(tiles) - 1) * gap
+    if total > 700:
+        scale = 700 / total
+        tile_size = max(28, int(tile_size * scale))
+        gap = max(4, int(gap * scale))
+        total = len(tiles) * tile_size + (len(tiles) - 1) * gap
+    grid_x, grid_y = 55, 465
+    for i, letter in enumerate(tiles):
+        x = grid_x + i * (tile_size + gap)
+        if i < 2 and str(letter) != "?":
+            fill = accent
+        elif str(letter) != "?":
+            fill = yellow
+        else:
+            fill = gray
+        d.rounded_rectangle([x, grid_y, x + tile_size, grid_y + tile_size],
+                            radius=16, fill=fill, outline=text_c, width=4)
+        try:
+            _tfg = (15, 15, 15) if fill == yellow else text_c
+            d.text((x + tile_size // 2, grid_y + tile_size // 2),
+                   str(letter), fill=_tfg,
+                   font=f["tile"], anchor="mm",
+                   stroke_width=2, stroke_fill=outline)
+        except Exception:
+            pass
+
+    # Date banner (bottom-left) + CTA (bottom-right) + brand.
+    if date_str:
+        d_txt = str(date_str).upper()
+        d_font = _fit_font_r(d, d_txt, f["badge"], 560)
+        try:
+            db_box = d.textbbox((0, 0), d_txt, font=d_font)
+            dw, dh = db_box[2] - db_box[0], db_box[3] - db_box[1]
+        except Exception:
+            dw, dh = len(d_txt) * 20, 40
+        dx, dy = 55, H - dh - 62
+        d.rounded_rectangle([dx - 18, dy - 14, dx + dw + 18, dy + dh + 22],
+                            radius=14, fill=(15, 23, 42),
+                            outline=yellow, width=4)
+        d.text((dx, dy - 2), d_txt, fill=yellow, font=d_font)
+    cta_txt = "SOLUTION + HINTS >>"
+    try:
+        cb = d.textbbox((0, 0), cta_txt, font=f["badge"])
+        cw, ch = cb[2] - cb[0], cb[3] - cb[1]
+    except Exception:
+        cw, ch = len(cta_txt) * 20, 40
+    cx, cy = W - cw - 75, H - ch - 62
+    d.rounded_rectangle([cx - 18, cy - 14, cx + cw + 18, cy + ch + 22],
+                        radius=14, fill=accent)
+    d.text((cx, cy - 2), cta_txt, fill=(15, 15, 15), font=f["badge"])
+    d.text((55, 24), "wordsolverx.com", fill=(168, 180, 200), font=f["badge"])
     img.save(out, "PNG", optimize=True)
     return out
 
@@ -21366,11 +21513,186 @@ def _db_dir(date_key, gid):
     return d
 
 
-def _db_already_done(date_key, gid):
+def _publish_enabled():
+    """Publish gate (iteration 37): upload ONLY when YOUTUBE_PUBLISH
+    is truthy. Workflows set it from the schedule / publish input;
+    locally it is unset -> False (never upload from test runs)."""
+    return os.environ.get("YOUTUBE_PUBLISH", "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def _record_is_published(record):
+    """True only when the record carries a real YouTube video id.
+
+    The pre-iter-37 DB recorded 'artifact saved' (a local path in
+    youtube.txt) as if it were published. published=true now means
+    the API returned a video ID — nothing else counts.
+    """
+    try:
+        return bool(record.get("published")
+                    and record.get("youtube_video_id"))
+    except Exception:
+        return False
+
+
+PUBLISH_FIELDS = ("published", "youtube_video_id", "youtube_url",
+                  "published_at", "publish_attempts", "last_publish_error",
+                  "enrichment", "enrichment_deferred", "quota_estimate",
+                  "shorts_video_id", "enrichment_context")
+
+
+def _empty_publish(reason):
+    """Publish dict for a run that did not upload (gate off / no creds /
+    skipped). published stays False with an explicit reason."""
+    return {"published": False, "youtube_video_id": None,
+            "youtube_url": None, "published_at": None,
+            "publish_attempts": 0, "last_publish_error": str(reason),
+            "enrichment": {}, "enrichment_deferred": [],
+            "quota_estimate": {}, "shorts_video_id": None,
+            "enrichment_context": {}}
+
+
+def _puzzle_number_for(gid, date_key):
+    """Served puzzle # for (gid, date) from deterministic mappings.
+
+    Returns None when the number is not computable without a live
+    fetch (Batterup CDN #, Waffle board #, Countryle, ...). The SEO
+    layer treats None as 'omit the number', never invents one.
+    Verified anchors: Framed classic 2026-10-19 -> 1683,
+    Nerdle classic 2026-10-19 -> 1734, Semantle 2026-10-19 -> 1723.
+    """
+    try:
+        d = date.fromisoformat(str(date_key))
+    except Exception:
+        return None
+    try:
+        if gid == "framed":
+            return int(A._framed_number("classic", d))
+        if gid == "phrazle":
+            return int(A.phrazle_game_number(d, hour=9))
+        if gid == "semantle":
+            return int((d - _SEMANTLE_EPOCH).days)
+        if gid == "nerdle":
+            return int((d - date(2022, 1, 20)).days + 1)
+    except Exception:
+        return None
+    return None
+
+
+def _yesterday_answer(gid, date_key):
+    """Yesterday's verified answer from OUR OWN DB record, or None.
+
+    Reads database/<prev-day>/<game>/result.json (committed by the
+    previous run). Returns {answer, puzzle_number, date_short}.
+    Framed reads the classic answer from its answers dict. Games
+    whose DB record carries no answer (e.g. Nerdle equations) -> None
+    (the FAQ omits yesterday rather than inventing it).
+    """
+    try:
+        d = date.fromisoformat(str(date_key))
+        prev = d - timedelta(days=1)
+        p = HERE / "database" / prev.isoformat() / gid / "result.json"
+        if not p.exists():
+            return None
+        r = json.loads(p.read_text(encoding="utf-8"))
+        ans = r.get("answer")
+        if isinstance(ans, str) and ans.strip():
+            return {"answer": ans,
+                    "puzzle_number": _puzzle_number_for(gid, prev.isoformat()),
+                    "date_short": prev.strftime("%B %d")}
+        if gid == "framed":
+            answers = r.get("answers") or {}
+            cl = answers.get("classic")
+            if isinstance(cl, str) and cl.strip():
+                return {"answer": cl,
+                        "puzzle_number": _puzzle_number_for(
+                            gid, prev.isoformat()),
+                        "date_short": prev.strftime("%B %d")}
+        return None
+    except Exception:
+        return None
+
+
+def _cross_links(gid):
+    """Cross-links to other games' answer-today pages (verified URL
+    pattern wordsolverx.com/<slug>). SEO caps the rendered list."""
+    out = []
+    try:
+        for _gid, _g in GAMES.items():
+            if _gid == gid:
+                continue
+            out.append((f"{_g.get('name', _gid)} Answer Today",
+                        f"https://wordsolverx.com/{_g.get('slug', '')}"))
+    except Exception:
+        pass
+    return out
+
+
+def _playlist_titles(game, date_key):
+    """Per-game playlist titles: monthly + yearly (reference pattern)."""
+    try:
+        d = date.fromisoformat(str(date_key))
+        month = d.strftime("%B %Y")
+        year = d.strftime("%Y")
+        return [(f"{game} Answers \u2014 {month}",
+                 f"Daily {game} solution videos for {month}."),
+                (f"{game} Answers \u2014 {year}",
+                 f"All daily {game} solution videos from {year}.")]
+    except Exception:
+        return []
+
+
+def _retry_yesterday_enrichment(gid, date_key):
+    """Retry the previous day's deferred enrichment (iteration 37).
+
+    Only in publish-gated runs. Best-effort: reads yesterday's DB
+    record, retries its deferred enrichment steps for the published
+    video, and writes back the updated enrichment state (the workflow
+    commits database/, so the retry persists). Never fails the run.
+    """
+    if not _publish_enabled() or not HAS:
+        return
+    try:
+        d = date.fromisoformat(str(date_key))
+        prev = d - timedelta(days=1)
+        p = HERE / "database" / prev.isoformat() / gid / "result.json"
+        if not p.exists():
+            return
+        r = json.loads(p.read_text(encoding="utf-8"))
+        if not _record_is_published(r):
+            return
+        deferred = r.get("enrichment_deferred") or []
+        if not deferred:
+            return
+        ctx = r.get("enrichment_context") or {}
+        print(f"[{gid}] retrying deferred enrichment for {prev} video "
+              f"{r.get('youtube_video_id')}: {deferred}")
+        updates, units = retry_deferred_enrichment(
+            r.get("youtube_video_id"), deferred, ctx)
+        if not updates:
+            return
+        enr = dict(r.get("enrichment") or {})
+        enr.update(updates)
+        r["enrichment"] = enr
+        r["enrichment_deferred"] = [
+            k for k, v in enr.items() if v.get("status") == "deferred"]
+        p.write_text(json.dumps(r, indent=1), encoding="utf-8")
+        print(f"[{gid}] enrichment retry for {prev}: {updates} "
+              f"units={units}")
+    except Exception as e:
+        print(f"[{gid}] enrichment retry skipped: {str(e)[:120]}")
+
+
+def _db_already_done(date_key, gid, require_published=None):
     """No-duplicate guard: GitHub tracks database/{date}/{game}/result.json.
 
     If today's result is committed as solved=true, skip the run so a retry /
     next cron never remakes the same video. Returns the saved record or None.
+
+    Iteration 37: in publish-gated runs, 'done' means solved AND
+    published — a solved-but-unpublished game re-solves + publishes
+    (the retry; jobs are stateless, no artifact downloads).
+    In non-publish runs, 'done' means solved (previous behavior).
     """
     p = HERE / "database" / date_key / gid / "result.json"
     try:
@@ -21379,6 +21701,12 @@ def _db_already_done(date_key, gid):
             if r.get("solved") and r.get("video"):
                 if os.environ.get("FORCE_REGENERATE") == "true":
                     print(f"[{gid}] force mode: re-rendering despite record")
+                    return None
+                if require_published is None:
+                    require_published = _publish_enabled()
+                if require_published and not _record_is_published(r):
+                    print(f"[{gid}] solved but NOT published for "
+                          f"{date_key}; re-solving to publish")
                     return None
                 return r
     except Exception:
@@ -21403,6 +21731,9 @@ def _write_skip_result(gid, date_key, done):
         (vdir / "result.json").write_text(json.dumps(
             {"game": gid, "date": date_key, "solved": True, "skipped": True,
              "evidence": "skipped: database already solved",
+             "published": bool(done.get("published")),
+             "youtube_video_id": done.get("youtube_video_id"),
+             "youtube_url": done.get("youtube_url"),
              "video": done.get("video")}, indent=1), encoding="utf-8")
     except Exception:
         pass
@@ -21414,18 +21745,34 @@ def _db_save(date_key, gid, record):
     Keeps per-date + per-game separation so search by date or by game is a
     plain folder listing. video mp4 itself stays in videos/{game}/ (gitignored)
     and is uploaded as a workflow artifact; only the link + json commit cleanly.
+
+    Iteration 37 (published-state is the source of truth):
+    - published=true ONLY when the record carries a YouTube video id.
+    - youtube.txt holds ONLY the YouTube URL when published, else the
+      literal string NOT_PUBLISHED — NEVER a local path. The old
+      behaviour (youtube_url or local video path) recorded 'artifact
+      saved' as if it were published. Any pre-existing youtube.txt
+      that is not a youtube.com URL is treated as NOT_PUBLISHED
+      (lazy migration: old files are corrected on the next save,
+      not rewritten in bulk).
+    - Never DOWNGRADE: a published record is never replaced by an
+      unpublished one; a solved record is never replaced by an
+      unsolved one. A fresh published record replaces anything.
     """
     d = _db_dir(date_key, gid)
     try:
-        # Never DOWNGRADE a solved record: a later flaky re-run must not
-        # replace a good publishable video entry with its own failure.
         _old_p = d / "result.json"
-        if _old_p.exists() and not record.get("solved"):
+        if _old_p.exists():
             try:
                 _old = json.loads(_old_p.read_text(encoding="utf-8"))
-                if _old.get("solved") and str(_old.get("video") or "").endswith(".mp4"):
+                if _old.get("solved") and not record.get("solved"):
                     print(f"[db] keeping solved {gid} record for {date_key} "
                           f"(new run failed: {str(record.get('evidence'))[:60]})")
+                    return
+                if _record_is_published(_old) and not _record_is_published(record):
+                    print(f"[db] keeping published {gid} record for "
+                          f"{date_key} (new run unpublished: "
+                          f"{str(record.get('last_publish_error'))[:60]})")
                     return
             except Exception:
                 pass
@@ -21433,9 +21780,9 @@ def _db_save(date_key, gid, record):
     except Exception:
         pass
     try:
-        vid = record.get("youtube_url") or record.get("video")
-        if vid:
-            (d / "youtube.txt").write_text(str(vid), encoding="utf-8")
+        _yt = record.get("youtube_url") if _record_is_published(record) else None
+        (d / "youtube.txt").write_text(
+            str(_yt) if _yt else "NOT_PUBLISHED", encoding="utf-8")
     except Exception:
         pass
 
@@ -21880,6 +22227,15 @@ def run_nerdle_external(g, tgt, date_key, today, short):
     record = {"game": "nerdle", "date": date_key, "solved": solved,
               "evidence": (f"NUMBER GATE: {_wd_detail} " if _wd_blocked else "") + str(evidence)[:300],
               "video": None if _wd_blocked else (str(final) if final.exists() else None)}
+    # Iteration 37: carry the solver's publish state into the DB
+    # record (the solver uploads via upload_game_video and reports
+    # publish fields top-level in its result JSON, read into `rec`).
+    try:
+        for _k in PUBLISH_FIELDS:
+            if _k in rec:
+                record[_k] = rec[_k]
+    except Exception:
+        pass
     _db_save(date_key, "nerdle", record)
     try:
         _modes = json.loads((vdir / f"result_{date_key}.json").read_text(
@@ -22351,7 +22707,11 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
         # so no chapters — a [(0, 'The solve')] placeholder would
         # claim a chapter for a video that does not exist.
         chapters = [] if not solved else [(0, "The solve")]
-    _upload_framed(gid, g, today, short, answers, chapters, final)
+    # Defensive: _upload_framed always returns a dict, but a None
+    # return (e.g. a mock in tests) must never crash assembly.
+    pub = _upload_framed(gid, g, today, short, answers, chapters, final,
+                         date_key=date_key, solved=solved) or _empty_publish(
+                             "upload returned no result")
     _fpr = _probe_video(final) if final else {}
     # Visible-content QC (shared helper): never QC PASS a blank video.
     _dbg(gid, "QC start")
@@ -22389,11 +22749,15 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
         {"game": gid, "date": date_key, "solved": solved, "evidence": evidence,
          "video": str(final) if final else None, "modes": per_mode,
          "answers": answers,
-         "chapters": chapters, "qc": _fqc}, indent=1))
+         "chapters": chapters, "qc": _fqc,
+         # Iteration 37: publish state (published=true ONLY on a real
+         # YouTube video id).
+         **{k: pub.get(k) for k in PUBLISH_FIELDS}}, indent=1))
     _dbg(gid, "result.json written (final)")
     _db_save(date_key, gid, {"game": gid, "date": date_key, "solved": solved,
-                             "evidence": evidence,
-                             "video": str(final) if final else None})
+                             "evidence": evidence, "answers": answers,
+                             "video": str(final) if final else None,
+                             **{k: pub.get(k) for k in PUBLISH_FIELDS}})
     _report_game(gid, date_key,
                  answer={m: answers.get(m) for m in
                          (answers if isinstance(answers, dict) else {})},
@@ -22402,42 +22766,106 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
                  verify=f"solved={solved} ({evidence})",
                  video=_probe_video(final) if final else None,
                  chapters=[t for _, t in chapters],
-                 upload="skipped-no-creds",
+                 upload=(pub.get("youtube_url") if pub.get("published")
+                         else (f"upload failed: {pub.get('last_publish_error')}"
+                               if _publish_enabled()
+                               else "publish gate off")),
                  extra={"assembly": "intro+4 mode cards+gameplay+slides"})
     return {"game": gid, "solved": solved,
             "video": str(final) if final else None,
             "evidence": evidence, "guesses": len(per_mode) * 2}
 
 
-def _upload_framed(gid, g, today, short, answers, chapters, final):
-    if not (final and HAS):
-        return
-    def _ts(sec):
-        sec = max(0, int(sec))
-        return f"{sec // 60}:{sec % 60:02d}"
-    ch_lines = "\n".join(f"{_ts(s)} {t}" for s, t in chapters)
-    desc = (f"Framed Answer Today - {today}.\n\n"
-            f"All four Framed modes played and solved on page.\n\n"
-            + "\n".join(f"{m}: {answers.get(k, 'unavailable')}"
-                        for k, m, _u in FRAMED_MODES)
-            + f"\n\nChapters:\n{ch_lines}\n\n"
-              f"More: https://wordsolverx.com/{g['slug']}\n\n"
-              "#Framed #FramedAnswerToday #DailyPuzzle #MoviePuzzle")
+def _upload_framed(gid, g, today, short, answers, chapters, final,
+                   date_key=None, solved=False):
+    """Framed SEO + publish (iteration 37). Returns the publish dict.
+
+    SEO metadata is built for every solved run (gate on or off);
+    the upload runs ONLY when the publish gate is on.
+    """
+    pub = _empty_publish("publish gate off (YOUTUBE_PUBLISH not truthy)")
+    if not (final and HAS) or not solved:
+        if solved:
+            print(f"[{gid}] publish gate OFF: video NOT uploaded; "
+                  f"publish state recorded as unpublished.")
+        return pub
+    _pnum = _puzzle_number_for("framed", date_key) if date_key else None
+    _ytd = _yesterday_answer("framed", date_key) if date_key else None
+    _mode_lines = [f"{m}: {answers.get(k, 'unavailable')}"
+                   for k, m, _u in FRAMED_MODES]
+    _title = _desc = None
+    _tags = []
+    _comment = None
+    _playlists = []
+    seo_ctx = None
+    if HAS_SEO:
+        _date_num = (str(date_key)[5:].replace("-", "/")
+                     if date_key and len(str(date_key)) >= 10 else "")
+        seo_ctx = {
+            "game": g["name"], "slug": g["slug"], "date_long": today,
+            "date_short": short, "answer": None,
+            "guesses": len(answers) * 2 if isinstance(answers, dict) else None,
+            "chapters": list(chapters), "puzzle_number": _pnum,
+            "yesterday": _ytd, "tomorrow": None, "stats": None,
+            "mode_lines": _mode_lines, "solver_url": None,
+            "cross_links": _cross_links(gid),
+        }
+        _title = SEO.build_title(g["name"], short, guesses=None,
+                                 puzzle_number=_pnum)
+        _desc = SEO.build_description(**seo_ctx)
+        _tags = SEO.build_tags(g["name"], short, date_num=_date_num,
+                               puzzle_number=_pnum)
+        _comment = SEO.build_pinned_comment(
+            g["name"], list(chapters), solver_url=None,
+            answer_url=f"https://wordsolverx.com/{g['slug']}")
+        _playlists = _playlist_titles(g["name"], date_key) if date_key else []
+        try:
+            (HERE / "videos" / gid / "seo.json").write_text(json.dumps(
+                {"title": _title, "description": _desc, "tags": _tags,
+                 "puzzle_number": _pnum, "yesterday": _ytd},
+                indent=1), encoding="utf-8")
+        except Exception:
+            pass
+    else:
+        _title = f"Framed Answer Today ({short}) - All 4 Modes Solved!"
+        _desc = (f"Framed Answer Today - {today}.\n\n"
+                 f"All four Framed modes played and solved on page.\n\n"
+                 + "\n".join(_mode_lines)
+                 + f"\n\nMore: https://wordsolverx.com/{g['slug']}\n\n"
+                   "#Framed #FramedAnswerToday #DailyPuzzle #MoviePuzzle")
+        _tags = DP.build_tags("Framed")
     tp = HERE / "videos" / gid / "thumb.png"
     try:
-        thumb(str(tp), g["name"], today,
-              ", ".join(answers.get(k, "?") for k, _m, _u in FRAMED_MODES))
+        _classic = (answers.get("classic") if isinstance(answers, dict)
+                    else None)
+        thumb(str(tp), g["name"], today, str(_classic or "?"),
+              puzzle_number=_pnum)
     except Exception:
         tp = None
+    if not _publish_enabled():
+        print(f"[{gid}] publish gate OFF (YOUTUBE_PUBLISH not truthy): "
+              f"video NOT uploaded; publish state recorded as unpublished.")
+        return pub
     try:
-        upload_to_youtube(
-            str(final),
-            title=f"Framed Answer Today ({short}) - All 4 Modes Solved!",
-            description=desc, chapters=chapters,
-            thumbnail_path=str(tp) if tp and tp.exists() else None,
-            tags=DP.build_tags("Framed"))
+        pub = upload_game_video(
+            str(final), title=_title or f"{g['name']} Answer Today",
+            description=_desc or "", tags=_tags, chapters=list(chapters),
+            thumbnail_path=(str(tp) if tp and tp.exists() else None),
+            game=g["name"], date_str=today, playlist_titles=_playlists,
+            comment_text=_comment, duration_s=None,
+            analysis_words=[], seo_context=seo_ctx,
+            shorts=os.environ.get("YOUTUBE_SHORTS", "").strip().lower()
+            in ("1", "true", "yes", "on")) or _empty_publish(
+                "upload returned no result")
+        pub["enrichment_context"] = {
+            "comment_text": _comment, "playlist_titles": _playlists,
+            "duration_s": None, "date_str": today, "game": g["name"],
+            "chapters": list(chapters),
+            "thumbnail_path": (str(tp) if tp else None)}
     except Exception as e:
         print(f"[{gid}] upload error: {str(e)[:200]}")
+        pub = _empty_publish(f"upload exception: {str(e)[:200]}")
+    return pub
 
 
 def _waffle_facts_stat(evidence):
@@ -22542,6 +22970,11 @@ def run_one(gid):
     # handler covers kills, but nothing covered a plain crash here.
     # Placed after the per-run state pops above so the preliminary
     # record never carries a previous run's guesses.
+    # Iteration 37: retry yesterday's deferred YouTube enrichment
+    # (publish-gated runs only, best-effort, never fails the run).
+    # Runs before the skip-guard so skip runs still retry; covers
+    # generic + framed + nerdle (all branch off run_one).
+    _retry_yesterday_enrichment(gid, date_key)
     _write_preliminary_result(gid, date_key, False, "started")
     if gid == "nerdle" or g.get("external") == "nerdle_solver.py":
         return run_nerdle_external(g, tgt, date_key, today, short)
@@ -23201,36 +23634,96 @@ def run_one(gid):
     else:
         chapters = [(0, "The solve")]
 
-    # upload (skips without creds; never upload an unsolved game)
+    # SEO + publish (iteration 37). SEO metadata is built for EVERY
+    # solved run (gate on or off) so seo.json / thumb.png / captions
+    # are verifiable artifacts without uploading. The upload itself
+    # runs ONLY when the publish gate (YOUTUBE_PUBLISH) is on.
     nguess = len(_result_steps(gid, aval))
+    pub = _empty_publish("publish gate off (YOUTUBE_PUBLISH not truthy)")
+    seo_ctx = None
     if solved and final and HAS:
-        def _ts(sec):
-            sec = max(0, int(sec))
-            return f"{sec // 60}:{sec % 60:02d}"
-        ch_lines = "\n".join(f"{_ts(s)} {t}" for s, t in chapters)
-        title = DP.build_title(g["name"], short, nguess)
-        desc = (f"{g['name']} Answer Today - {today}.\n\n"
-                f"Watch the complete on-page solve: {nguess} real guesses, "
-                f"live feedback, then the final answer.\n\n"
-                f"Today's answer: {aval}\n\n"
-                f"Chapters:\n{ch_lines}\n\n"
-                f"More: https://wordsolverx.com/{g['slug']}\n\n"
-                f"#{g['name'].replace(' ', '')} #{g['name'].replace(' ', '')}AnswerToday "
-                f"#DailyPuzzle #WordGame #PuzzleSolution")
-        tags = DP.build_tags(g["name"])
+        _pnum = _puzzle_number_for(gid, date_key)
+        _ytd = _yesterday_answer(gid, date_key)
+        _answer_txt = str(aval) if aval is not None else ""
+        _comment = None
+        _playlists = []
+        _title = _desc = None
+        _tags = []
+        if HAS_SEO:
+            _date_num = (str(date_key)[5:].replace("-", "/")
+                         if len(str(date_key)) >= 10 else "")
+            seo_ctx = {
+                "game": g["name"], "slug": g["slug"], "date_long": today,
+                "date_short": short, "answer": _answer_txt or None,
+                "guesses": nguess, "chapters": list(chapters),
+                "puzzle_number": _pnum, "yesterday": _ytd,
+                "tomorrow": None, "stats": None, "mode_lines": None,
+                "solver_url": None,
+                "cross_links": _cross_links(gid),
+            }
+            _title = SEO.build_title(g["name"], short, guesses=nguess,
+                                     puzzle_number=_pnum)
+            _desc = SEO.build_description(**seo_ctx)
+            _tags = SEO.build_tags(g["name"], short, date_num=_date_num,
+                                   puzzle_number=_pnum)
+            _comment = SEO.build_pinned_comment(
+                g["name"], list(chapters), solver_url=None,
+                answer_url=f"https://wordsolverx.com/{g['slug']}")
+            _playlists = _playlist_titles(g["name"], date_key)
+            try:
+                (vdir / "seo.json").write_text(json.dumps(
+                    {"title": _title, "description": _desc, "tags": _tags,
+                     "puzzle_number": _pnum, "yesterday": _ytd},
+                    indent=1), encoding="utf-8")
+            except Exception:
+                pass
+        else:
+            # Fallback when the seo module is missing: keep the old
+            # generic metadata so the run still works.
+            _title = DP.build_title(g["name"], short, nguess)
+            _desc = (f"{g['name']} Answer Today - {today}.\n\n"
+                     f"Watch the complete on-page solve: {nguess} real "
+                     f"guesses, live feedback, then the final answer.\n\n"
+                     f"Today's answer: {_answer_txt}\n\n"
+                     f"More: https://wordsolverx.com/{g['slug']}\n\n"
+                     f"#{g['name'].replace(' ', '')} "
+                     f"#{g['name'].replace(' ', '')}AnswerToday "
+                     f"#DailyPuzzle #WordGame #PuzzleSolution")
+            _tags = DP.build_tags(g["name"])
         tp = vdir / "thumb.png"
         try:
-            thumb(str(tp), g["name"], today, str(aval))
+            thumb(str(tp), g["name"], today, _answer_txt,
+                  puzzle_number=_pnum)
         except Exception:
             tp = None
-        try:
-            vid = upload_to_youtube(str(final), title=title, description=desc,
-                                    chapters=chapters,
-                                    thumbnail_path=str(tp) if tp and tp.exists() else None,
-                                    tags=tags)
-        except Exception as e:
-            print(f"[{gid}] upload error: {str(e)[:200]}")
-            vid = None
+        if _publish_enabled():
+            try:
+                _aw = ([_answer_txt] if (_answer_txt
+                                         and _answer_txt.isalpha()) else [])
+                pub = upload_game_video(
+                    str(final), title=_title or f"{g['name']} Answer Today",
+                    description=_desc or "", tags=_tags,
+                    chapters=list(chapters),
+                    thumbnail_path=(str(tp) if tp and tp.exists() else None),
+                    game=g["name"], date_str=today,
+                    playlist_titles=_playlists, comment_text=_comment,
+                    duration_s=(locals().get("total") or None),
+                    analysis_words=_aw, seo_context=seo_ctx,
+                    shorts=os.environ.get("YOUTUBE_SHORTS", "").strip().lower()
+                    in ("1", "true", "yes", "on")) or _empty_publish(
+                        "upload returned no result")
+                pub["enrichment_context"] = {
+                    "comment_text": _comment, "playlist_titles": _playlists,
+                    "duration_s": (locals().get("total") or None),
+                    "date_str": today, "game": g["name"],
+                    "chapters": list(chapters),
+                    "thumbnail_path": (str(tp) if tp else None)}
+            except Exception as e:
+                print(f"[{gid}] upload error: {str(e)[:200]}")
+                pub = _empty_publish(f"upload exception: {str(e)[:200]}")
+        else:
+            print(f"[{gid}] publish gate OFF (YOUTUBE_PUBLISH not truthy): "
+                  f"video NOT uploaded; publish state recorded as unpublished.")
     # Visible-content QC (fix-loop iter 3): a blank video must NEVER QC
     # PASS, even when metadata (solved/res/duration) is fine (phoodle).
     _dbg(gid, "QC start")
@@ -23284,13 +23777,17 @@ def run_one(gid):
          "rejected": _REJECTED.get(gid, []),
          "steps": _result_steps(gid, aval), "chapters": chapters, "qc": _qc,
          "modes": ([dict(r) for r in _WORLDLE_MODES]
-                   if gid == "worldle" else [])}, indent=1))
+                   if gid == "worldle" else []),
+         # Iteration 37: publish state (published=true ONLY on a real
+         # YouTube video id; gate-off runs record published=false).
+         **{k: pub.get(k) for k in PUBLISH_FIELDS}}, indent=1))
     _dbg(gid, "result.json written (final)")
     _CURRENT_RUN.update({"stage": "report"})
     _db_save(date_key, gid, {"game": gid, "date": date_key, "solved": solved,
                              "evidence": evidence,
+                             "answer": (str(aval) if solved else None),
                              "video": str(final) if final else None,
-                             "youtube_url": vid if 'vid' in dir() else None})
+                             **{k: pub.get(k) for k in PUBLISH_FIELDS}})
     _report_game(gid, date_key, answer=f"{aval} ({ans.get('via', '?')})",
                  guesses=([str(x) for x in _PLAYED[gid]] if _PLAYED.get(gid)
                           else ([] if gid == "betweenle"
@@ -23300,8 +23797,10 @@ def run_one(gid):
                  verify=f"solved={solved} evidence={evidence}",
                  video=_probe_video(final) if final else None,
                  chapters=[t for _, t in chapters],
-                 upload=(vid if 'vid' in dir() and vid else
-                         "skipped-no-creds"),
+                 upload=(pub.get("youtube_url") if pub.get("published")
+                         else (f"upload failed: {pub.get('last_publish_error')}"
+                               if _publish_enabled()
+                               else "publish gate off")),
                  extra={"slides": "recap+hints+reveal+facts+teaser+intro"})
     _dbg(gid, "report done")
     return {"game": gid, "solved": solved, "video": str(final) if final else None,

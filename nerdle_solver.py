@@ -41,16 +41,42 @@ except Exception:
     _strip_state_file = None
 
 try:
-    from youtube_upload import upload_to_youtube, fetch_word_analysis
+    from youtube_upload import upload_to_youtube, fetch_word_analysis, \
+        upload_game_video
     YOUTUBE_AVAILABLE = True
 except ImportError:
     try:
         sys.path.insert(0, str(Path(__file__).parent.parent.parent / "youtube" / "quordle-video" / "quor-dle-video"))
-        from youtube_upload import upload_to_youtube, fetch_word_analysis
+        from youtube_upload import upload_to_youtube, fetch_word_analysis, \
+            upload_game_video
         YOUTUBE_AVAILABLE = True
     except ImportError:
         YOUTUBE_AVAILABLE = False
         print("YouTube upload module not available.")
+
+try:
+    import seo as _SEO
+    SEO_AVAILABLE = True
+except Exception:
+    _SEO = None
+    SEO_AVAILABLE = False
+
+
+def _nerdle_publish_enabled():
+    """Publish gate (iteration 37): same rule as runner._publish_enabled
+    — upload ONLY when YOUTUBE_PUBLISH is truthy (workflows set it
+    from schedule / publish input; unset locally -> False)."""
+    return os.environ.get("YOUTUBE_PUBLISH", "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def _nerdle_empty_publish(reason):
+    return {"published": False, "youtube_video_id": None,
+            "youtube_url": None, "published_at": None,
+            "publish_attempts": 0, "last_publish_error": str(reason),
+            "enrichment": {}, "enrichment_deferred": [],
+            "quota_estimate": {}, "shorts_video_id": None,
+            "enrichment_context": {}}
 
 try:
     from moviepy.editor import VideoFileClip, ImageClip, concatenate_videoclips, AudioFileClip
@@ -5184,14 +5210,13 @@ async def main():
         except Exception as e:
             print(f"[assembly] fallback raw: {e}")
 
-    # Iteration 2: never upload an unsolved nerdle video (same rule as runner).
+    # Iteration 37: SEO + publish gate (same rule as runner — upload
+    # ONLY when YOUTUBE_PUBLISH is truthy). SEO metadata is built for
+    # every solved run (gate on or off) so seo.json is verifiable
+    # without uploading. Iteration 2 rule kept: never upload unsolved.
+    _npub = _nerdle_empty_publish(
+        "publish gate off (YOUTUBE_PUBLISH not truthy)")
     if YOUTUBE_AVAILABLE and final and all_solved:
-        title_v = [
-            f"Nerdle Answer Today ({date_short}) - All 9 Modes Solved!",
-            f"Nerdle Answer Today - {today} Classic/Mini/Maxi + More",
-            f"Nerdle Answers Today - {today} Full Solve + Hints",
-        ]
-        title = title_v[day_num % len(title_v)]
         # Upload description fallback must NOT mutate `chapters`: the
         # (0, mode) fallback is a display placeholder, and result.json
         # below must record only real assembly chapter times.
@@ -5204,18 +5229,132 @@ async def main():
                 eqs = PLAYED.get(m["id"]) or official.get(m["id"]) or []
                 if eqs:
                     mode_lines.append(f"{m['name']}: {' | '.join(eqs)}")
-        chap_str = "\n".join(f"{int(s//60)}:{int(s%60):02d} {l}" for s, l in up_chapters)
-        desc = (f"Nerdle Answer Today — {today} | All 9 Modes Solved\n\n"
-                + ("\n".join(mode_lines) + "\n\n" if mode_lines else "")
-                + f"Watch every mode solved step by step with hints.\n\nCHAPTERS:\n{chap_str}\n\n"
-                f"Nerdle solver: https://wordsolverx.com/nerdle-solver\n\n"
-                f"#Nerdle #NerdleAnswerToday #DailyPuzzle #MathPuzzle #WordGame")
-        tags = ["nerdle answer today", "Nerdle", "Nerdle Answer", "Daily Puzzle",
-                "Math Puzzle", "Nerdle Classic", "Nerdle Mini", "Nerdle Maxi",
-                "Nerdle Hints", "Nerdle Solver"]
-        vid = upload_to_youtube(str(final), title=title, description=desc,
-                                chapters=up_chapters, tags=tags, ytd_info={})
-        print(f"[upload] {vid}")
+        # Classic puzzle # = the SERVED number (verified by the gate);
+        # fall back to the date math (classic #1 = 2022-01-20).
+        _classic_no = None
+        try:
+            _classic_no = int((api_numbers or {}).get("classicPuzzleNumber"))
+        except Exception:
+            _classic_no = None
+        if _classic_no is None:
+            try:
+                _tdate = (target if isinstance(target, datetime)
+                          else datetime(target.year, target.month,
+                                        target.day))
+                _classic_no = (_tdate - datetime(2022, 1, 20)).days + 1
+            except Exception:
+                _classic_no = None
+        _classic_eq = ""
+        try:
+            _classic_eq = (PLAYED.get("classic")
+                           or (official or {}).get("classic") or [""])[0]
+        except Exception:
+            _classic_eq = ""
+        _ncomment = None
+        _nplaylists = []
+        _nseo_ctx = None
+        if SEO_AVAILABLE:
+            _nseo_ctx = {
+                "game": "Nerdle", "slug": "nerdle-answer-today",
+                "date_long": today, "date_short": date_short,
+                "answer": None, "guesses": None,
+                "chapters": list(up_chapters),
+                "puzzle_number": _classic_no, "yesterday": None,
+                "tomorrow": None, "stats": None, "mode_lines": mode_lines,
+                "solver_url": "https://wordsolverx.com/nerdle-solver",
+                "cross_links": [p for p in _SEO.DEFAULT_CROSS_LINKS
+                                if "nerdle" not in p[1]],
+            }
+            _ntitle = _SEO.build_title("Nerdle", date_short, guesses=None,
+                                       puzzle_number=_classic_no)
+            _ndesc = _SEO.build_description(**_nseo_ctx)
+            _ntags = _SEO.build_tags(
+                "Nerdle", date_short,
+                date_num=(date_key[5:].replace("-", "/")
+                          if len(str(date_key)) >= 10 else ""),
+                puzzle_number=_classic_no)
+            _ncomment = _SEO.build_pinned_comment(
+                "Nerdle", list(up_chapters),
+                solver_url="https://wordsolverx.com/nerdle-solver",
+                answer_url="https://wordsolverx.com/nerdle-answer-today")
+            _nplaylists = [
+                (f"Nerdle Answers \u2014 {target.strftime('%B %Y')}",
+                 f"Daily Nerdle solution videos for "
+                 f"{target.strftime('%B %Y')}."),
+                (f"Nerdle Answers \u2014 {target.strftime('%Y')}",
+                 f"All daily Nerdle solution videos from "
+                 f"{target.strftime('%Y')}.")]
+            try:
+                (video_dir / "seo.json").write_text(json.dumps(
+                    {"title": _ntitle, "description": _ndesc,
+                     "tags": _ntags, "puzzle_number": _classic_no},
+                    indent=1), encoding="utf-8")
+            except Exception:
+                pass
+        else:
+            chap_str = "\n".join(
+                f"{int(s//60)}:{int(s%60):02d} {l}"
+                for s, l in up_chapters)
+            _ntitle = (f"Nerdle Answer Today ({date_short}) - "
+                       f"All 9 Modes Solved!")
+            _ndesc = (f"Nerdle Answer Today \u2014 {today} | All 9 Modes "
+                      f"Solved\n\n"
+                      + ("\n".join(mode_lines) + "\n\n" if mode_lines else "")
+                      + f"Watch every mode solved step by step with hints.\n\n"
+                        f"CHAPTERS:\n{chap_str}\n\n"
+                        f"Nerdle solver: "
+                        f"https://wordsolverx.com/nerdle-solver\n\n"
+                        f"#Nerdle #NerdleAnswerToday #DailyPuzzle "
+                        f"#MathPuzzle #WordGame")
+            _ntags = ["nerdle answer today", "Nerdle", "Nerdle Answer",
+                      "Daily Puzzle", "Math Puzzle", "Nerdle Classic",
+                      "Nerdle Mini", "Nerdle Maxi", "Nerdle Hints",
+                      "Nerdle Solver"]
+        # Thumbnail: reuse runner.thumb (guarded) with the classic
+        # equation as the partial-answer source; Nerdle previously
+        # uploaded with NO thumbnail at all.
+        _ntp = video_dir / "thumb.png"
+        try:
+            from runner import thumb as _runner_thumb
+            _runner_thumb(str(_ntp), "Nerdle", today,
+                          str(_classic_eq or "?"),
+                          puzzle_number=_classic_no)
+        except Exception:
+            _ntp = None
+        if _nerdle_publish_enabled():
+            try:
+                _npub = upload_game_video(
+                    str(final), title=_ntitle,
+                    description=_ndesc, tags=_ntags,
+                    chapters=list(up_chapters),
+                    thumbnail_path=(str(_ntp) if _ntp and _ntp.exists()
+                                    else None),
+                    game="Nerdle", date_str=today,
+                    playlist_titles=_nplaylists, comment_text=_ncomment,
+                    duration_s=None, analysis_words=[],
+                    seo_context=_nseo_ctx,
+                    shorts=os.environ.get("YOUTUBE_SHORTS",
+                                           "").strip().lower()
+                    in ("1", "true", "yes", "on")
+                ) or _nerdle_empty_publish("upload returned no result")
+                _npub["enrichment_context"] = {
+                    "comment_text": _ncomment,
+                    "playlist_titles": _nplaylists, "duration_s": None,
+                    "date_str": today, "game": "Nerdle",
+                    "chapters": list(up_chapters),
+                    "thumbnail_path": (str(_ntp) if _ntp else None)}
+            except Exception as e:
+                print(f"[upload] error: {str(e)[:200]}")
+                _npub = _nerdle_empty_publish(
+                    f"upload exception: {str(e)[:200]}")
+        else:
+            print("[nerdle] publish gate OFF (YOUTUBE_PUBLISH not "
+                  "truthy): video NOT uploaded; publish state recorded "
+                  "as unpublished.")
+    if not all_solved:
+        _npub = _nerdle_empty_publish("unsolved: never upload")
+    elif not YOUTUBE_AVAILABLE:
+        _npub = _nerdle_empty_publish("youtube_upload module unavailable")
     import json as _json
     # Iteration 2: write the REAL chapter times computed during assembly
     # (previously result.json had no chapters, so the runner invented
@@ -5253,7 +5392,21 @@ async def main():
                          "per_mode": _wd_per_mode,
                          "warnings": _wd_warnings,
                          "use_local_time": True},
-         "first_typing_s": _FIRST_TYPE_T}
+         "first_typing_s": _FIRST_TYPE_T,
+         # Iteration 37: publish state (published=true ONLY on a real
+         # YouTube video id; gate-off runs record published=false).
+         # The runner copies these into the DB record for _db_save.
+         "published": _npub.get("published"),
+         "youtube_video_id": _npub.get("youtube_video_id"),
+         "youtube_url": _npub.get("youtube_url"),
+         "published_at": _npub.get("published_at"),
+         "publish_attempts": _npub.get("publish_attempts"),
+         "last_publish_error": _npub.get("last_publish_error"),
+         "enrichment": _npub.get("enrichment"),
+         "enrichment_deferred": _npub.get("enrichment_deferred"),
+         "quota_estimate": _npub.get("quota_estimate"),
+         "shorts_video_id": _npub.get("shorts_video_id"),
+         "enrichment_context": _npub.get("enrichment_context")}
     (video_dir / f"result_{date_key}.json").write_text(_json.dumps(_res_doc, indent=1))
     # The runner's run_nerdle_external only reads the FLAT
     # videos/result_<date>.json (it never looks in videos/nerdle/), so
