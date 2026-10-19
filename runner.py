@@ -19550,6 +19550,31 @@ def _s_phrazle(page, ans, gid):
         ans = cand
         _PLANS.pop(gid, None)
     seq = _guesses(gid, ans)
+    # Iter-40: re-plan against the LIVE board shape with a date-seeded
+    # 2..4 attempt target, so the video shows real solving. The old
+    # shape-blind plan collapsed to the answer alone (1 attempt) whenever
+    # the answer exceeded the planner's total-letter cap, and the reshape
+    # below cannot invent same-shape decoys for rare shapes (e.g.
+    # (4,4,5,5) has exactly one bank entry: the answer itself).
+    if groups:
+        try:
+            _src40 = HERE / "phrazle_live.json"
+            _bank40 = []
+            if _src40.exists():
+                _bank40 = [str(p).upper() for p in json.loads(
+                    _src40.read_text(encoding="utf-8"))["phrases"]]
+            if _bank40:
+                _seq40, _steps40 = S.plan_phrase(
+                    str(ans).upper(), _bank40, max_guesses=4,
+                    seed=_day_seed(gid), shape=tuple(groups))
+                if (len(_seq40) >= 2
+                        and _seq40[-1] == str(ans).upper()):
+                    seq = _seq40
+                    _PLANS[gid] = (seq, _steps40)
+                    print(f"[phrazle] iter-40 shape plan {tuple(groups)}: "
+                          f"{len(seq)} attempts")
+        except Exception as e:
+            print(f"[phrazle] iter-40 re-plan failed: {str(e)[:120]}")
     # Every row the board accepts must have the SAME word shape as the answer's
     # board. A wrong-shaped probe never scores, so replace probes that do not
     # match the visible shape with same-shape phrases from the live bank. This
@@ -22799,6 +22824,44 @@ def _framed_trim_first_bound(bounds, first_action_s):
         return list(bounds)
 
 
+def _layer_bg_music_after_intro(clip, intro_dur, gid):
+    """Layer the bg song AFTER the intro (iter-40).
+
+    The intro plays its OWN (verified-clean) voice at full volume; the bg
+    song starts at `intro_dur` so the two never overlap. When the intro was
+    skipped (intro_dur 0), the bg covers the full clip as before. Soft-fail:
+    on any error the clip is returned unchanged.
+    """
+    try:
+        from moviepy.editor import AudioFileClip
+        import moviepy.audio.fx.all as afx
+        from moviepy.audio.AudioClip import CompositeAudioClip
+        for _mp3 in ("song1.mp3", "song2.mp3"):
+            _sp = QDIR / _mp3
+            if not _sp.exists():
+                continue
+            try:
+                sc = AudioFileClip(str(_sp))
+                _intro_s = float(intro_dur or 0.0)
+                _body_dur = max(0.0, float(clip.duration or 0) - _intro_s)
+                _bg = (afx.audio_loop(sc, duration=_body_dur)
+                       if sc.duration < _body_dur
+                       else sc.subclip(0, _body_dur))
+                _bg = _bg.volumex(0.18).set_start(_intro_s)
+                _base = getattr(clip, "audio", None)
+                _mix = (CompositeAudioClip([_bg, _base])
+                        if _base is not None else _bg)
+                clip = clip.set_audio(_mix)
+                _dbg(gid, f"music {_sp.name} from {_intro_s:.1f}s "
+                           f"({_body_dur:.1f}s body)")
+                return clip
+            except Exception:
+                continue
+    except Exception as e:
+        _dbg(gid, f"bg music skipped: {str(e)[:120]}")
+    return clip
+
+
 def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
                      solved, evidence, vpath):
     """Cut the four Framed modes into one captioned, bordered video."""
@@ -22970,9 +23033,9 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
             clip = concatenate_videoclips(parts, method="compose")
             # Iter-33: cleaned 20 s brand intro prepended. The raw
             # intro's stale MOCHA/Oct-5 + Phoodle "BRE" window is held
-            # on the logo frame and its audio dropped (bg song below
-            # covers the full clip). Chapters shift by the intro
-            # duration. Soft-fail: on error the clip ships intro-less.
+            # on the logo frame; its own (verified-clean) voice plays.
+            # Chapters shift by the intro duration. Soft-fail: on error
+            # the clip ships intro-less.
             try:
                 import intro_watermark as _IW33
                 clip, chapters, _intro_dur33 = \
@@ -22981,18 +23044,10 @@ def _assemble_framed(gid, g, date_key, today, short, answers, per_mode,
                 total += float(_intro_dur33 or 0)
             except Exception as e:
                 _dbg(gid, f"intro prepend skipped: {str(e)[:120]}")
-            for _mp3 in ("song1.mp3", "song2.mp3"):
-                _sp = QDIR / _mp3
-                if _sp.exists():
-                    try:
-                        sc = AudioFileClip(str(_sp))
-                        full = (afx.audio_loop(sc, duration=clip.duration)
-                                if sc.duration < clip.duration
-                                else sc.subclip(0, clip.duration))
-                        clip = clip.set_audio(full.volumex(0.18))
-                        break
-                    except Exception:
-                        continue
+                _intro_dur33 = 0.0
+            # Iter-40: bg song starts AFTER the intro (never overlaps the
+            # intro's own voice).
+            clip = _layer_bg_music_after_intro(clip, _intro_dur33, gid)
             # Iter-33: wordsolverx watermark, bottom-right, whole
             # clip (gameplay + cards). Soft-fail: on error the clip
             # ships without it.
@@ -23908,9 +23963,9 @@ def run_one(gid):
             clip = concatenate_videoclips(parts, method="compose")
             # Iter-33: cleaned 20 s brand intro prepended. The raw
             # intro's stale MOCHA/Oct-5 + Phoodle "BRE" window is held
-            # on the logo frame and its audio dropped (bg song below
-            # covers the full clip). Chapters shift by the intro
-            # duration. Soft-fail: on error the clip ships intro-less.
+            # on the logo frame; its own (verified-clean) voice plays.
+            # Chapters shift by the intro duration. Soft-fail: on error
+            # the clip ships intro-less.
             try:
                 import intro_watermark as _IW33
                 clip, chapters, _intro_dur = \
@@ -23920,20 +23975,9 @@ def run_one(gid):
             except Exception as e:
                 _dbg(gid, f"intro prepend skipped: {str(e)[:120]}")
                 _intro_dur = 0.0
-            for _mp3 in ("song1.mp3", "song2.mp3"):
-                _sp = QDIR / _mp3
-                if _sp.exists():
-                    try:
-                        sc = AudioFileClip(str(_sp))
-                        full = (afx.audio_loop(sc, duration=clip.duration)
-                                if sc.duration < clip.duration
-                                else sc.subclip(0, clip.duration))
-                        clip = clip.set_audio(full.volumex(0.18))
-                        _dbg(gid, f"music {_sp.name} on main body "
-                                   f"({clip.duration:.1f}s)")
-                        break
-                    except Exception:
-                        continue
+            # Iter-40: bg song starts AFTER the intro (never overlaps the
+            # intro's own voice).
+            clip = _layer_bg_music_after_intro(clip, _intro_dur, gid)
             # Iter-33: wordsolverx watermark, bottom-right, whole
             # clip (gameplay + cards). Soft-fail: on error the clip
             # ships without it.

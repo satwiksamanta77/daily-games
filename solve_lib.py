@@ -135,14 +135,14 @@ def pick_guess(cands, allowed, forbidden, max_probe=1200, ban=()):
 MIN_PROBES = 2
 
 
-def _deduction_done(pool, used, turn, max_guesses):
+def _deduction_done(pool, used, turn, max_guesses, min_probes=MIN_PROBES):
     """True when the answer must now be typed.
 
     Deduction is only considered finished when the guess budget is spent or the
     constraint table has genuinely isolated a single word. Never before
-    MIN_PROBES real probes have been made.
+    `min_probes` real probes have been made.
     """
-    if turn <= MIN_PROBES:
+    if turn <= min_probes:
         return False
     if turn >= max_guesses:
         return True
@@ -903,7 +903,11 @@ def _valid_phrase(phrase):
     if len(words) < 2 or not all(w.isalpha() for w in words):
         return False
     total = sum(len(w) for w in words)
-    return 6 <= total <= 16
+    # Iter-40: the old total <= 16 cap rejected REAL answers the site
+    # serves (e.g. "PLAY YOUR CARDS RIGHT" = 18 letters, and the site's
+    # own phrase bank runs to 26 letters), which collapsed the plan to
+    # the answer alone (1 attempt). The cap now covers the bank's max.
+    return 6 <= total <= 30
 
 
 def phrase_pattern(guess, answer):
@@ -937,7 +941,8 @@ def _phrase_entropy(guess, pool, limit=1200):
     return sum((c / total) ** 2 for c in buckets.values()) * total
 
 
-def pick_phrase(pool, answer, used, ban=(), max_probe=250, min_after=0):
+def pick_phrase(pool, answer, used, ban=(), max_probe=250, min_after=0,
+                rng=None):
     """Best next Phrazle guess by real phrase-level constraint propagation.
 
     `min_after` guards against a probe being TOO good: one lucky guess can
@@ -945,6 +950,10 @@ def pick_phrase(pool, answer, used, ban=(), max_probe=250, min_after=0):
     play as "guessed it on the second try". While we are still short of
     MIN_PROBES, probes that shrink the surviving pool below `min_after` are
     skipped.
+
+    `rng`, when given, picks date-seeded among the top-3 entropy candidates
+    so the opening probes vary day to day instead of repeating the single
+    best probe for every identical answer.
     """
     ban = set(ban)
     avail = [p for p in pool if p not in used and p not in ban]
@@ -952,7 +961,7 @@ def pick_phrase(pool, answer, used, ban=(), max_probe=250, min_after=0):
         return None
     if len(avail) == 1:
         return avail[0]
-    best, best_key, fallback = None, None, None
+    cands, fallback = [], None
     for g in avail[:max_probe]:
         target = phrase_pattern(g, answer)
         after = sum(1 for p in pool if phrase_pattern(g, p) == target)
@@ -962,12 +971,16 @@ def pick_phrase(pool, answer, used, ban=(), max_probe=250, min_after=0):
             if fallback is None:
                 fallback = g
             continue
-        if best_key is None or key < best_key:
-            best, best_key = g, key
-    return best if best is not None else (fallback or avail[0])
+        cands.append((key, g))
+    if not cands:
+        return fallback or avail[0]
+    cands.sort(key=lambda kv: kv[0])
+    if rng is None:
+        return cands[0][1]
+    return rng.choice([g for _, g in cands[:3]])
 
 
-def plan_phrase(answer, phrases, max_guesses=5):
+def plan_phrase(answer, phrases, max_guesses=5, shape=None, seed=None):
     """Deduction sequence for Phrazle (phrase-level feedback).
 
     Every guess must be a valid multi-word phrase that fills the board, and the
@@ -976,38 +989,100 @@ def plan_phrase(answer, phrases, max_guesses=5):
     typed on guess 2 every single time. The answer is now typed only once the
     phrase list has genuinely collapsed onto it AND at least MIN_PROBES real
     guesses have been made.
+
+    `shape` (tuple of word lengths, the live board's cell groups) makes the
+    planner shape-aware: the site rejects any guess that does not fill the
+    visible cells ("Please use all available spaces") and rejects any WORD
+    not in its word list ("Word X is not in word list"). Without `shape`,
+    the generic `_valid_phrase` rule applies.
+
+    `seed`, when given, draws a date-seeded total-attempt target of 2..4
+    (real probes first, the verified answer last) so the video shows genuine
+    solving every day instead of a 1-attempt answer dump.
     """
+    import random as _r
+    rng = _r.Random(seed) if seed is not None else None
     answer = " ".join(str(answer).upper().split())
+    if shape is not None:
+        shape = tuple(shape)
+        valid = lambda p: (tuple(len(w) for w in str(p).upper().split())
+                           == shape)
+    else:
+        valid = _valid_phrase
     pool = [" ".join(str(p).upper().split()) for p in phrases]
-    pool = [p for p in pool if _valid_phrase(p)]
-    if not _valid_phrase(answer):
+    pool = [p for p in pool if valid(p)]
+    if not valid(answer):
         # Nothing usable in the list - play the answer on its own.
         return [answer], [{"turn": 1, "guess": answer, "pattern": "G" * len(answer),
                            "pool_before": 0, "pool_after": 0}]
     if answer not in pool:
         pool.append(answer)
 
+    if seed is not None:
+        # Iter-40: date-seeded 2..4 total attempts; the answer is the last
+        # guess, everything before it a real probe.
+        n_target = 2 + rng.randint(0, 2)
+        min_probes = n_target - 1
+        max_guesses = min(max_guesses, 4)
+    else:
+        min_probes = MIN_PROBES
+
+    # Same-shape decoy synthesis (iter-40): some board shapes have NO other
+    # bank phrase (e.g. shape (4,4,5,5) has exactly one bank entry - the
+    # answer itself), so entropy picking has nothing to play. Synthesize
+    # decoys from REAL words drawn from the site's own phrase bank: the
+    # site validates each word against its word list (not the whole phrase
+    # against the phrase list), so bank-vocabulary words are accepted.
+    synth_words = None
+    if shape is not None and not [p for p in pool if p != answer]:
+        synth_words = {}
+        for p in phrases:
+            for w in str(p).upper().split():
+                if w.isalpha():
+                    synth_words.setdefault(len(w), set()).add(w)
+        synth_words = {k: sorted(v) for k, v in synth_words.items()}
+
+    def _synth_decoy(used):
+        for _ in range(60):
+            parts, ok = [], True
+            for gl in shape:
+                cands = (synth_words or {}).get(gl)
+                if not cands:
+                    ok = False
+                    break
+                parts.append(rng.choice(cands) if rng else cands[0])
+            if not ok:
+                return None
+            d = " ".join(parts)
+            if d != answer and d not in used:
+                return d
+        return None
+
     used, guesses, steps = set(), [], []
     cur = None
     for turn in range(1, max_guesses + 1):
-        # While still short of MIN_PROBES, forbid probes that isolate the
+        # While still short of min_probes, forbid probes that isolate the
         # answer immediately - otherwise one lucky guess hands it over on
         # turn 2 and the video stops looking like solving.
-        min_after = 2 if turn <= MIN_PROBES else 1
-        finish = _deduction_done(pool, used, turn, max_guesses)
+        min_after = 2 if turn <= min_probes else 1
+        finish = _deduction_done(pool, used, turn, max_guesses, min_probes)
         if cur is None or cur in used:
-            cur = answer if finish else pick_phrase(pool, answer, used,
-                                                    ban=(answer,),
-                                                    min_after=min_after)
-            if cur is None:
-                # NEVER hand over the secret because the picker came back
-                # empty: fall back to a date-seeded unused probe so the video
-                # still shows a real wrong guess. Only the deduction-done
-                # branch (`finish`) may commit the answer early.
-                import random as _r
-                _left = [p for p in pool if p not in used and p != answer]
-                cur = (_r.Random(f"phrazle:{answer}:{turn}").choice(_left)
-                       if _left else answer)
+            if finish:
+                cur = answer
+            else:
+                cur = pick_phrase(pool, answer, used, ban=(answer,),
+                                  min_after=min_after, rng=rng)
+                if cur is None and synth_words:
+                    cur = _synth_decoy(used)
+                if cur is None:
+                    # NEVER hand over the secret because the picker came back
+                    # empty: fall back to a date-seeded unused probe so the video
+                    # still shows a real wrong guess. Only the deduction-done
+                    # branch (`finish`) may commit the answer early.
+                    _left = [p for p in pool if p not in used and p != answer]
+                    _rr = rng if rng is not None else _r.Random(
+                        f"phrazle:{answer}:{turn}")
+                    cur = (_rr.choice(_left) if _left else answer)
         used.add(cur)
         before = len(pool)
         pat = phrase_pattern(cur, answer)
@@ -1017,10 +1092,15 @@ def plan_phrase(answer, phrases, max_guesses=5):
                       "pool_before": before, "pool_after": len(pool)})
         if cur == answer:
             return guesses, steps
-        finish_next = _deduction_done(pool, used, turn + 1, max_guesses)
-        cur = answer if finish_next else pick_phrase(pool, answer, used,
-                                                    ban=(answer,),
-                                                    min_after=min_after)
+        finish_next = _deduction_done(pool, used, turn + 1, max_guesses,
+                                      min_probes)
+        if finish_next:
+            cur = answer
+        else:
+            cur = pick_phrase(pool, answer, used, ban=(answer,),
+                              min_after=min_after, rng=rng)
+            if cur is None and synth_words:
+                cur = _synth_decoy(used)
     if guesses[-1] != answer:
         guesses.append(answer)
         steps.append({"turn": len(guesses), "guess": answer,

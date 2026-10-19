@@ -13,12 +13,13 @@ of every video - the exact thing the no-stale-answer rule forbids.
 So assembly NEVER prepends the raw file. ``clean_intro()`` builds a
 cleaned copy with ffmpeg: the dirty window [DIRTY_START, DIRTY_END)
 is replaced by a static hold of the clean WORDSOLVERX logo frame
-(HOLD_AT), the rest is the original, and the audio track is DROPPED
-(the intro's own audio is unverified - a spoken "MOCHA" voiceover
-would leak the stale answer through audio; the per-game bg song
-covers the full final clip instead). Duration stays 20.0 s, so the
-chapter shift is a plain +20 s (the Worldle chapter helper already
-takes intro_s; see _s_worldle_final_chapters).
+(HOLD_AT), the rest is the original, and the intro's own audio track
+is KEPT (iter-40 verified it clean of stale answers by transcription:
+only "Thank you for watching!", no MOCHA / Phoodle / October-5
+mention). Duration stays 20.0 s, so the chapter shift is a plain
++20 s (the Worldle chapter helper already takes intro_s; see
+_s_worldle_final_chapters). The per-game bg song is layered AFTER
+the intro by assembly, never over it.
 
 ITEM 2 - WATERMARK (new; no video watermark ever existed in repo
 history): ``make_watermark_png()`` renders a small "wordsolverx.com"
@@ -74,11 +75,17 @@ def _run(cmd):
 
 
 def clean_intro(src=None, out=None, log=print):
-    """Build a cleaned intro (no stale answers, no audio) with ffmpeg.
+    """Build a cleaned intro (no stale answers) with ffmpeg.
 
     Returns the output path on success, None on any failure.
     ``src`` defaults to the repo intro; ``out`` defaults to a temp file.
     The caller owns deleting ``out`` (assembly jobs write into vdir).
+
+    The intro's own audio track is KEPT: it was verified clean of stale
+    answers (iter-40: faster-whisper transcription of the full 20 s found
+    only the line "Thank you for watching!" at 3.78-11.74 s - no MOCHA,
+    no Phoodle fragment, no October-5 mention). The dirty video window is
+    still held on the logo frame; the audio runs untouched underneath.
     """
     src = Path(src) if src else INTRO_SRC
     if not src.exists():
@@ -101,7 +108,9 @@ def clean_intro(src=None, out=None, log=print):
             return None
         hold_dur = DIRTY_END - DIRTY_START
         # [0, DIRTY_START) original + [DIRTY_START, DIRTY_END) logo hold
-        # + [DIRTY_END, end) original; no audio (-an).
+        # + [DIRTY_END, end) original; the original audio track is kept
+        # (verified clean of stale answers, iter-40) and runs untouched
+        # under the rebuilt video (both are 20.0 s).
         filt = (
             f"[0:v]trim=0:{DIRTY_START},setpts=PTS-STARTPTS[v0];"
             f"[1:v]trim=0:{hold_dur},setpts=PTS-STARTPTS,"
@@ -113,7 +122,7 @@ def clean_intro(src=None, out=None, log=print):
                   "-i", str(src),
                   "-loop", "1", "-t", str(hold_dur), "-i", hold_png,
                   "-filter_complex", filt,
-                  "-map", "[vout]", "-an",
+                  "-map", "[vout]", "-map", "0:a", "-c:a", "aac",
                   "-c:v", "libx264", "-preset", "medium", "-crf", "18",
                   "-r", "30", out])
         if r.returncode != 0 or not os.path.exists(out):
@@ -193,6 +202,12 @@ def prepend_clean_intro(clip, chapters, workdir, log=print):
 
     Returns (new_clip, new_chapters, intro_dur). On any failure the
     input clip/chapters are returned unchanged with intro_dur 0.0.
+
+    The intro plays its OWN (verified-clean) voice at full volume; the
+    body that follows gets silence here - assembly layers the bg song
+    AFTER the intro, so the two never overlap. The audio is wired
+    explicitly (intro voice + silent body) rather than relying on
+    concatenate's audio handling.
     """
     try:
         from moviepy.editor import (VideoFileClip, concatenate_videoclips)
@@ -207,6 +222,20 @@ def prepend_clean_intro(clip, chapters, workdir, log=print):
             return clip, list(chapters or []), 0.0
         new_clip = concatenate_videoclips([intro, clip],
                                           method="compose")
+        try:
+            from moviepy.audio.AudioClip import (CompositeAudioClip,
+                                                 AudioClip)
+            ia = getattr(intro, "audio", None)
+            body_dur = float(clip.duration or 0)
+            if ia is not None and body_dur > 0:
+                silence = AudioClip(lambda t: [0, 0], duration=body_dur,
+                                    fps=44100)
+                new_clip = new_clip.set_audio(CompositeAudioClip(
+                    [ia, silence.set_start(dur)]))
+            elif ia is not None:
+                new_clip = new_clip.set_audio(ia)
+        except Exception as e:
+            log(f"[intro] audio wiring skipped: {str(e)[:120]}")
         log(f"[intro] prepended cleaned intro ({dur:.1f}s, "
             f"stale-answer window {DIRTY_START}-{DIRTY_END}s held)")
         return (new_clip,

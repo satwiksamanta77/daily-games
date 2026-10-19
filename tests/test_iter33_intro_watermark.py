@@ -139,8 +139,11 @@ class TestCleanIntro(unittest.TestCase):
                                delta=0.6)
 
     def test_no_audio_track(self):
-        # Intro audio is unverified (could speak MOCHA) - dropped.
-        self.assertEqual(_ffprobe_streams(self.out), ["video"])
+        # Iter-40: the intro's own audio is KEPT (transcription-verified
+        # clean of stale answers: only "Thank you for watching!", no
+        # MOCHA / Phoodle / October-5 mention). The test now asserts the
+        # NEW contract: exactly one audio stream present.
+        self.assertEqual(_ffprobe_streams(self.out), ["video", "audio"])
 
     def test_dirty_window_held_on_logo(self):
         # t=5 (was MOCHA answer page) and t=11 (was Phoodle BRE) must
