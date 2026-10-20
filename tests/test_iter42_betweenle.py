@@ -1,22 +1,43 @@
-"""Fix-loop iteration 42 Betweenle entry tests.
+"""Fix-loop iteration 42 + 45 Betweenle entry tests.
 
-Root cause (run 39299438462): the DAILY WORD entry clicked exactly once,
-immediately after navigation, with two permanently-dead selectors
+Iter-42 root cause (run 39299438462): the DAILY WORD entry clicked exactly
+once, immediately after navigation, with two permanently-dead selectors
 (button:/a: — the element is a SPAN#menupanel-mode-daily) and no wait for
 the menu to render. When the lookup raced the render, the bot typed all 5
-guesses into the menu (WARN at 18:05:31, menu in every frame, counters
-stuck at the hidden panel's 'Guess 1 / 12', stats='WORD').
+guesses into the menu.
 
-The fix: wait for the menu, click the real element, VERIFY the board
-opened, retry, and FAIL FAST (no guesses typed) if it won't open.
+Iter-45 root cause (run 39374184013, ANALYSIS42): the iter-42 board-open
+probe tested ONLY #upperheader's classList. The game's own source
+(frontend main.js, header controller `class ns`) removes 'hidden' in
+init() — `init(){ this.show() }` — at startup, regardless of the screen
+displayed, and the opaque fullscreen #menupanel covers the header while
+the menu is up. The probe false-positived on the menu, entry took its
+already-open fast path, and 5 guesses went into the void again.
+
+The iter-45 probe therefore decides from RENDERED facts (computed style,
+rect, offsetParent, elementFromPoint hit-testing) in Python. The mock
+below models the LIVE DOM states — crucially, on the menu #upperheader
+has NO 'hidden' class (removed at init) yet the board is NOT open:
+
+  state          header facts                       menu facts     hit
+  --------------- ---------------------------------- -------------- -------
+  menu (covered) class removed, rect ok, parent ok  rendered       'menu'
+  menu (unbuilt) class removed, zero rect, no parent rendered      []
+  board open     class removed, rect ok, parent ok  display:none   'header'
+  board + help   class removed, rect ok, parent ok  display:none   'help'
+  nothing yet    class removed, zero rect           display:none   []
 
 Tests:
-(a) _betweenle_board_open distinguishes menu from board via #upperheader;
-(b) _betweenle_enter_daily fails fast when the menu never renders;
-(c) _betweenle_enter_daily fails fast when clicks never open the board;
-(d) _betweenle_enter_daily succeeds when the board opens;
-(e) _s_betweenle returns False immediately when entry fails (no typing);
-(f) the dead button:/a: selectors are gone from the entry path.
+(a) _betweenle_board_open is False on the LIVE menu (both sub-states),
+    True on a genuinely open board, True when only #helppanel covers it,
+    False on probe errors/garbage;
+(b) _betweenle_enter_daily does NOT take the fast path on the live menu —
+    it clicks DAILY WORD (the run-39374184013 regression);
+(c) _betweenle_enter_daily fails fast when the menu never renders;
+(d) _betweenle_enter_daily fails fast when clicks never open the board;
+(e) _betweenle_enter_daily succeeds when the board opens;
+(f) _s_betweenle returns False immediately when entry fails (no typing);
+(g) the dead button:/a: selectors are gone from the entry path.
 """
 import sys
 import unittest
@@ -46,13 +67,26 @@ class _MockElement:
             self._on_click()
 
 
-class _MockPage:
-    """Simulates the Betweenle menu/board DOM for entry tests."""
+def _facts(hidden, display, w, h, offset_parent, visibility="visible"):
+    return {"hidden": hidden, "display": display, "visibility": visibility,
+            "w": w, "h": h, "offsetParent": offset_parent}
 
-    def __init__(self, menu_visible=True, board_opens_on_click=True):
+
+class _MockPage:
+    """Simulates the Betweenle LIVE menu/board DOM for entry tests.
+
+    Mirrors betweenle.com: ns.init() removes #upperheader's 'hidden'
+    class at startup in EVERY state, so 'hidden' is False for the
+    header throughout; what changes is rendering + hit-testing.
+    """
+
+    def __init__(self, menu_visible=True, board_opens_on_click=True,
+                 header_rendered_on_menu=True, help_covers_board=False):
         self.menu_visible = menu_visible
         self.board_open = False
         self.board_opens_on_click = board_opens_on_click
+        self.header_rendered_on_menu = header_rendered_on_menu
+        self.help_covers_board = help_covers_board
         self.clicks = []
         self.evaluates = []
         self.daily_word_element = _MockElement(
@@ -63,12 +97,46 @@ class _MockPage:
             self.board_open = True
             self.menu_visible = False
 
+    def _board_state(self):
+        gone = _facts(True, "none", 0, 0, False)
+        if self.board_open:
+            header = _facts(False, "grid", 600, 40, True)
+            if self.help_covers_board:
+                return {"header": header, "menu": gone,
+                        "help": _facts(False, "flex", 800, 600, True),
+                        "hit": ["help"] * 5}
+            return {"header": header, "menu": gone, "help": gone,
+                    "hit": ["header"] * 5}
+        if self.menu_visible:
+            # LIVE menu: class removed at init; the header is laid out
+            # (or not built yet) but the opaque menupanel covers the
+            # whole game area, so hit-testing lands on the menu.
+            if self.header_rendered_on_menu:
+                header = _facts(False, "grid", 600, 40, True)
+                hit = ["menu"] * 5
+            else:
+                header = _facts(False, "grid", 0, 0, False)
+                hit = []
+            return {"header": header,
+                    "menu": _facts(False, "flex", 800, 600, True),
+                    "help": gone, "hit": hit}
+        # Nothing rendered yet (pre-menu): zero rects, no offsetParent.
+        return {"header": _facts(False, "grid", 0, 0, False),
+                "menu": gone, "help": gone, "hit": []}
+
     def evaluate(self, js, arg=None):
         self.evaluates.append(js)
-        if "menupanel" in js and "classList" in js:
-            return self.menu_visible
-        if "upperheader" in js and "classList" in js:
-            return self.board_open
+        if "betweenle-board-probe" in js:
+            return self._board_state()
+        if "betweenle-facts" in js:
+            st = self._board_state()
+            return {"menupanel": st["menu"],
+                    "upperheader": st["header"],
+                    "helppanel": st["help"]}.get(arg)
+        if "return cs.display" in js:
+            # _close_betweenle_help computed-style probe: both how-to
+            # panels are hidden in the mock world.
+            return "none/hidden"
         return None
 
     def query_selector(self, sel):
@@ -93,12 +161,28 @@ class _MockPage:
 
 class TestBoardOpen(unittest.TestCase):
     def test_menu_is_not_board_open(self):
-        # Menu state: #upperheader has the hidden class.
+        # LIVE menu: #upperheader has NO 'hidden' class (removed at
+        # controller init) and is laid out, but the menupanel covers it.
+        # The iter-42 classList probe returned True here — the bug.
         page = _MockPage(menu_visible=True)
+        self.assertFalse(R._betweenle_board_open(page))
+
+    def test_menu_header_not_rendered_is_not_board_open(self):
+        # ANALYSIS42 regression case: #upperheader without 'hidden' but
+        # not rendered (zero rect / offsetParent null) -> not open.
+        page = _MockPage(menu_visible=True, header_rendered_on_menu=False)
         self.assertFalse(R._betweenle_board_open(page))
 
     def test_board_open_when_header_visible(self):
         page = _MockPage(menu_visible=False)
+        page.board_open = True
+        self.assertTrue(R._betweenle_board_open(page))
+
+    def test_board_open_when_only_help_covers_header(self):
+        # Board open + the how-to overlay (#helppanel, raised by starting
+        # the game) covering every sample point: still open — the entry
+        # flow dismisses the overlay before typing.
+        page = _MockPage(menu_visible=False, help_covers_board=True)
         page.board_open = True
         self.assertTrue(R._betweenle_board_open(page))
 
@@ -108,8 +192,41 @@ class TestBoardOpen(unittest.TestCase):
                 raise RuntimeError("boom")
         self.assertFalse(R._betweenle_board_open(_BadPage()))
 
+    def test_board_open_false_on_garbage_probe(self):
+        # A legacy boolean/garbage probe result must fail closed.
+        class _BoolPage:
+            def evaluate(self, js, arg=None):
+                return True
+        self.assertFalse(R._betweenle_board_open(_BoolPage()))
+
+    def test_rendered_pure_facts(self):
+        # _betweenle_rendered: the decision table over raw facts.
+        self.assertTrue(R._betweenle_rendered(
+            _facts(False, "grid", 600, 40, True)))
+        self.assertFalse(R._betweenle_rendered(
+            _facts(True, "grid", 600, 40, True)))       # hidden class
+        self.assertFalse(R._betweenle_rendered(
+            _facts(False, "none", 600, 40, True)))      # display:none
+        self.assertFalse(R._betweenle_rendered(
+            _facts(False, "grid", 0, 40, True)))        # zero width
+        self.assertFalse(R._betweenle_rendered(
+            _facts(False, "grid", 600, 40, False)))     # no offsetParent
+        self.assertFalse(R._betweenle_rendered(
+            _facts(False, "grid", 600, 40, True, visibility="hidden")))
+        self.assertFalse(R._betweenle_rendered(None))
+        self.assertFalse(R._betweenle_rendered({}))
+
 
 class TestEnterDaily(unittest.TestCase):
+    def test_entry_clicks_daily_word_on_live_menu(self):
+        # THE run-39374184013 regression: on the live menu the classList
+        # probe lied "already open" and DAILY WORD was never clicked.
+        # Entry must click it (no fast path) and then verify the board.
+        page = _MockPage(menu_visible=True, board_opens_on_click=True)
+        self.assertTrue(R._betweenle_enter_daily(page, "betweenle"))
+        self.assertTrue(page.daily_word_element.clicked)
+        self.assertTrue(page.board_open)
+
     def test_fail_fast_when_menu_never_renders(self):
         # Menu never becomes visible: entry must give up, not type.
         page = _MockPage(menu_visible=False)
@@ -130,6 +247,8 @@ class TestEnterDaily(unittest.TestCase):
         self.assertTrue(page.daily_word_element.clicked)
 
     def test_already_open_skips_entry(self):
+        # A GENUINELY open board (menu gone, header hit-testable) may
+        # take the fast path: no click needed, no clicks at all.
         page = _MockPage(menu_visible=False)
         page.board_open = True
         self.assertTrue(R._betweenle_enter_daily(page, "betweenle"))

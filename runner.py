@@ -6076,20 +6076,126 @@ def _betweenle_won_after_guess(page, ans):
     return bool(won), str(ev or "")
 
 
+_BETWEENLE_EL_FACTS_JS = """(id) => { /*betweenle-facts*/
+  const e = document.getElementById(id);
+  if (!e) return null;
+  const cs = getComputedStyle(e);
+  const r = e.getBoundingClientRect();
+  return {hidden: e.classList.contains('hidden'), display: cs.display,
+          visibility: cs.visibility, w: r.width, h: r.height,
+          offsetParent: e.offsetParent !== null || cs.position === 'fixed'};
+}"""
+
+
+def _betweenle_el_facts(page, el_id):
+    """Raw rendered-state facts for one element (dict or None).
+
+    Read-only probe; the open/not-open DECISION lives in Python
+    (_betweenle_rendered / _betweenle_board_open) so unit tests can feed
+    it the exact live states instead of re-encoding them in JS mocks.
+    """
+    try:
+        f = page.evaluate(_BETWEENLE_EL_FACTS_JS, el_id)
+    except Exception:
+        return None
+    return f if isinstance(f, dict) else None
+
+
+def _betweenle_rendered(f):
+    """True iff an element with these facts is actually RENDERED:
+    no 'hidden' class, computed display/visibility on, non-empty rect,
+    and an offsetParent (a display:none ancestor zeroes the rect and
+    nulls offsetParent). Pure — unit-testable without a browser."""
+    if not isinstance(f, dict):
+        return False
+    if f.get("hidden"):
+        return False
+    if f.get("display") in (None, "none"):
+        return False
+    if f.get("visibility") == "hidden":
+        return False
+    if (f.get("w") or 0) <= 0 or (f.get("h") or 0) <= 0:
+        return False
+    if not f.get("offsetParent"):
+        return False
+    return True
+
+
+_BETWEENLE_BOARD_PROBE_JS = """() => { /*betweenle-board-probe*/
+  const facts = (e) => {
+    if (!e) return null;
+    const cs = getComputedStyle(e);
+    const r = e.getBoundingClientRect();
+    return {hidden: e.classList.contains('hidden'), display: cs.display,
+            visibility: cs.visibility, w: r.width, h: r.height,
+            offsetParent: e.offsetParent !== null ||
+                          cs.position === 'fixed'};
+  };
+  const u = document.getElementById('upperheader');
+  const m = document.getElementById('menupanel');
+  const hp = document.getElementById('helppanel');
+  const out = {header: facts(u), menu: facts(m), help: facts(hp),
+               hit: null};
+  if (u) {
+    const r = u.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) {
+      const y = r.top + r.height / 2;
+      out.hit = [];
+      for (const fx of [0.08, 0.3, 0.5, 0.7, 0.92]) {
+        const el = document.elementFromPoint(r.left + r.width * fx, y);
+        if (!el) out.hit.push('none');
+        else if (el === u || u.contains(el)) out.hit.push('header');
+        else if (hp && (el === hp || hp.contains(el)))
+          out.hit.push('help');
+        else if (m && (el === m || m.contains(el))) out.hit.push('menu');
+        else out.hit.push('other');
+      }
+    }
+  }
+  return out;
+}"""
+
+
 def _betweenle_board_open(page):
     """True iff the Betweenle daily board is actually open (not the menu).
 
-    The menu page carries the game panels in hidden DOM (#upperheader.hidden
-    holds 'Guess 1 / 12', #statisticspanel-word holds 'WORD'), so body-text
-    and counter probes false-positive on the menu. The board is open only
-    when the guess-counter header is visible.
+    Iter-45 (run 39374184013, ANALYSIS42): the iter-42 classList probe
+    false-positived on the live menu. The game's own source (frontend
+    main.js, header controller `class ns`) removes 'hidden' from
+    #upperheader in init() — `init(){ this.show() }` — at startup,
+    regardless of which screen is displayed, and the opaque fullscreen
+    #menupanel (class `as`: show() sizes it over the whole game area)
+    covers the header while the menu is up. So the class says nothing;
+    the board is open only when ALL of these hold:
+      * #upperheader is RENDERED (computed style on, non-empty rect,
+        offsetParent present — not just class-removed);
+      * #menupanel is NOT rendered (the menu is gone);
+      * the header is actually reachable by hit-testing
+        (elementFromPoint across its width returns the header), or is
+        covered at every sample point ONLY by #helppanel — the how-to
+        overlay the game raises over a started game, which the entry
+        flow dismisses before typing.
+    Anything else (menu up, header not rendered, unknown overlay) is
+    NOT open: the entry flow must click DAILY WORD, never trust a
+    single class probe. Read-only — never raises.
     """
     try:
-        return bool(page.evaluate(
-            "() => { const u = document.getElementById('upperheader');"
-            " return !!(u && !u.classList.contains('hidden')); }"))
+        st = page.evaluate(_BETWEENLE_BOARD_PROBE_JS)
     except Exception:
         return False
+    if not isinstance(st, dict):
+        return False
+    if not _betweenle_rendered(st.get("header")):
+        return False
+    if _betweenle_rendered(st.get("menu")):
+        return False
+    hits = st.get("hit") or []
+    if "header" in hits:
+        return True
+    if hits and all(h == "help" for h in hits) \
+            and _betweenle_rendered(st.get("help")):
+        return True
+    return False
 
 
 def _betweenle_enter_daily(page, gid):
@@ -6104,12 +6210,16 @@ def _betweenle_enter_daily(page, gid):
 
     Now: wait for the menu, click the real element, VERIFY the board opened,
     retry, and return False (fail fast — no guesses typed) if it won't open.
+
+    Iter-45: the already-open fast path and the menu wait both use the
+    RENDERED-visibility probe (_betweenle_board_open / _betweenle_rendered),
+    never the classList: the game removes #upperheader's 'hidden' class at
+    controller init even while the menu is displayed (ANALYSIS42).
     """
     def _menu_visible():
         try:
-            return bool(page.evaluate(
-                "() => { const m = document.getElementById('menupanel');"
-                " return !!(m && !m.classList.contains('hidden')); }"))
+            return _betweenle_rendered(
+                _betweenle_el_facts(page, "menupanel"))
         except Exception:
             return False
 
