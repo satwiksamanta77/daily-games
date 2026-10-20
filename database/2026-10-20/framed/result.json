@@ -11,9 +11,9 @@
  },
  "video": "/home/runner/work/daily-games/daily-games/videos/framed/framed_final_2026-10-20.mp4",
  "published": true,
- "youtube_video_id": "hGxHLgkn9XU",
- "youtube_url": "https://www.youtube.com/watch?v=hGxHLgkn9XU",
- "published_at": "2026-10-19T16:50:31Z",
+ "youtube_video_id": "ogZ289AVYNw",
+ "youtube_url": "https://www.youtube.com/watch?v=ogZ289AVYNw",
+ "published_at": "2026-10-20T07:10:16Z",
  "publish_attempts": 1,
  "last_publish_error": null,
  "enrichment": {
@@ -23,31 +23,31 @@
    "cost": 50
   },
   "playlist": {
-   "status": "skipped",
-   "reason": "upload-only scopes (token granted youtube.upload only; playlists need youtube scope \u2014 re-consent with full scopes to enable)",
+   "status": "deferred",
+   "reason": "find/create failed for Framed Answers \u2014 October 2026; find/create failed for Framed Answers \u2014 2026",
    "cost": 0
   },
   "comment": {
-   "status": "skipped",
-   "reason": "upload-only scopes (token granted youtube.upload only; playlists need youtube scope \u2014 re-consent with full scopes to enable)",
-   "cost": 0
+   "status": "done",
+   "reason": "",
+   "cost": 50
   },
   "captions": {
-   "status": "deferred",
-   "reason": "captions upload returned failure",
-   "cost": 0
+   "status": "done",
+   "reason": "",
+   "cost": 400
   }
  },
  "enrichment_deferred": [
-  "captions"
+  "playlist"
  ],
  "quota_estimate": {
   "upload_calls": 1,
-  "general_units_estimated": 50
+  "general_units_estimated": 502
  },
  "shorts_video_id": null,
  "enrichment_context": {
-  "comment_text": "What was your first guess today? \ud83e\udd14\n\ud83d\udfe9 = got it    \ud83d\udfe8 = close    \u2b1b = stumped\n\n\u23f1\ufe0f Chapters:\n0:00 Intro\n0:20 Today's Framed puzzle - all four modes\n0:25 Framed Classic\n0:44 Framed One Frame\n1:13 Framed Titleshot\n1:46 Framed Poster\n2:43 Every answer\n2:51 Modes completed\n2:59 Tomorrow's puzzle\nFramed answer archive: https://wordsolverx.com/framed-answer-today\n\n\ud83d\udd14 Subscribe for a new Framed answer every day!",
+  "comment_text": "What was your first guess today? \ud83e\udd14\n\ud83d\udfe9 = got it    \ud83d\udfe8 = close    \u2b1b = stumped\n\n\u23f1\ufe0f Chapters:\n0:00 Intro\n0:20 Today's Framed puzzle - all four modes\n0:25 Framed Classic\n0:44 Framed One Frame\n1:13 Framed Titleshot\n1:46 Framed Poster\n2:38 Every answer\n2:46 Modes completed\n2:54 Tomorrow's puzzle\nFramed answer archive: https://wordsolverx.com/framed-answer-today\n\n\ud83d\udd14 Subscribe for a new Framed answer every day!",
   "playlist_titles": [
    [
     "Framed Answers \u2014 October 2026",
@@ -75,7 +75,7 @@
     "Framed Classic"
    ],
    [
-    44.8,
+    44.7,
     "Framed One Frame"
    ],
    [
@@ -83,19 +83,19 @@
     "Framed Titleshot"
    ],
    [
-    106.3,
+    106.2,
     "Framed Poster"
    ],
    [
-    163.3,
+    158.9,
     "Every answer"
    ],
    [
-    171.3,
+    166.9,
     "Modes completed"
    ],
    [
-    179.3,
+    174.9,
     "Tomorrow's puzzle"
    ]
   ],
