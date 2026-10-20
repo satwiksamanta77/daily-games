@@ -6,9 +6,9 @@
  "answer": "magenta",
  "video": "/home/runner/work/daily-games/daily-games/videos/colordle/colordle_final_2026-10-20.mp4",
  "published": true,
- "youtube_video_id": "dcC-t-3mXHg",
- "youtube_url": "https://www.youtube.com/watch?v=dcC-t-3mXHg",
- "published_at": "2026-10-19T16:43:51Z",
+ "youtube_video_id": "QGgNW21x2P4",
+ "youtube_url": "https://www.youtube.com/watch?v=QGgNW21x2P4",
+ "published_at": "2026-10-20T07:05:48Z",
  "publish_attempts": 1,
  "last_publish_error": null,
  "enrichment": {
@@ -18,27 +18,25 @@
    "cost": 50
   },
   "playlist": {
-   "status": "skipped",
-   "reason": "upload-only scopes (token granted youtube.upload only; playlists need youtube scope \u2014 re-consent with full scopes to enable)",
-   "cost": 0
+   "status": "done",
+   "reason": "find/create failed for Colordle Answers \u2014 2026",
+   "cost": 102
   },
   "comment": {
-   "status": "skipped",
-   "reason": "upload-only scopes (token granted youtube.upload only; playlists need youtube scope \u2014 re-consent with full scopes to enable)",
-   "cost": 0
+   "status": "done",
+   "reason": "",
+   "cost": 50
   },
   "captions": {
-   "status": "deferred",
-   "reason": "captions upload returned failure",
-   "cost": 0
+   "status": "done",
+   "reason": "",
+   "cost": 400
   }
  },
- "enrichment_deferred": [
-  "captions"
- ],
+ "enrichment_deferred": [],
  "quota_estimate": {
   "upload_calls": 1,
-  "general_units_estimated": 50
+  "general_units_estimated": 552
  },
  "shorts_video_id": null,
  "enrichment_context": {
@@ -53,7 +51,7 @@
     "All daily Colordle solution videos from 2026."
    ]
   ],
-  "duration_s": 82.57,
+  "duration_s": 82.86,
   "date_str": "October 20, 2026",
   "game": "Colordle",
   "chapters": [
@@ -74,15 +72,15 @@
     "Full solve (5 guesses)"
    ],
    [
-    61.5,
+    61.8,
     "Answer & deduction path"
    ],
    [
-    69.5,
+    69.8,
     "Solve breakdown"
    ],
    [
-    77.5,
+    77.8,
     "Tomorrow's puzzle"
    ]
   ],
