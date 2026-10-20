@@ -1,0 +1,42 @@
+name: Admin YouTube cleanup (delete stale duplicates)
+
+# Admin-only, manual dispatch. Deletes the user-approved stale duplicate
+# YouTube videos listed in the video_ids input. The script
+# (admin_delete_duplicates.py) hard-refuses any ID that appears in a
+# current database/**/result.json record (keep-set guard), confirms each
+# video exists via videos.list, then deletes. It stops on quota errors
+# and reports the remainder as pending-quota for a post-reset rerun.
+# NEVER schedule this workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_ids:
+        description: 'Comma-separated YouTube video IDs to delete (stale duplicates only)'
+        required: true
+        type: string
+
+jobs:
+  delete-duplicates:
+    name: delete duplicate videos
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install --prefer-binary -r requirements.txt
+      - name: Delete duplicate videos (keep-set guarded)
+        env:
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+        run: python -u admin_delete_duplicates.py --video-ids "${{ inputs.video_ids }}"
