@@ -22244,6 +22244,37 @@ def _spotle_card_count(page):
         return -1
 
 
+def _spotle_row_name(row):
+    """Artist name shown on a Spotle dropdown row.
+
+    The live search component renders each row as a bare
+    <li class="svelte-tsg0ih"> whose name is a TEXT NODE
+    (game source chunks_Cexo3-Sk.js: row template
+    '<li class="svelte-tsg0ih"> </li>' with se(ee, name) binding the
+    name as text, click handler on the li). There is NO <h3> child —
+    reading only an <h3> (as iter-41 did) can never match. Prefer an
+    <h3> when one exists (future markup change), else use the row's
+    own text. Whitespace is normalized on the read; the caller keeps
+    the match exact (no substring/prefix clicks, no Enter).
+    """
+    try:
+        h3 = row.query_selector("h3")
+    except Exception:
+        h3 = None
+    raw = ""
+    if h3 is not None:
+        try:
+            raw = h3.inner_text() or ""
+        except Exception:
+            raw = ""
+    if not str(raw).strip():
+        try:
+            raw = row.inner_text() or ""
+        except Exception:
+            raw = ""
+    return " ".join(str(raw).split())
+
+
 def _spotle_submit(page, gid, name):
     """Submit `name` by clicking its exact-match dropdown row.
 
@@ -22269,13 +22300,13 @@ def _spotle_submit(page, gid, name):
     except Exception:
         rows = []
     target = None
+    wanted = " ".join(str(name).split())
     for row in rows:
         try:
-            h3 = row.query_selector("h3")
-            text = (h3.inner_text() or "").strip() if h3 else ""
+            text = _spotle_row_name(row)
         except Exception:
             continue
-        if text == str(name):
+        if text and text == wanted:
             target = row
             break
     if target is None:

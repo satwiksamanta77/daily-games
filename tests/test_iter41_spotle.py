@@ -216,23 +216,27 @@ class TestSpotlePoolParse(unittest.TestCase):
 
 
 # ---------------------------------------------------------------- probe + submit (fake page)
-class _FakeH3:
-    def __init__(self, text):
-        self._text = text
-
-    def inner_text(self):
-        return self._text
-
-
 class _FakeRow:
+    """Models the LIVE dropdown row (iter-44 fix).
+
+    The real component (game source chunks_Cexo3-Sk.js) renders each
+    row as a bare <li class="svelte-tsg0ih"> whose artist name is a
+    TEXT NODE — there is NO <h3> child. Iter-41 originally modeled an
+    <h3> that does not exist live, which is why the tests passed
+    while production could never match (see ANALYSIS43).
+    """
+
     def __init__(self, page, name):
         self._page = page
         self._name = name
 
     def query_selector(self, sel):
-        if sel == "h3":
-            return _FakeH3(self._name)
+        # No element children at all in the live row.
         return None
+
+    def inner_text(self):
+        # The li's text IS the artist name (bare text node).
+        return self._name
 
     def scroll_into_view_if_needed(self, timeout=None):
         return None
