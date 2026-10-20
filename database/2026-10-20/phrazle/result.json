@@ -2,13 +2,13 @@
  "game": "phrazle",
  "date": "2026-10-20",
  "solved": true,
- "evidence": "winning row all-green after 1 phrase guesses",
+ "evidence": "winning row all-green after 4 phrase guesses",
  "answer": "PLAY YOUR CARDS RIGHT",
  "video": "/home/runner/work/daily-games/daily-games/videos/phrazle/phrazle_final_2026-10-20.mp4",
  "published": true,
- "youtube_video_id": "d-dEWEdQMWM",
- "youtube_url": "https://www.youtube.com/watch?v=d-dEWEdQMWM",
- "published_at": "2026-10-19T16:43:39Z",
+ "youtube_video_id": "WZMxd9mIo-E",
+ "youtube_url": "https://www.youtube.com/watch?v=WZMxd9mIo-E",
+ "published_at": "2026-10-20T07:06:00Z",
  "publish_attempts": 1,
  "last_publish_error": null,
  "enrichment": {
@@ -18,31 +18,31 @@
    "cost": 50
   },
   "playlist": {
-   "status": "skipped",
-   "reason": "upload-only scopes (token granted youtube.upload only; playlists need youtube scope \u2014 re-consent with full scopes to enable)",
+   "status": "deferred",
+   "reason": "find/create failed for Phrazle Answers \u2014 October 2026; find/create failed for Phrazle Answers \u2014 2026",
    "cost": 0
   },
   "comment": {
-   "status": "skipped",
-   "reason": "upload-only scopes (token granted youtube.upload only; playlists need youtube scope \u2014 re-consent with full scopes to enable)",
-   "cost": 0
+   "status": "done",
+   "reason": "",
+   "cost": 50
   },
   "captions": {
-   "status": "deferred",
-   "reason": "captions upload returned failure",
-   "cost": 0
+   "status": "done",
+   "reason": "",
+   "cost": 400
   }
  },
  "enrichment_deferred": [
-  "captions"
+  "playlist"
  ],
  "quota_estimate": {
   "upload_calls": 1,
-  "general_units_estimated": 50
+  "general_units_estimated": 502
  },
  "shorts_video_id": null,
  "enrichment_context": {
-  "comment_text": "What was your first guess today? \ud83e\udd14\n\ud83d\udfe9 = got it    \ud83d\udfe8 = close    \u2b1b = stumped\n\n\u23f1\ufe0f Chapters:\n0:00 Intro\n0:20 Today's Phrazle puzzle\n0:25 Hints before the solve\n0:35 Full solve (1 guesses)\n0:50 Answer & deduction path\n0:58 Solve breakdown\n1:06 Tomorrow's puzzle\nPhrazle answer archive: https://wordsolverx.com/phrazle-answer-today\n\n\ud83d\udd14 Subscribe for a new Phrazle answer every day!",
+  "comment_text": "What was your first guess today? \ud83e\udd14\n\ud83d\udfe9 = got it    \ud83d\udfe8 = close    \u2b1b = stumped\n\n\u23f1\ufe0f Chapters:\n0:00 Intro\n0:20 Today's Phrazle puzzle\n0:25 Hints before the solve\n0:35 Full solve (4 guesses)\n1:30 Answer & deduction path\n1:38 Solve breakdown\n1:46 Tomorrow's puzzle\nPhrazle answer archive: https://wordsolverx.com/phrazle-answer-today\n\n\ud83d\udd14 Subscribe for a new Phrazle answer every day!",
   "playlist_titles": [
    [
     "Phrazle Answers \u2014 October 2026",
@@ -53,7 +53,7 @@
     "All daily Phrazle solution videos from 2026."
    ]
   ],
-  "duration_s": 71.28,
+  "duration_s": 111.16,
   "date_str": "October 20, 2026",
   "game": "Phrazle",
   "chapters": [
@@ -71,18 +71,18 @@
    ],
    [
     35.0,
-    "Full solve (1 guesses)"
+    "Full solve (4 guesses)"
    ],
    [
-    50.2,
+    90.1,
     "Answer & deduction path"
    ],
    [
-    58.2,
+    98.1,
     "Solve breakdown"
    ],
    [
-    66.2,
+    106.1,
     "Tomorrow's puzzle"
    ]
   ],
