@@ -6,43 +6,46 @@
  "answer": "PLAY YOUR CARDS RIGHT",
  "video": "/home/runner/work/daily-games/daily-games/videos/phrazle/phrazle_final_2026-10-20.mp4",
  "published": true,
- "youtube_video_id": "WZMxd9mIo-E",
- "youtube_url": "https://www.youtube.com/watch?v=WZMxd9mIo-E",
- "published_at": "2026-10-20T07:06:00Z",
+ "youtube_video_id": "bCMWh2IV-Sw",
+ "youtube_url": "https://www.youtube.com/watch?v=bCMWh2IV-Sw",
+ "published_at": "2026-10-20T09:41:45Z",
  "publish_attempts": 1,
  "last_publish_error": null,
  "enrichment": {
   "thumbnail": {
-   "status": "done",
-   "reason": "",
+   "status": "deferred",
+   "reason": "quotaExceeded",
    "cost": 50
   },
   "playlist": {
    "status": "deferred",
-   "reason": "find/create failed for Phrazle Answers \u2014 October 2026; find/create failed for Phrazle Answers \u2014 2026",
+   "reason": "quota: quotaExceeded",
    "cost": 0
   },
   "comment": {
-   "status": "done",
-   "reason": "",
-   "cost": 50
+   "status": "deferred",
+   "reason": "quota \u2014 bucket exhausted, deferred",
+   "cost": 0
   },
   "captions": {
-   "status": "done",
-   "reason": "",
-   "cost": 400
+   "status": "deferred",
+   "reason": "quota \u2014 bucket exhausted, deferred",
+   "cost": 0
   }
  },
  "enrichment_deferred": [
-  "playlist"
+  "thumbnail",
+  "playlist",
+  "comment",
+  "captions"
  ],
  "quota_estimate": {
   "upload_calls": 1,
-  "general_units_estimated": 502
+  "general_units_estimated": 0
  },
  "shorts_video_id": null,
  "enrichment_context": {
-  "comment_text": "What was your first guess today? \ud83e\udd14\n\ud83d\udfe9 = got it    \ud83d\udfe8 = close    \u2b1b = stumped\n\n\u23f1\ufe0f Chapters:\n0:00 Intro\n0:20 Today's Phrazle puzzle\n0:25 Hints before the solve\n0:35 Full solve (4 guesses)\n1:30 Answer & deduction path\n1:38 Solve breakdown\n1:46 Tomorrow's puzzle\nPhrazle answer archive: https://wordsolverx.com/phrazle-answer-today\n\n\ud83d\udd14 Subscribe for a new Phrazle answer every day!",
+  "comment_text": "What was your first guess today? \ud83e\udd14\n\ud83d\udfe9 = got it    \ud83d\udfe8 = close    \u2b1b = stumped\n\n\u23f1\ufe0f Chapters:\n0:00 Intro\n0:20 Today's Phrazle puzzle\n0:25 Hints before the solve\n0:35 Full solve (4 guesses)\n1:32 Answer & deduction path\n1:40 Solve breakdown\n1:48 Tomorrow's puzzle\nPhrazle answer archive: https://wordsolverx.com/phrazle-answer-today\n\n\ud83d\udd14 Subscribe for a new Phrazle answer every day!",
   "playlist_titles": [
    [
     "Phrazle Answers \u2014 October 2026",
@@ -53,7 +56,7 @@
     "All daily Phrazle solution videos from 2026."
    ]
   ],
-  "duration_s": 111.16,
+  "duration_s": 113.11,
   "date_str": "October 20, 2026",
   "game": "Phrazle",
   "chapters": [
@@ -74,15 +77,15 @@
     "Full solve (4 guesses)"
    ],
    [
-    90.1,
+    92.1,
     "Answer & deduction path"
    ],
    [
-    98.1,
+    100.1,
     "Solve breakdown"
    ],
    [
-    106.1,
+    108.1,
     "Tomorrow's puzzle"
    ]
   ],
