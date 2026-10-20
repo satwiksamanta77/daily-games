@@ -6076,30 +6076,130 @@ def _betweenle_won_after_guess(page, ans):
     return bool(won), str(ev or "")
 
 
-def _s_betweenle(page, ans, gid):
-    _close_modals(page)
-    # Post-migration the daily game starts from a DOM menu button labelled
-    # DAILY WORD (the old #menupanel-mode-daily id no longer exists, so the
-    # game never left the menu and every guess typed into the void).
-    _started = False
-    for _sel in ("button:has-text('DAILY WORD')", "text=DAILY WORD",
-                 "a:has-text('DAILY WORD')", "#menupanel-mode-daily"):
+def _betweenle_board_open(page):
+    """True iff the Betweenle daily board is actually open (not the menu).
+
+    The menu page carries the game panels in hidden DOM (#upperheader.hidden
+    holds 'Guess 1 / 12', #statisticspanel-word holds 'WORD'), so body-text
+    and counter probes false-positive on the menu. The board is open only
+    when the guess-counter header is visible.
+    """
+    try:
+        return bool(page.evaluate(
+            "() => { const u = document.getElementById('upperheader');"
+            " return !!(u && !u.classList.contains('hidden')); }"))
+    except Exception:
+        return False
+
+
+def _betweenle_enter_daily(page, gid):
+    """Click DAILY WORD and verify the daily board opened.
+
+    Root-cause fix (iter-42, run 39299438462): the old entry clicked DAILY
+    WORD exactly once, immediately after navigation, with two permanently
+    dead selectors (button:/a: — the element is a SPAN#menupanel-mode-daily)
+    and no wait for the menu to render. When the lookup raced the render,
+    the bot typed all 5 guesses into the menu (WARN at 18:05:31, menu in
+    every frame, counters stuck at the hidden panel's 'Guess 1 / 12').
+
+    Now: wait for the menu, click the real element, VERIFY the board opened,
+    retry, and return False (fail fast — no guesses typed) if it won't open.
+    """
+    def _menu_visible():
         try:
-            el = page.query_selector(_sel)
+            return bool(page.evaluate(
+                "() => { const m = document.getElementById('menupanel');"
+                " return !!(m && !m.classList.contains('hidden')); }"))
+        except Exception:
+            return False
+
+    def _click_daily_word():
+        # Primary: the real element (a SPAN, not a button).
+        try:
+            el = page.query_selector("#menupanel-mode-daily")
             if el and el.is_visible():
                 _bb = el.bounding_box()
                 el.click(timeout=3000)
                 if _bb:
                     QP.ev_push(_bb["x"] + _bb["width"] / 2,
                                _bb["y"] + _bb["height"] / 2, "click")
-                _started = True
-                _dbg(gid, f"daily game started via {_sel}")
-                break
+                _dbg(gid, "daily game entry via #menupanel-mode-daily")
+                return True
         except Exception:
+            pass
+        # Fallback: text search across clickable elements (smallest match).
+        try:
+            box = page.evaluate(
+                """() => {
+                  const els = Array.from(document.querySelectorAll(
+                    'span, div, button, a, [role=button]'));
+                  let best = null;
+                  for (const e of els) {
+                    if (e.offsetParent === null) continue;
+                    const t = (e.innerText || '').trim().toUpperCase();
+                    if (t !== 'DAILY WORD' && !t.includes('DAILY WORD'))
+                      continue;
+                    const r = e.getBoundingClientRect();
+                    if (r.width < 20 || r.height < 10) continue;
+                    if (!best || (r.width * r.height) < (best.w * best.h))
+                      best = {x: r.x + r.width / 2, y: r.y + r.height / 2,
+                              w: r.width, h: r.height};
+                  }
+                  return best ? {x: best.x, y: best.y} : null;
+                }""")
+            if box:
+                page.mouse.click(box["x"], box["y"])
+                try:
+                    QP.ev_push(box["x"], box["y"], "click")
+                except Exception:
+                    pass
+                _dbg(gid, "daily game entry via DAILY WORD text search")
+                return True
+        except Exception:
+            pass
+        return False
+
+    for _attempt in range(3):
+        if _betweenle_board_open(page):
+            _dbg(gid, "daily board already open; skipping entry")
+            return True
+        # Wait for the menu to render (up to 15s); the lookup must not
+        # race the navigation.
+        _menu_ok = False
+        for _w in range(30):
+            if _menu_visible() or _betweenle_board_open(page):
+                _menu_ok = True
+                break
+            page.wait_for_timeout(500)
+        if _betweenle_board_open(page):
+            return True
+        if not _menu_ok:
+            _dbg(gid, f"entry attempt {_attempt + 1}: menu never rendered")
             continue
-    if not _started:
-        _dbg(gid, "WARN: no DAILY WORD button found on menu")
-    page.wait_for_timeout(4000)
+        _close_betweenle_help(page)
+        if not _click_daily_word():
+            _dbg(gid, f"entry attempt {_attempt + 1}: DAILY WORD not clickable")
+            continue
+        # Verify the click actually opened the board (up to 10s).
+        for _w in range(20):
+            page.wait_for_timeout(500)
+            if _betweenle_board_open(page):
+                _dbg(gid, f"daily board opened on attempt {_attempt + 1}")
+                _close_betweenle_help(page)
+                return True
+        _dbg(gid, f"entry attempt {_attempt + 1}: click did not open board")
+    return False
+
+
+def _s_betweenle(page, ans, gid):
+    _close_modals(page)
+    # Iter-42: enter the daily game through the verified entry helper. If
+    # the board won't open, FAIL FAST — never type guesses into the menu
+    # (run 39299438462: 5 guesses into the void, 83s wasted, because the
+    # one-shot DAILY WORD lookup raced the menu render).
+    if not _betweenle_enter_daily(page, gid):
+        return False, ("betweenle daily board did not open; DAILY WORD "
+                       "entry failed after retries — no guesses typed")
     # Must come after the mode click: the How-to-Play panel is raised by
     # starting the daily game, and it swallows all keyboard input until closed.
     _close_betweenle_help(page)
@@ -6167,7 +6267,9 @@ def _s_betweenle(page, ans, gid):
         if _help:
             _close_betweenle_help(page)
             continue
-        if (_st0.get("len") or 0) > 0:
+        # Iter-42: len > 0 alone false-positives on the menu (its body text
+        # is ~322 chars). Only break when the board is actually open.
+        if (_st0.get("len") or 0) > 0 and _betweenle_board_open(page):
             break
         try:  # re-arm the daily mode panel and wait for the board
             page.evaluate("() => { const el = "
