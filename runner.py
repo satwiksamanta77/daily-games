@@ -22108,19 +22108,8 @@ _SPOTLE_POOL_JS = """async () => {
 }"""
 
 _SPOTLE_FEEDBACK_JS = """() => {
-  const cards = Array.from(document.querySelectorAll('.guess-wrapper'));
-  let items = [];
-  let artist = '';
-  if (cards.length) {
-    const card = cards[cards.length - 1];
-    const h2 = card.querySelector('.header-row h2');
-    artist = h2 ? (h2.innerText || '').trim() : '';
-    items = Array.from(card.querySelectorAll('.item'));
-  } else {
-    const all = Array.from(document.querySelectorAll('.item'));
-    if (all.length >= 6) items = all.slice(-6);
-  }
-  const tiles = items.map(it => {
+  const readTiles = (root) => Array.from(
+    root.querySelectorAll('.item')).map(it => {
     const h3 = it.querySelector('h3');
     const hv = it.querySelector('h2');
     const arrows = Array.from(
@@ -22132,8 +22121,29 @@ _SPOTLE_FEEDBACK_JS = """() => {
             has_flag: !!it.querySelector('.flag-img'),
             arrows: arrows};
   });
+  const cards = Array.from(document.querySelectorAll('.guess-wrapper'));
+  // EVERY card is returned, in DOM order, each with its own artist:
+  // the board renders NEWEST FIRST, so a positional pick (first or
+  // last card) can silently return a PREVIOUS guess's card — the
+  // iter-44 run proved the old last-card pick returned guess 1's
+  // card for guess 2. The Python reader selects the card whose
+  // artist == the guess just submitted; no positional guessing.
+  const cardList = cards.map(card => {
+    const h2 = card.querySelector('.header-row h2');
+    return {artist: h2 ? (h2.innerText || '').trim() : '',
+            tiles: readTiles(card)};
+  });
+  if (!cardList.length) {
+    const all = Array.from(document.querySelectorAll('.item'));
+    if (all.length >= 6) {
+      cardList.push({artist: '', tiles: readTiles(document).slice(-6)});
+    }
+  }
+  const top = cardList.length ? cardList[cardList.length - 1]
+                              : {artist: '', tiles: []};
   const body = document.body ? (document.body.innerText || '') : '';
-  return {cards: cards.length, artist: artist, tiles: tiles,
+  return {cards: cards.length, artist: top.artist, tiles: top.tiles,
+          card_list: cardList,
           has_congrats: /congratulations/i.test(body)};
 }"""
 
@@ -22284,21 +22294,16 @@ def _spotle_capture_pool(page, gid):
     return []
 
 
-def _spotle_read_feedback(page, gid):
-    """(statuses, arrows, artist, cards, congrats) from the latest card.
+def _spotle_map_tiles(tiles, gid):
+    """(statuses, arrows) from ONE card's 6 tiles, or None.
 
     statuses: 6-tuple in ee() order [debut, group, rank, gender, genre,
     country], each correct/close/miss from the tile classList.
     arrows: (debut_arrow, rank_arrow), each up/down/None from the SVG
-    path d inside .arrow-icon. Returns None when the latest card does
-    not carry exactly 6 tiles (probe failure, never guessed-at).
+    path d inside .arrow-icon. Returns None when the card does not
+    carry exactly 6 mappable tiles (probe failure, never guessed-at).
     """
-    try:
-        fb = page.evaluate(_SPOTLE_FEEDBACK_JS) or {}
-    except Exception as e:
-        _dbg(gid, f"spotle feedback probe failed: {e}")
-        return None
-    tiles = fb.get("tiles") or []
+    tiles = tiles or []
     if len(tiles) != 6:
         _dbg(gid, f"spotle feedback probe: {len(tiles)} tiles (want 6)")
         return None
@@ -22342,8 +22347,94 @@ def _spotle_read_feedback(page, gid):
                by_label["Genre"], country_tile]
     statuses = tuple(_status(t) for t in ordered)
     arrows = (_arrow(by_label["Debut"]), _arrow(by_label["Popularity"]))
-    return (statuses, arrows, str(fb.get("artist") or ""),
-            int(fb.get("cards") or 0), bool(fb.get("has_congrats")))
+    return (statuses, arrows)
+
+
+def _spotle_norm_name(name):
+    return " ".join(str(name or "").split())
+
+
+def _spotle_read_feedback(page, gid, want_artist=None):
+    """(statuses, arrows, artist, cards, congrats) from ONE guess card.
+
+    The card is selected by ARTIST, never by position: the board
+    renders newest-first, and the iter-44 production run proved a
+    positional (last-card) read returned guess 1's card for guess 2 —
+    the filter then applied the wrong artist's constraints and
+    emptied the pool on mismatched data. When `want_artist` is given,
+    only the card whose header artist == want_artist (whitespace-
+    normalized) is read; when no such card exists the read REFUSES
+    (returns None) instead of falling back to another guess's card.
+    Without `want_artist` the legacy positional pick is kept for
+    backward compatibility (single-card probes in older tests).
+    """
+    try:
+        fb = page.evaluate(_SPOTLE_FEEDBACK_JS) or {}
+    except Exception as e:
+        _dbg(gid, f"spotle feedback probe failed: {e}")
+        return None
+    raw_cards = fb.get("card_list") or []
+    if not raw_cards and (fb.get("tiles") or fb.get("artist")):
+        # Legacy flat payload (older probe shape / unit-test fakes):
+        # a single anonymous-or-named card.
+        raw_cards = [{"artist": fb.get("artist") or "",
+                      "tiles": fb.get("tiles") or []}]
+    if not raw_cards:
+        _dbg(gid, "spotle feedback probe: no guess cards on board")
+        return None
+    if want_artist:
+        want = _spotle_norm_name(want_artist)
+        match = None
+        for c in raw_cards:
+            if _spotle_norm_name(c.get("artist")) == want:
+                match = c
+                break
+        if match is None:
+            present = [_spotle_norm_name(c.get("artist"))
+                       for c in raw_cards]
+            _dbg(gid, f"spotle feedback: NO card for guess "
+                      f"{want_artist!r} (cards present: {present}) — "
+                      "refusing to read another guess's card")
+            return None
+        chosen = match
+    else:
+        chosen = raw_cards[-1]
+    mapped = _spotle_map_tiles(chosen.get("tiles"), gid)
+    if mapped is None:
+        return None
+    statuses, arrows = mapped
+    return (statuses, arrows, str(chosen.get("artist") or ""),
+            int(fb.get("cards") or len(raw_cards)),
+            bool(fb.get("has_congrats")))
+
+
+def _spotle_read_feedback_settled(page, gid, want_artist, tries=5):
+    """Artist-matched feedback read that waits for the tiles to settle.
+
+    The tile flip animation runs ~1.65s and a card can be read
+    mid-flip (iter-44 frame f_006). Reads the card for `want_artist`
+    until two consecutive reads agree on (statuses, arrows), bounded
+    by `tries`. Returns the last matched read, or None when the
+    guess's card never appears — the caller then defers honestly;
+    feedback from a DIFFERENT artist's card is never returned.
+    """
+    prev = None
+    for i in range(max(1, tries)):
+        fb = _spotle_read_feedback(page, gid, want_artist)
+        if fb is None:
+            prev = None
+            if i + 1 < tries:
+                page.wait_for_timeout(900)  # card may still be rendering
+            continue
+        if prev is not None and fb[0] == prev[0] and fb[1] == prev[1]:
+            return fb
+        prev = fb
+        if i + 1 < tries:
+            page.wait_for_timeout(600)
+    if prev is not None:
+        _dbg(gid, f"spotle feedback for {want_artist!r} not stable after "
+                  f"{tries} reads — using last artist-matched read")
+    return prev
 
 
 def _spotle_card_count(page):
@@ -22439,7 +22530,8 @@ def _s_spotle(page, ans, gid):
 
     `ans` (the gate artist) is logged, never played: the solver converges
     from the game's own tile feedback alone. Win = all 6 tiles `correct`
-    on the latest card (the game's own state). 10 guesses max; pool
+    on the winning guess's OWN card (the game's own state, read by
+    artist match — never a positional card pick). 10 guesses max; pool
     exhaustion or unreadable feedback => honest defer (solved=False).
     """
     _close_modals(page)
@@ -22523,14 +22615,23 @@ def _s_spotle(page, ans, gid):
             survivors = [s for s in survivors if s.get("artist") != name]
             continue
         page.wait_for_timeout(2600)  # tile flip animation is 1.65s
-        fb = _spotle_read_feedback(page, gid)
-        if fb is None:
-            page.wait_for_timeout(2000)
-            fb = _spotle_read_feedback(page, gid)
+        # Feedback MUST come from THIS guess's card: the board renders
+        # newest-first and a positional read returned a previous
+        # guess's card in production (iter-44), whose constraints
+        # emptied the pool. The settled reader matches on the card's
+        # artist and waits for its tiles to stop flipping.
+        fb = _spotle_read_feedback_settled(page, gid, name)
         if fb is None:
             return False, (f"spotle: feedback unreadable after guess "
                            f"{len(played) + 1} ({name!r})")
         statuses, arrows, card_artist, cards, congrats = fb
+        if _spotle_norm_name(card_artist) != _spotle_norm_name(name):
+            # Defensive (the reader already enforces this): NEVER
+            # filter the pool on another guess's feedback.
+            return False, (f"spotle: feedback card artist "
+                           f"{card_artist!r} != guess {name!r} — "
+                           "honest defer, never filtering on "
+                           "mismatched data")
         played.append(cand)
         _PLAYED[gid] = [p["artist"] for p in played]
         _REJECTED[gid] = list(rejected)
@@ -22544,7 +22645,7 @@ def _s_spotle(page, ans, gid):
             # Win = game's own board state. Re-probe once: the win must
             # be stable, not a mid-animation read.
             page.wait_for_timeout(1500)
-            fb2 = _spotle_read_feedback(page, gid)
+            fb2 = _spotle_read_feedback(page, gid, name)
             if fb2 and all(s == "correct" for s in fb2[0]):
                 return True, (f"spotle solved in {len(played)} guesses: "
                               f"{name!r} (feedback-converged, "
@@ -22555,7 +22656,7 @@ def _s_spotle(page, ans, gid):
             # Pool emptied: one feedback re-read before giving up
             # (a transient mis-probe must not end the run).
             page.wait_for_timeout(2000)
-            fb3 = _spotle_read_feedback(page, gid)
+            fb3 = _spotle_read_feedback(page, gid, name)
             if fb3 and fb3[0] != statuses:
                 history[-1] = {"guess": cand, "statuses": fb3[0],
                                "arrows": fb3[1]}
