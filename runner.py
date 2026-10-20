@@ -22875,6 +22875,136 @@ def _retry_yesterday_enrichment(gid, date_key):
         print(f"[{gid}] enrichment retry skipped: {str(e)[:120]}")
 
 
+def _existing_db_record(date_key, gid):
+    """Committed DB record for (date, game), or None (iteration 48)."""
+    p = HERE / "database" / str(date_key) / gid / "result.json"
+    try:
+        if p.exists():
+            return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return None
+
+
+def _reuse_published_record(gid, date_key, existing, fresh_ctx=None):
+    """Iteration 48: publish-path idempotency + enrichment-only retry.
+
+    Builds the publish dict from an ALREADY-published committed
+    record: the existing youtube_video_id / url / published_at /
+    publish_attempts / shorts id are carried over UNTOUCHED, so the
+    caller records the same publication instead of uploading a
+    duplicate (ANALYSIS47 SS5: the publish path never checked for an
+    existing publication, so a force=true gated run re-uploaded all
+    18 already-published games and repointed the DB at the
+    duplicates).
+
+    When the record still carries enrichment_deferred steps, ONLY
+    those steps are retried against the existing video id via
+    retry_deferred_enrichment (no upload, no re-solve); the returned
+    dict carries the merged enrichment state - a step leaves the
+    deferred list only when it now succeeds; a failure (e.g. quota
+    still exhausted) keeps it deferred and never unpublishes.
+    fresh_ctx (this run's freshly built SEO context) overrides the
+    stored enrichment_context field-by-field where non-empty (e.g.
+    the freshly rendered thumbnail path). Never raises.
+    """
+    pub = {k: existing.get(k) for k in PUBLISH_FIELDS}
+    pub["published"] = True
+    deferred = list(existing.get("enrichment_deferred") or [])
+    print(f"[{gid}] already published for {date_key}: "
+          f"{existing.get('youtube_video_id')} - upload SKIPPED "
+          f"(idempotent, no duplicate)"
+          + (f"; deferred enrichment: {deferred}" if deferred else ""))
+    if deferred:
+        ctx = dict(existing.get("enrichment_context") or {})
+        for _k, _v in (fresh_ctx or {}).items():
+            if _v:
+                ctx[_k] = _v
+        try:
+            updates, units = retry_deferred_enrichment(
+                existing.get("youtube_video_id"), deferred, ctx)
+        except Exception as e:
+            updates, units = {}, 0
+            print(f"[{gid}] enrichment retry error: {str(e)[:120]}")
+        if updates:
+            enr = dict(existing.get("enrichment") or {})
+            enr.update(updates)
+            pub["enrichment"] = enr
+            pub["enrichment_deferred"] = [
+                k for k, v in enr.items()
+                if v.get("status") == "deferred"]
+            _q = dict(existing.get("quota_estimate") or {})
+            _q["general_units_estimated"] = (
+                int(_q.get("general_units_estimated") or 0) + units)
+            _q["upload_calls"] = 0
+            pub["quota_estimate"] = _q
+            print(f"[{gid}] enrichment-only retry on existing video "
+                  f"{existing.get('youtube_video_id')}: {updates}; "
+                  f"deferred now {pub['enrichment_deferred']}")
+    return pub
+
+
+def _publish_game_video(gid, date_key, fresh_ctx, upload_fn):
+    """Iteration 48: the single gate every upload_game_video call
+    site routes through in publish-gated runs.
+
+    If the committed record for (date_key, gid) is already published,
+    upload_fn is NEVER called - not even under force=true (force may
+    re-solve gameplay; it must never duplicate a publication). The
+    existing publication is reused and only its deferred enrichment
+    is retried. Otherwise upload_fn() performs the normal upload and
+    its publish dict is returned.
+    """
+    existing = _existing_db_record(date_key, gid)
+    if _record_is_published(existing or {}):
+        return _reuse_published_record(gid, date_key, existing,
+                                       fresh_ctx)
+    return upload_fn()
+
+
+def _retry_today_enrichment(gid, date_key):
+    """Retry THIS date's deferred enrichment (iteration 48).
+
+    Companion to _retry_yesterday_enrichment: a date-targeted gated
+    dispatch for a date whose record is already published (the
+    skip-guard then no-ops the game) still retries its deferred
+    enrichment against the existing video id - no re-upload, no
+    re-solve. Runs at the top of run_one, before the skip-guard,
+    using the record's stored enrichment_context. Best-effort;
+    never fails the run. Gated runs only.
+    """
+    if not _publish_enabled() or not HAS:
+        return
+    try:
+        p = HERE / "database" / str(date_key) / gid / "result.json"
+        if not p.exists():
+            return
+        r = json.loads(p.read_text(encoding="utf-8"))
+        if not _record_is_published(r):
+            return
+        deferred = r.get("enrichment_deferred") or []
+        if not deferred:
+            return
+        ctx = r.get("enrichment_context") or {}
+        print(f"[{gid}] retrying deferred enrichment for {date_key} "
+              f"video {r.get('youtube_video_id')}: {deferred}")
+        updates, units = retry_deferred_enrichment(
+            r.get("youtube_video_id"), deferred, ctx)
+        if not updates:
+            return
+        enr = dict(r.get("enrichment") or {})
+        enr.update(updates)
+        r["enrichment"] = enr
+        r["enrichment_deferred"] = [
+            k for k, v in enr.items() if v.get("status") == "deferred"]
+        p.write_text(json.dumps(r, indent=1), encoding="utf-8")
+        print(f"[{gid}] same-date enrichment retry: {updates} "
+              f"units={units}")
+    except Exception as e:
+        print(f"[{gid}] same-date enrichment retry skipped: "
+              f"{str(e)[:120]}")
+
+
 def _db_already_done(date_key, gid, require_published=None):
     """No-duplicate guard: GitHub tracks database/{date}/{game}/result.json.
 
@@ -24068,8 +24198,14 @@ def _upload_framed(gid, g, today, short, answers, chapters, final,
         print(f"[{gid}] publish gate OFF (YOUTUBE_PUBLISH not truthy): "
               f"video NOT uploaded; publish state recorded as unpublished.")
         return pub
-    try:
-        pub = upload_game_video(
+    _ectx = {
+        "comment_text": _comment, "playlist_titles": _playlists,
+        "duration_s": None, "date_str": today, "game": g["name"],
+        "chapters": list(chapters),
+        "thumbnail_path": (str(tp) if tp else None)}
+
+    def _do_upload():
+        return upload_game_video(
             str(final), title=_title or f"{g['name']} Answer Today",
             description=_desc or "", tags=_tags, chapters=list(chapters),
             thumbnail_path=(str(tp) if tp and tp.exists() else None),
@@ -24079,11 +24215,11 @@ def _upload_framed(gid, g, today, short, answers, chapters, final,
             shorts=os.environ.get("YOUTUBE_SHORTS", "").strip().lower()
             in ("1", "true", "yes", "on")) or _empty_publish(
                 "upload returned no result")
-        pub["enrichment_context"] = {
-            "comment_text": _comment, "playlist_titles": _playlists,
-            "duration_s": None, "date_str": today, "game": g["name"],
-            "chapters": list(chapters),
-            "thumbnail_path": (str(tp) if tp else None)}
+
+    try:
+        # Iteration 48: idempotency gate (see _publish_game_video).
+        pub = _publish_game_video(gid, date_key, _ectx, _do_upload)
+        pub["enrichment_context"] = _ectx
     except Exception as e:
         print(f"[{gid}] upload error: {str(e)[:200]}")
         pub = _empty_publish(f"upload exception: {str(e)[:200]}")
@@ -24218,6 +24354,10 @@ def run_one(gid):
     # Runs before the skip-guard so skip runs still retry; covers
     # generic + framed + nerdle (all branch off run_one).
     _retry_yesterday_enrichment(gid, date_key)
+    # Iteration 48: same for THIS date's record - a date-targeted
+    # gated dispatch recovers a published-but-deferred record's
+    # enrichment without re-solving or re-uploading anything.
+    _retry_today_enrichment(gid, date_key)
     _write_preliminary_result(gid, date_key, False, "started")
     if gid == "nerdle" or g.get("external") == "nerdle_solver.py":
         return run_nerdle_external(g, tgt, date_key, today, short)
@@ -24953,27 +25093,40 @@ def run_one(gid):
         except Exception:
             tp = None
         if _publish_enabled():
-            try:
+            _dur = locals().get("total") or None
+            _ectx = {
+                "comment_text": _comment, "playlist_titles": _playlists,
+                "duration_s": _dur, "date_str": today, "game": g["name"],
+                "chapters": list(chapters),
+                "thumbnail_path": (str(tp) if tp else None)}
+
+            def _do_upload():
                 _aw = ([_answer_txt] if (_answer_txt
-                                         and _answer_txt.isalpha()) else [])
-                pub = upload_game_video(
-                    str(final), title=_title or f"{g['name']} Answer Today",
+                                         and _answer_txt.isalpha())
+                       else [])
+                return upload_game_video(
+                    str(final),
+                    title=_title or f"{g['name']} Answer Today",
                     description=_desc or "", tags=_tags,
                     chapters=list(chapters),
-                    thumbnail_path=(str(tp) if tp and tp.exists() else None),
+                    thumbnail_path=(str(tp) if tp and tp.exists()
+                                    else None),
                     game=g["name"], date_str=today,
                     playlist_titles=_playlists, comment_text=_comment,
-                    duration_s=(locals().get("total") or None),
-                    analysis_words=_aw, seo_context=seo_ctx,
-                    shorts=os.environ.get("YOUTUBE_SHORTS", "").strip().lower()
+                    duration_s=_dur, analysis_words=_aw,
+                    seo_context=seo_ctx,
+                    shorts=os.environ.get(
+                        "YOUTUBE_SHORTS", "").strip().lower()
                     in ("1", "true", "yes", "on")) or _empty_publish(
                         "upload returned no result")
-                pub["enrichment_context"] = {
-                    "comment_text": _comment, "playlist_titles": _playlists,
-                    "duration_s": (locals().get("total") or None),
-                    "date_str": today, "game": g["name"],
-                    "chapters": list(chapters),
-                    "thumbnail_path": (str(tp) if tp else None)}
+
+            try:
+                # Iteration 48: route through the idempotency gate -
+                # an already-published (date, game) is never
+                # re-uploaded; only its deferred enrichment retries.
+                pub = _publish_game_video(gid, date_key, _ectx,
+                                          _do_upload)
+                pub["enrichment_context"] = _ectx
             except Exception as e:
                 print(f"[{gid}] upload error: {str(e)[:200]}")
                 pub = _empty_publish(f"upload exception: {str(e)[:200]}")

@@ -1144,9 +1144,15 @@ def retry_deferred_enrichment(video_id, deferred_steps, context):
                     _out["thumbnail"] = {"status": "deferred",
                                          "reason": str(e)[:200], "cost": 0}
             else:
-                _out["thumbnail"] = {"status": "skipped",
-                                     "reason": "thumbnail file gone",
-                                     "cost": 0}
+                # Iteration 48: a missing thumbnail file means the
+                # step cannot be attempted in THIS run (stateless
+                # runners never carry the previous run's videos/ dir)
+                # - it must stay DEFERRED for a run that renders the
+                # game, never be dropped as "skipped".
+                _out["thumbnail"] = {
+                    "status": "deferred",
+                    "reason": "thumbnail file not present in this run",
+                    "cost": 0}
         if "playlist" in deferred_steps:
             if not enrichment_enabled:
                 _out["playlist"] = {"status": "deferred",

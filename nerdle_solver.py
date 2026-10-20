@@ -5323,26 +5323,40 @@ async def main():
             _ntp = None
         if _nerdle_publish_enabled():
             try:
-                _npub = upload_game_video(
-                    str(final), title=_ntitle,
-                    description=_ndesc, tags=_ntags,
-                    chapters=list(up_chapters),
-                    thumbnail_path=(str(_ntp) if _ntp and _ntp.exists()
-                                    else None),
-                    game="Nerdle", date_str=today,
-                    playlist_titles=_nplaylists, comment_text=_ncomment,
-                    duration_s=None, analysis_words=[],
-                    seo_context=_nseo_ctx,
-                    shorts=os.environ.get("YOUTUBE_SHORTS",
-                                           "").strip().lower()
-                    in ("1", "true", "yes", "on")
-                ) or _nerdle_empty_publish("upload returned no result")
-                _npub["enrichment_context"] = {
+                _nectx = {
                     "comment_text": _ncomment,
                     "playlist_titles": _nplaylists, "duration_s": None,
                     "date_str": today, "game": "Nerdle",
                     "chapters": list(up_chapters),
                     "thumbnail_path": (str(_ntp) if _ntp else None)}
+
+                def _do_nupload():
+                    return upload_game_video(
+                        str(final), title=_ntitle,
+                        description=_ndesc, tags=_ntags,
+                        chapters=list(up_chapters),
+                        thumbnail_path=(str(_ntp) if _ntp
+                                        and _ntp.exists() else None),
+                        game="Nerdle", date_str=today,
+                        playlist_titles=_nplaylists,
+                        comment_text=_ncomment,
+                        duration_s=None, analysis_words=[],
+                        seo_context=_nseo_ctx,
+                        shorts=os.environ.get(
+                            "YOUTUBE_SHORTS", "").strip().lower()
+                        in ("1", "true", "yes", "on")
+                    ) or _nerdle_empty_publish(
+                        "upload returned no result")
+
+                # Iteration 48: publish-path idempotency - route
+                # through the runner's gate so an already-published
+                # (date, nerdle) record is never re-uploaded (even
+                # under force); only its deferred enrichment retries
+                # against the existing video id.
+                from runner import _publish_game_video as _pub_gate
+                _npub = _pub_gate("nerdle", date_key, _nectx,
+                                  _do_nupload)
+                _npub["enrichment_context"] = _nectx
             except Exception as e:
                 print(f"[upload] error: {str(e)[:200]}")
                 _npub = _nerdle_empty_publish(
