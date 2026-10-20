@@ -6,43 +6,46 @@
  "answer": "stork",
  "video": "/home/runner/work/daily-games/daily-games/videos/betweenle/betweenle_final_2026-10-20.mp4",
  "published": true,
- "youtube_video_id": "QKh8gv4102U",
- "youtube_url": "https://www.youtube.com/watch?v=QKh8gv4102U",
- "published_at": "2026-10-19T16:44:10Z",
+ "youtube_video_id": "EHBQZ2c9azM",
+ "youtube_url": "https://www.youtube.com/watch?v=EHBQZ2c9azM",
+ "published_at": "2026-10-20T09:39:31Z",
  "publish_attempts": 1,
  "last_publish_error": null,
  "enrichment": {
   "thumbnail": {
-   "status": "done",
-   "reason": "",
+   "status": "deferred",
+   "reason": "quotaExceeded",
    "cost": 50
   },
   "playlist": {
-   "status": "skipped",
-   "reason": "upload-only scopes (token granted youtube.upload only; playlists need youtube scope \u2014 re-consent with full scopes to enable)",
+   "status": "deferred",
+   "reason": "quota: quotaExceeded",
    "cost": 0
   },
   "comment": {
-   "status": "skipped",
-   "reason": "upload-only scopes (token granted youtube.upload only; playlists need youtube scope \u2014 re-consent with full scopes to enable)",
+   "status": "deferred",
+   "reason": "quota \u2014 bucket exhausted, deferred",
    "cost": 0
   },
   "captions": {
    "status": "deferred",
-   "reason": "captions upload returned failure",
+   "reason": "quota \u2014 bucket exhausted, deferred",
    "cost": 0
   }
  },
  "enrichment_deferred": [
+  "thumbnail",
+  "playlist",
+  "comment",
   "captions"
  ],
  "quota_estimate": {
   "upload_calls": 1,
-  "general_units_estimated": 50
+  "general_units_estimated": 0
  },
  "shorts_video_id": null,
  "enrichment_context": {
-  "comment_text": "What was your first guess today? \ud83e\udd14\n\ud83d\udfe9 = got it    \ud83d\udfe8 = close    \u2b1b = stumped\n\n\u23f1\ufe0f Chapters:\n0:00 Intro\n0:20 Today's Betweenle puzzle\n0:25 Hints before the solve\n0:35 Full solve (5 guesses)\n1:15 Answer & deduction path\n1:23 Solve breakdown\n1:31 Tomorrow's puzzle\nBetweenle answer archive: https://wordsolverx.com/betweenle-answer-today\n\n\ud83d\udd14 Subscribe for a new Betweenle answer every day!",
+  "comment_text": "What was your first guess today? \ud83e\udd14\n\ud83d\udfe9 = got it    \ud83d\udfe8 = close    \u2b1b = stumped\n\n\u23f1\ufe0f Chapters:\n0:00 Intro\n0:20 Today's Betweenle puzzle\n0:25 Hints before the solve\n0:35 Full solve (5 guesses)\n1:16 Answer & deduction path\n1:24 Solve breakdown\n1:32 Tomorrow's puzzle\nBetweenle answer archive: https://wordsolverx.com/betweenle-answer-today\n\n\ud83d\udd14 Subscribe for a new Betweenle answer every day!",
   "playlist_titles": [
    [
     "Betweenle Answers \u2014 October 2026",
@@ -53,7 +56,7 @@
     "All daily Betweenle solution videos from 2026."
    ]
   ],
-  "duration_s": 96.45,
+  "duration_s": 97.61,
   "date_str": "October 20, 2026",
   "game": "Betweenle",
   "chapters": [
@@ -74,15 +77,15 @@
     "Full solve (5 guesses)"
    ],
    [
-    75.4,
+    76.6,
     "Answer & deduction path"
    ],
    [
-    83.4,
+    84.6,
     "Solve breakdown"
    ],
    [
-    91.4,
+    92.6,
     "Tomorrow's puzzle"
    ]
   ],
