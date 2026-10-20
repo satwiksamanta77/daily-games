@@ -24,7 +24,7 @@
   },
   "playlist": {
    "status": "deferred",
-   "reason": "<HttpError 403 when requesting https://youtube.googleapis.com/youtube/v3/playlists?part=snippet%2Cstatus&alt=json returned \"The request cannot be completed because you have exceeded your <a href=\"/you",
+   "reason": "<HttpError 403 when requesting https://youtube.googleapis.com/youtube/v3/playlists?part=snippet&mine=true&maxResults=50&alt=json returned \"The request cannot be completed because you have exceeded you",
    "cost": 0
   },
   "comment": {
