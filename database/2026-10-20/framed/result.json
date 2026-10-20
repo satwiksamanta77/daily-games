@@ -11,43 +11,46 @@
  },
  "video": "/home/runner/work/daily-games/daily-games/videos/framed/framed_final_2026-10-20.mp4",
  "published": true,
- "youtube_video_id": "ogZ289AVYNw",
- "youtube_url": "https://www.youtube.com/watch?v=ogZ289AVYNw",
- "published_at": "2026-10-20T07:10:16Z",
+ "youtube_video_id": "99hUEOX6Q5w",
+ "youtube_url": "https://www.youtube.com/watch?v=99hUEOX6Q5w",
+ "published_at": "2026-10-20T09:45:25Z",
  "publish_attempts": 1,
  "last_publish_error": null,
  "enrichment": {
   "thumbnail": {
-   "status": "done",
-   "reason": "",
+   "status": "deferred",
+   "reason": "quotaExceeded",
    "cost": 50
   },
   "playlist": {
    "status": "deferred",
-   "reason": "find/create failed for Framed Answers \u2014 October 2026; find/create failed for Framed Answers \u2014 2026",
+   "reason": "quota: quotaExceeded",
    "cost": 0
   },
   "comment": {
-   "status": "done",
-   "reason": "",
-   "cost": 50
+   "status": "deferred",
+   "reason": "quota \u2014 bucket exhausted, deferred",
+   "cost": 0
   },
   "captions": {
-   "status": "done",
-   "reason": "",
-   "cost": 400
+   "status": "deferred",
+   "reason": "quota \u2014 bucket exhausted, deferred",
+   "cost": 0
   }
  },
  "enrichment_deferred": [
-  "playlist"
+  "thumbnail",
+  "playlist",
+  "comment",
+  "captions"
  ],
  "quota_estimate": {
   "upload_calls": 1,
-  "general_units_estimated": 502
+  "general_units_estimated": 0
  },
  "shorts_video_id": null,
  "enrichment_context": {
-  "comment_text": "What was your first guess today? \ud83e\udd14\n\ud83d\udfe9 = got it    \ud83d\udfe8 = close    \u2b1b = stumped\n\n\u23f1\ufe0f Chapters:\n0:00 Intro\n0:20 Today's Framed puzzle - all four modes\n0:25 Framed Classic\n0:44 Framed One Frame\n1:13 Framed Titleshot\n1:46 Framed Poster\n2:38 Every answer\n2:46 Modes completed\n2:54 Tomorrow's puzzle\nFramed answer archive: https://wordsolverx.com/framed-answer-today\n\n\ud83d\udd14 Subscribe for a new Framed answer every day!",
+  "comment_text": "What was your first guess today? \ud83e\udd14\n\ud83d\udfe9 = got it    \ud83d\udfe8 = close    \u2b1b = stumped\n\n\u23f1\ufe0f Chapters:\n0:00 Intro\n0:20 Today's Framed puzzle - all four modes\n0:25 Framed Classic\n0:43 Framed One Frame\n1:12 Framed Titleshot\n1:45 Framed Poster\n2:38 Every answer\n2:46 Modes completed\n2:54 Tomorrow's puzzle\nFramed answer archive: https://wordsolverx.com/framed-answer-today\n\n\ud83d\udd14 Subscribe for a new Framed answer every day!",
   "playlist_titles": [
    [
     "Framed Answers \u2014 October 2026",
@@ -75,15 +78,15 @@
     "Framed Classic"
    ],
    [
-    44.7,
+    43.8,
     "Framed One Frame"
    ],
    [
-    73.4,
+    72.7,
     "Framed Titleshot"
    ],
    [
-    106.2,
+    105.7,
     "Framed Poster"
    ],
    [
