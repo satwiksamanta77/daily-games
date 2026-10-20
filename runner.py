@@ -21970,18 +21970,31 @@ def _marveldle_browser_solve(page, gid, max_guesses=14):
 # never used. No exact <h3> match => do NOT submit (never play a wrong
 # artist); the candidate is marked unplayable and skipped.
 _SPOTLE_POOL_JS = """async () => {
-  const urls = performance.getEntriesByType('resource')
+  const urls = [...new Set(performance.getEntriesByType('resource')
     .map(e => e.name)
-    .filter(u => u.includes('/_app/immutable/') && u.endsWith('.js'));
+    .filter(u => u.includes('/_app/immutable/') && u.endsWith('.js')))];
+  const out = [];
   for (const u of urls) {
     try {
       const t = await fetch(u).then(r => r.text());
-      if (!t.includes('listener_rank')) continue;
-      const m = t.match(/JSON\\.parse\\(`([\\s\\S]*?)`\\)/);
-      if (m) return m[1];
+      // EVERY JSON.parse(`...`) template payload in EVERY immutable
+      // chunk. The artist pool lives in a lazily-imported data chunk
+      // whose position in resource order is NOT guaranteed, and other
+      // chunks carry non-pool JSON.parse payloads — taking the FIRST
+      // match of the first chunk that merely mentions listener_rank
+      // returns the wrong block (production failure, iter-41). Which
+      // payload is the pool is decided in Python by shape validation.
+      const re = /JSON\\.parse\\(`([\\s\\S]*?)`\\)/g;
+      let m, i = 0;
+      while ((m = re.exec(t)) !== null) {
+        if (m[1] && m[1].length > 1000) {
+          out.push({u: u, i: i, t: m[1]});
+        }
+        i += 1;
+      }
     } catch (e) {}
   }
-  return null;
+  return out;
 }"""
 
 _SPOTLE_FEEDBACK_JS = """() => {
@@ -22021,6 +22034,44 @@ _SPOTLE_ARROW_UP = "15.41L12 10.83"
 _SPOTLE_TILE_LABELS = ("Debut", "Members", "Popularity", "Gender", "Genre")
 
 
+def _spotle_tpl_unescape(raw):
+    """Undo JS template-literal escaping of a bundler-embedded payload.
+
+    The game's pool chunk stores its data as ``JSON.parse(`<json>`)``. The
+    regex-extracted payload is the template literal's SOURCE text, so the
+    escapes the bundler emitted (``\\\\`` for a literal backslash, ``\\``
+    + backtick for a backtick, ``\\`` + ``${`` for an interpolation) are
+    still present and must be undone before ``json.loads``. Without this,
+    the first literal backslash in the JSON (e.g. the escaped quotes in
+    artist '"Weird Al" Yankovic', rank 1084 of the live pool) breaks
+    parsing — the exact production failure of iter-41's run (payload found
+    4/4, parse failed 4/4). Only the bundler-emitted escapes are touched;
+    lone JSON escapes like ``\\n`` pass through to json.loads untouched.
+    """
+    if not raw:
+        return ""
+    out, j, n = [], 0, len(raw)
+    while j < n:
+        c = raw[j]
+        if c == "\\" and j + 1 < n:
+            nxt = raw[j + 1]
+            if nxt == "\\":
+                out.append("\\")
+                j += 2
+                continue
+            if nxt == "`":
+                out.append("`")
+                j += 2
+                continue
+            if nxt == "$" and j + 2 < n and raw[j + 2] == "{":
+                out.append("${")
+                j += 3
+                continue
+        out.append(c)
+        j += 1
+    return "".join(out)
+
+
 def _spotle_parse_pool(raw, gid):
     """Normalize the captured pool chunk text into artist dicts.
 
@@ -22030,7 +22081,7 @@ def _spotle_parse_pool(raw, gid):
     """
     import json as _json
     try:
-        data = _json.loads(raw or "")
+        data = _json.loads(_spotle_tpl_unescape(raw or ""))
     except Exception:
         return []
     if not isinstance(data, list) or len(data) < 100:
@@ -22058,21 +22109,56 @@ def _spotle_parse_pool(raw, gid):
     return pool
 
 
+def _spotle_pick_pool(candidates, gid):
+    """Select the artist pool from captured JSON.parse payloads.
+
+    `candidates` is the _SPOTLE_POOL_JS result: a list of {u, i, t}
+    (chunk URL, match index within that chunk, raw payload) gathered
+    across ALL immutable chunks. The first payload that parses (after
+    template-literal unescaping) to >=100 artist-shaped entries wins;
+    every other payload (site promo/state JSON, partial data) is
+    skipped. Returns (pool, winner) where winner is (chunk_url,
+    match_index, pool_size), or ([], None) when no candidate is a pool.
+    A bare string candidate (legacy single-payload shape, e.g. from a
+    mocked capture) is also accepted.
+    """
+    if isinstance(candidates, (str, bytes)):
+        candidates = [{"u": None, "i": 0, "t": candidates}]
+    elif isinstance(candidates, dict):
+        candidates = [candidates]
+    for c in candidates or []:
+        t = c.get("t") if isinstance(c, dict) else c
+        pool = _spotle_parse_pool(t, gid)
+        if pool:
+            u = c.get("u") if isinstance(c, dict) else None
+            i = c.get("i") if isinstance(c, dict) else None
+            _dbg(gid, f"spotle pool: selected chunk={u} match#{i} "
+                      f"pool={len(pool)} artists")
+            return pool, (u, i, len(pool))
+    return [], None
+
+
 def _spotle_capture_pool(page, gid):
     """The game's own artist pool, from resources the game loaded.
 
-    Primary: performance resource entries -> fetch each in-page chunk ->
-    the one containing `listener_rank`. Fallback: one reload (re-registers
-    resources) then retry. Never a hard-coded chunk URL (hash rotates).
+    Primary: performance resource entries -> fetch each in-page chunk
+    -> collect ALL `JSON.parse(`...`)` payloads across ALL chunks ->
+    _spotle_pick_pool selects the one that parses to the artist list.
+    Fallback: one reload (re-registers resources, incl. the lazily
+    imported pool chunk) then retry. Never a hard-coded chunk URL
+    (hash rotates).
     """
     for attempt in (1, 2):
         try:
-            raw = page.evaluate(_SPOTLE_POOL_JS)
+            candidates = page.evaluate(_SPOTLE_POOL_JS) or []
         except Exception as e:
             _dbg(gid, f"spotle pool capture attempt {attempt} failed: {e}")
-            raw = None
-        if raw:
-            pool = _spotle_parse_pool(raw, gid)
+            candidates = []
+        if candidates:
+            _dbg(gid, f"spotle pool: scanning {len(candidates)} JSON "
+                      f"payload(s) across immutable chunks "
+                      f"(attempt {attempt})")
+            pool, _winner = _spotle_pick_pool(candidates, gid)
             if pool:
                 _dbg(gid, f"spotle pool captured: {len(pool)} artists "
                           f"(attempt {attempt})")
