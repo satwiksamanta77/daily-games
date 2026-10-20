@@ -6,9 +6,9 @@
  "answer": "tears",
  "video": "/home/runner/work/daily-games/daily-games/videos/phoodle/phoodle_final_2026-10-20.mp4",
  "published": true,
- "youtube_video_id": "KidcNte4UZQ",
- "youtube_url": "https://www.youtube.com/watch?v=KidcNte4UZQ",
- "published_at": "2026-10-19T16:44:07Z",
+ "youtube_video_id": "v7YtlVUTawM",
+ "youtube_url": "https://www.youtube.com/watch?v=v7YtlVUTawM",
+ "published_at": "2026-10-20T07:05:54Z",
  "publish_attempts": 1,
  "last_publish_error": null,
  "enrichment": {
@@ -18,31 +18,31 @@
    "cost": 50
   },
   "playlist": {
-   "status": "skipped",
-   "reason": "upload-only scopes (token granted youtube.upload only; playlists need youtube scope \u2014 re-consent with full scopes to enable)",
+   "status": "deferred",
+   "reason": "find/create failed for Phoodle Answers \u2014 October 2026; find/create failed for Phoodle Answers \u2014 2026",
    "cost": 0
   },
   "comment": {
-   "status": "skipped",
-   "reason": "upload-only scopes (token granted youtube.upload only; playlists need youtube scope \u2014 re-consent with full scopes to enable)",
-   "cost": 0
+   "status": "done",
+   "reason": "",
+   "cost": 50
   },
   "captions": {
-   "status": "deferred",
-   "reason": "captions upload returned failure",
-   "cost": 0
+   "status": "done",
+   "reason": "",
+   "cost": 400
   }
  },
  "enrichment_deferred": [
-  "captions"
+  "playlist"
  ],
  "quota_estimate": {
   "upload_calls": 1,
-  "general_units_estimated": 50
+  "general_units_estimated": 502
  },
  "shorts_video_id": null,
  "enrichment_context": {
-  "comment_text": "What was your first guess today? \ud83e\udd14\n\ud83d\udfe9 = got it    \ud83d\udfe8 = close    \u2b1b = stumped\n\n\u23f1\ufe0f Chapters:\n0:00 Intro\n0:20 Today's Phoodle puzzle\n0:25 Hints before the solve\n0:35 Full solve (3 guesses)\n0:55 Answer & deduction path\n1:03 Solve breakdown\n1:11 Tomorrow's puzzle\nPhoodle answer archive: https://wordsolverx.com/phoodle-answer-today\n\n\ud83d\udd14 Subscribe for a new Phoodle answer every day!",
+  "comment_text": "What was your first guess today? \ud83e\udd14\n\ud83d\udfe9 = got it    \ud83d\udfe8 = close    \u2b1b = stumped\n\n\u23f1\ufe0f Chapters:\n0:00 Intro\n0:20 Today's Phoodle puzzle\n0:25 Hints before the solve\n0:35 Full solve (3 guesses)\n0:59 Answer & deduction path\n1:07 Solve breakdown\n1:15 Tomorrow's puzzle\nPhoodle answer archive: https://wordsolverx.com/phoodle-answer-today\n\n\ud83d\udd14 Subscribe for a new Phoodle answer every day!",
   "playlist_titles": [
    [
     "Phoodle Answers \u2014 October 2026",
@@ -53,7 +53,7 @@
     "All daily Phoodle solution videos from 2026."
    ]
   ],
-  "duration_s": 76.91,
+  "duration_s": 80.66,
   "date_str": "October 20, 2026",
   "game": "Phoodle",
   "chapters": [
@@ -74,15 +74,15 @@
     "Full solve (3 guesses)"
    ],
    [
-    55.9,
+    59.6,
     "Answer & deduction path"
    ],
    [
-    63.9,
+    67.6,
     "Solve breakdown"
    ],
    [
-    71.9,
+    75.6,
     "Tomorrow's puzzle"
    ]
   ],
