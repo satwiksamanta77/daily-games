@@ -5,44 +5,46 @@
  "evidence": "modes=[{'id': 'classic', 'typed': 3, 'expected': 1, 'signal': 'won', 'equations_played': ['85-39=46', '153/17=9', '15*9=135'], 'equations_played_notes': [], 'equations_official': ['15*9=135']}, {'id': 'micro', 'typed': 3, 'expected': 1, 'signal': 'won', 'equations_played': ['2+1=3', '3+3=6', '4+3=7'",
  "video": "/home/runner/work/daily-games/daily-games/videos/nerdle/nerdle_final_2026-10-20.mp4",
  "published": true,
- "youtube_video_id": "9Ttoh2SgHl8",
- "youtube_url": "https://www.youtube.com/watch?v=9Ttoh2SgHl8",
- "published_at": "2026-10-20T07:21:39Z",
+ "youtube_video_id": "7rkukcmpMW0",
+ "youtube_url": "https://www.youtube.com/watch?v=7rkukcmpMW0",
+ "published_at": "2026-10-20T09:57:24Z",
  "publish_attempts": 1,
  "last_publish_error": null,
  "enrichment": {
   "thumbnail": {
-   "status": "done",
-   "reason": "",
+   "status": "deferred",
+   "reason": "quotaExceeded",
    "cost": 50
   },
   "playlist": {
    "status": "deferred",
-   "reason": "find/create failed for Nerdle Answers \u2014 October 2026; add failed for Nerdle Answers \u2014 2026",
+   "reason": "quota: quotaExceeded",
    "cost": 0
   },
   "comment": {
-   "status": "done",
-   "reason": "",
-   "cost": 50
+   "status": "deferred",
+   "reason": "quota \u2014 bucket exhausted, deferred",
+   "cost": 0
   },
   "captions": {
    "status": "deferred",
-   "reason": "quota: quotaExceeded",
+   "reason": "quota \u2014 bucket exhausted, deferred",
    "cost": 0
   }
  },
  "enrichment_deferred": [
+  "thumbnail",
   "playlist",
+  "comment",
   "captions"
  ],
  "quota_estimate": {
   "upload_calls": 1,
-  "general_units_estimated": 102
+  "general_units_estimated": 0
  },
  "shorts_video_id": null,
  "enrichment_context": {
-  "comment_text": "What was your first guess today? \ud83e\udd14\n\ud83d\udfe9 = got it    \ud83d\udfe8 = close    \u2b1b = stumped\n\n\u23f1\ufe0f Chapters:\n0:00 Intro\n0:20 Classic Solve\n0:52 Micro Solve\n1:20 Mini Solve\n1:45 Midi Solve\n2:11 Maxi Solve\n2:45 MiniBi Solve\n3:11 Quad Solve\n3:43 Speed Solve\n4:10 Instant Solve\n\nTry our FREE Nerdle Solver: https://wordsolverx.com/nerdle-solver\nNerdle answer archive: https://wordsolverx.com/nerdle-answer-today\n\n\ud83d\udd14 Subscribe for a new Nerdle answer every day!",
+  "comment_text": "What was your first guess today? \ud83e\udd14\n\ud83d\udfe9 = got it    \ud83d\udfe8 = close    \u2b1b = stumped\n\n\u23f1\ufe0f Chapters:\n0:00 Intro\n0:20 Classic Solve\n0:52 Micro Solve\n1:20 Mini Solve\n1:45 Midi Solve\n2:10 Maxi Solve\n2:43 MiniBi Solve\n3:10 Quad Solve\n3:44 Speed Solve\n4:10 Instant Solve\n\nTry our FREE Nerdle Solver: https://wordsolverx.com/nerdle-solver\nNerdle answer archive: https://wordsolverx.com/nerdle-answer-today\n\n\ud83d\udd14 Subscribe for a new Nerdle answer every day!",
   "playlist_titles": [
    [
     "Nerdle Answers \u2014 October 2026",
@@ -66,35 +68,35 @@
     "Classic Solve"
    ],
    [
-    52.7,
+    52.9,
     "Micro Solve"
    ],
    [
-    80.9,
+    80.4,
     "Mini Solve"
    ],
    [
-    105.9,
+    105.6,
     "Midi Solve"
    ],
    [
-    131.0,
+    130.5,
     "Maxi Solve"
    ],
    [
-    165.2,
+    163.7,
     "MiniBi Solve"
    ],
    [
-    191.5,
+    190.4,
     "Quad Solve"
    ],
    [
-    223.9,
+    224.1,
     "Speed Solve"
    ],
    [
-    250.0,
+    250.3,
     "Instant Solve"
    ]
   ],
