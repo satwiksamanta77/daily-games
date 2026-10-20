@@ -6,9 +6,9 @@
  "answer": "Iraq",
  "video": "/home/runner/work/daily-games/daily-games/videos/globle/globle_final_2026-10-20.mp4",
  "published": true,
- "youtube_video_id": "hN5ttg3c_M8",
- "youtube_url": "https://www.youtube.com/watch?v=hN5ttg3c_M8",
- "published_at": "2026-10-19T16:42:39Z",
+ "youtube_video_id": "IaMMX5QEpts",
+ "youtube_url": "https://www.youtube.com/watch?v=IaMMX5QEpts",
+ "published_at": "2026-10-20T07:08:54Z",
  "publish_attempts": 1,
  "last_publish_error": null,
  "enrichment": {
@@ -18,31 +18,31 @@
    "cost": 50
   },
   "playlist": {
-   "status": "skipped",
-   "reason": "upload-only scopes (token granted youtube.upload only; playlists need youtube scope \u2014 re-consent with full scopes to enable)",
+   "status": "deferred",
+   "reason": "add failed for Globle Answers \u2014 October 2026; find/create failed for Globle Answers \u2014 2026",
    "cost": 0
   },
   "comment": {
-   "status": "skipped",
-   "reason": "upload-only scopes (token granted youtube.upload only; playlists need youtube scope \u2014 re-consent with full scopes to enable)",
-   "cost": 0
+   "status": "done",
+   "reason": "",
+   "cost": 50
   },
   "captions": {
-   "status": "deferred",
-   "reason": "captions upload returned failure",
-   "cost": 0
+   "status": "done",
+   "reason": "",
+   "cost": 400
   }
  },
  "enrichment_deferred": [
-  "captions"
+  "playlist"
  ],
  "quota_estimate": {
   "upload_calls": 1,
-  "general_units_estimated": 50
+  "general_units_estimated": 502
  },
  "shorts_video_id": null,
  "enrichment_context": {
-  "comment_text": "What was your first guess today? \ud83e\udd14\n\ud83d\udfe9 = got it    \ud83d\udfe8 = close    \u2b1b = stumped\n\n\u23f1\ufe0f Chapters:\n0:00 Intro\n0:20 Today's Globle puzzle\n0:25 Hints before the solve\n0:35 Full solve (4 guesses)\n1:08 Answer & deduction path\n1:16 Solve breakdown\n1:24 Tomorrow's puzzle\nGloble answer archive: https://wordsolverx.com/globle-answer-today\n\n\ud83d\udd14 Subscribe for a new Globle answer every day!",
+  "comment_text": "What was your first guess today? \ud83e\udd14\n\ud83d\udfe9 = got it    \ud83d\udfe8 = close    \u2b1b = stumped\n\n\u23f1\ufe0f Chapters:\n0:00 Intro\n0:20 Today's Globle puzzle\n0:25 Hints before the solve\n0:35 Full solve (4 guesses)\n1:13 Answer & deduction path\n1:21 Solve breakdown\n1:29 Tomorrow's puzzle\nGloble answer archive: https://wordsolverx.com/globle-answer-today\n\n\ud83d\udd14 Subscribe for a new Globle answer every day!",
   "playlist_titles": [
    [
     "Globle Answers \u2014 October 2026",
@@ -53,7 +53,7 @@
     "All daily Globle solution videos from 2026."
    ]
   ],
-  "duration_s": 89.53,
+  "duration_s": 94.66,
   "date_str": "October 20, 2026",
   "game": "Globle",
   "chapters": [
@@ -74,15 +74,15 @@
     "Full solve (4 guesses)"
    ],
    [
-    68.5,
+    73.6,
     "Answer & deduction path"
    ],
    [
-    76.5,
+    81.6,
     "Solve breakdown"
    ],
    [
-    84.5,
+    89.6,
     "Tomorrow's puzzle"
    ]
   ],
