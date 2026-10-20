@@ -6,9 +6,9 @@
  "answer": "Andorra",
  "video": "/home/runner/work/daily-games/daily-games/videos/countryle/countryle_final_2026-10-20.mp4",
  "published": true,
- "youtube_video_id": "1WhO-sUucME",
- "youtube_url": "https://www.youtube.com/watch?v=1WhO-sUucME",
- "published_at": "2026-10-19T16:46:03Z",
+ "youtube_video_id": "TV-EsVNN9QA",
+ "youtube_url": "https://www.youtube.com/watch?v=TV-EsVNN9QA",
+ "published_at": "2026-10-20T07:07:24Z",
  "publish_attempts": 1,
  "last_publish_error": null,
  "enrichment": {
@@ -18,31 +18,31 @@
    "cost": 50
   },
   "playlist": {
-   "status": "skipped",
-   "reason": "upload-only scopes (token granted youtube.upload only; playlists need youtube scope \u2014 re-consent with full scopes to enable)",
+   "status": "deferred",
+   "reason": "find/create failed for Countryle Answers \u2014 October 2026; find/create failed for Countryle Answers \u2014 2026",
    "cost": 0
   },
   "comment": {
-   "status": "skipped",
-   "reason": "upload-only scopes (token granted youtube.upload only; playlists need youtube scope \u2014 re-consent with full scopes to enable)",
-   "cost": 0
+   "status": "done",
+   "reason": "",
+   "cost": 50
   },
   "captions": {
-   "status": "deferred",
-   "reason": "captions upload returned failure",
-   "cost": 0
+   "status": "done",
+   "reason": "",
+   "cost": 400
   }
  },
  "enrichment_deferred": [
-  "captions"
+  "playlist"
  ],
  "quota_estimate": {
   "upload_calls": 1,
-  "general_units_estimated": 50
+  "general_units_estimated": 502
  },
  "shorts_video_id": null,
  "enrichment_context": {
-  "comment_text": "What was your first guess today? \ud83e\udd14\n\ud83d\udfe9 = got it    \ud83d\udfe8 = close    \u2b1b = stumped\n\n\u23f1\ufe0f Chapters:\n0:00 Intro\n0:20 Today's Countryle puzzle\n0:25 Hints before the solve\n0:35 Full solve (4 guesses)\n1:14 Answer & deduction path\n1:22 Solve breakdown\n1:30 Tomorrow's puzzle\nCountryle answer archive: https://wordsolverx.com/countryle-answer-today\n\n\ud83d\udd14 Subscribe for a new Countryle answer every day!",
+  "comment_text": "What was your first guess today? \ud83e\udd14\n\ud83d\udfe9 = got it    \ud83d\udfe8 = close    \u2b1b = stumped\n\n\u23f1\ufe0f Chapters:\n0:00 Intro\n0:20 Today's Countryle puzzle\n0:25 Hints before the solve\n0:35 Full solve (4 guesses)\n1:17 Answer & deduction path\n1:25 Solve breakdown\n1:33 Tomorrow's puzzle\nCountryle answer archive: https://wordsolverx.com/countryle-answer-today\n\n\ud83d\udd14 Subscribe for a new Countryle answer every day!",
   "playlist_titles": [
    [
     "Countryle Answers \u2014 October 2026",
@@ -53,7 +53,7 @@
     "All daily Countryle solution videos from 2026."
    ]
   ],
-  "duration_s": 95.03,
+  "duration_s": 98.03,
   "date_str": "October 20, 2026",
   "game": "Countryle",
   "chapters": [
@@ -74,15 +74,15 @@
     "Full solve (4 guesses)"
    ],
    [
-    74.0,
+    77.0,
     "Answer & deduction path"
    ],
    [
-    82.0,
+    85.0,
     "Solve breakdown"
    ],
    [
-    90.0,
+    93.0,
     "Tomorrow's puzzle"
    ]
   ],
