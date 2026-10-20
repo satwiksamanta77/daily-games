@@ -6,9 +6,9 @@
  "answer": "ability",
  "video": "/home/runner/work/daily-games/daily-games/videos/contexto/contexto_final_2026-10-20.mp4",
  "published": true,
- "youtube_video_id": "Eqq0k67xyBo",
- "youtube_url": "https://www.youtube.com/watch?v=Eqq0k67xyBo",
- "published_at": "2026-10-19T16:43:12Z",
+ "youtube_video_id": "xLymRMWPWq8",
+ "youtube_url": "https://www.youtube.com/watch?v=xLymRMWPWq8",
+ "published_at": "2026-10-20T07:00:20Z",
  "publish_attempts": 1,
  "last_publish_error": null,
  "enrichment": {
@@ -18,31 +18,29 @@
    "cost": 50
   },
   "playlist": {
-   "status": "skipped",
-   "reason": "upload-only scopes (token granted youtube.upload only; playlists need youtube scope \u2014 re-consent with full scopes to enable)",
-   "cost": 0
+   "status": "done",
+   "reason": "add failed for Contexto Answers \u2014 October 2026",
+   "cost": 102
   },
   "comment": {
-   "status": "skipped",
-   "reason": "upload-only scopes (token granted youtube.upload only; playlists need youtube scope \u2014 re-consent with full scopes to enable)",
-   "cost": 0
+   "status": "done",
+   "reason": "",
+   "cost": 50
   },
   "captions": {
-   "status": "deferred",
-   "reason": "captions upload returned failure",
-   "cost": 0
+   "status": "done",
+   "reason": "",
+   "cost": 400
   }
  },
- "enrichment_deferred": [
-  "captions"
- ],
+ "enrichment_deferred": [],
  "quota_estimate": {
   "upload_calls": 1,
-  "general_units_estimated": 50
+  "general_units_estimated": 552
  },
  "shorts_video_id": null,
  "enrichment_context": {
-  "comment_text": "What was your first guess today? \ud83e\udd14\n\ud83d\udfe9 = got it    \ud83d\udfe8 = close    \u2b1b = stumped\n\n\u23f1\ufe0f Chapters:\n0:00 Intro\n0:20 Today's Contexto puzzle\n0:25 Hints before the solve\n0:35 Full solve (5 guesses)\n1:01 Answer & deduction path\n1:09 Solve breakdown\n1:17 Tomorrow's puzzle\nContexto answer archive: https://wordsolverx.com/contexto-answer-today\n\n\ud83d\udd14 Subscribe for a new Contexto answer every day!",
+  "comment_text": "What was your first guess today? \ud83e\udd14\n\ud83d\udfe9 = got it    \ud83d\udfe8 = close    \u2b1b = stumped\n\n\u23f1\ufe0f Chapters:\n0:00 Intro\n0:20 Today's Contexto puzzle\n0:25 Hints before the solve\n0:35 Full solve (5 guesses)\n0:55 Answer & deduction path\n1:03 Solve breakdown\n1:11 Tomorrow's puzzle\nContexto answer archive: https://wordsolverx.com/contexto-answer-today\n\n\ud83d\udd14 Subscribe for a new Contexto answer every day!",
   "playlist_titles": [
    [
     "Contexto Answers \u2014 October 2026",
@@ -53,7 +51,7 @@
     "All daily Contexto solution videos from 2026."
    ]
   ],
-  "duration_s": 82.16,
+  "duration_s": 76.95,
   "date_str": "October 20, 2026",
   "game": "Contexto",
   "chapters": [
@@ -74,15 +72,15 @@
     "Full solve (5 guesses)"
    ],
    [
-    61.1,
+    55.9,
     "Answer & deduction path"
    ],
    [
-    69.1,
+    63.9,
     "Solve breakdown"
    ],
    [
-    77.1,
+    71.9,
     "Tomorrow's puzzle"
    ]
   ],
