@@ -61,6 +61,9 @@ jobs:
           BROWSER_TZ: 'Pacific/Kiritimati'
           CURSOR_OVERLAY: 'off'
           FORCE_REGENERATE: ${{ inputs.force }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           if [ -n "${{ inputs.date }}" ]; then export FAKE_DATE_ISO="${{ inputs.date }}T00:05:00"; echo "PINNED DATE $FAKE_DATE_ISO"; fi
           RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ] || [ "$1" = "betweenle" ]; then
@@ -162,6 +165,9 @@ jobs:
           BROWSER_TZ: 'Pacific/Kiritimati'
           CURSOR_OVERLAY: 'off'
           FORCE_REGENERATE: ${{ inputs.force }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           if [ -n "${{ inputs.date }}" ]; then export FAKE_DATE_ISO="${{ inputs.date }}T00:05:00"; echo "PINNED DATE $FAKE_DATE_ISO"; fi
           RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ] || [ "$1" = "betweenle" ]; then
@@ -263,6 +269,9 @@ jobs:
           BROWSER_TZ: 'Pacific/Kiritimati'
           CURSOR_OVERLAY: 'off'
           FORCE_REGENERATE: ${{ inputs.force }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           if [ -n "${{ inputs.date }}" ]; then export FAKE_DATE_ISO="${{ inputs.date }}T00:05:00"; echo "PINNED DATE $FAKE_DATE_ISO"; fi
           RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ] || [ "$1" = "betweenle" ]; then
@@ -364,6 +373,9 @@ jobs:
           BROWSER_TZ: 'Pacific/Kiritimati'
           CURSOR_OVERLAY: 'off'
           FORCE_REGENERATE: ${{ inputs.force }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           if [ -n "${{ inputs.date }}" ]; then export FAKE_DATE_ISO="${{ inputs.date }}T00:05:00"; echo "PINNED DATE $FAKE_DATE_ISO"; fi
           RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ] || [ "$1" = "betweenle" ]; then
@@ -465,6 +477,9 @@ jobs:
           BROWSER_TZ: 'Pacific/Kiritimati'
           CURSOR_OVERLAY: 'off'
           FORCE_REGENERATE: ${{ inputs.force }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           if [ -n "${{ inputs.date }}" ]; then export FAKE_DATE_ISO="${{ inputs.date }}T00:05:00"; echo "PINNED DATE $FAKE_DATE_ISO"; fi
           RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ] || [ "$1" = "betweenle" ]; then
@@ -566,6 +581,9 @@ jobs:
           BROWSER_TZ: 'Pacific/Kiritimati'
           CURSOR_OVERLAY: 'off'
           FORCE_REGENERATE: ${{ inputs.force }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           if [ -n "${{ inputs.date }}" ]; then export FAKE_DATE_ISO="${{ inputs.date }}T00:05:00"; echo "PINNED DATE $FAKE_DATE_ISO"; fi
           RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ] || [ "$1" = "betweenle" ]; then
@@ -667,6 +685,9 @@ jobs:
           BROWSER_TZ: 'Pacific/Kiritimati'
           CURSOR_OVERLAY: 'off'
           FORCE_REGENERATE: ${{ inputs.force }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           if [ -n "${{ inputs.date }}" ]; then export FAKE_DATE_ISO="${{ inputs.date }}T00:05:00"; echo "PINNED DATE $FAKE_DATE_ISO"; fi
           RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ] || [ "$1" = "betweenle" ]; then
@@ -768,6 +789,9 @@ jobs:
           BROWSER_TZ: 'Pacific/Kiritimati'
           CURSOR_OVERLAY: 'off'
           FORCE_REGENERATE: ${{ inputs.force }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           if [ -n "${{ inputs.date }}" ]; then export FAKE_DATE_ISO="${{ inputs.date }}T00:05:00"; echo "PINNED DATE $FAKE_DATE_ISO"; fi
           RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ] || [ "$1" = "betweenle" ]; then
@@ -869,6 +893,9 @@ jobs:
           BROWSER_TZ: 'Pacific/Kiritimati'
           CURSOR_OVERLAY: 'off'
           FORCE_REGENERATE: ${{ inputs.force }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           if [ -n "${{ inputs.date }}" ]; then export FAKE_DATE_ISO="${{ inputs.date }}T00:05:00"; echo "PINNED DATE $FAKE_DATE_ISO"; fi
           RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ] || [ "$1" = "betweenle" ]; then
@@ -970,6 +997,9 @@ jobs:
           BROWSER_TZ: 'Pacific/Kiritimati'
           CURSOR_OVERLAY: 'off'
           FORCE_REGENERATE: ${{ inputs.force }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           if [ -n "${{ inputs.date }}" ]; then export FAKE_DATE_ISO="${{ inputs.date }}T00:05:00"; echo "PINNED DATE $FAKE_DATE_ISO"; fi
           RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ] || [ "$1" = "betweenle" ]; then
@@ -1071,6 +1101,9 @@ jobs:
           BROWSER_TZ: 'Pacific/Kiritimati'
           CURSOR_OVERLAY: 'off'
           FORCE_REGENERATE: ${{ inputs.force }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           if [ -n "${{ inputs.date }}" ]; then export FAKE_DATE_ISO="${{ inputs.date }}T00:05:00"; echo "PINNED DATE $FAKE_DATE_ISO"; fi
           RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ] || [ "$1" = "betweenle" ]; then
@@ -1172,6 +1205,9 @@ jobs:
           BROWSER_TZ: 'Pacific/Kiritimati'
           CURSOR_OVERLAY: 'off'
           FORCE_REGENERATE: ${{ inputs.force }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           if [ -n "${{ inputs.date }}" ]; then export FAKE_DATE_ISO="${{ inputs.date }}T00:05:00"; echo "PINNED DATE $FAKE_DATE_ISO"; fi
           RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ] || [ "$1" = "betweenle" ]; then
@@ -1273,6 +1309,9 @@ jobs:
           BROWSER_TZ: 'Pacific/Kiritimati'
           CURSOR_OVERLAY: 'off'
           FORCE_REGENERATE: ${{ inputs.force }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           if [ -n "${{ inputs.date }}" ]; then export FAKE_DATE_ISO="${{ inputs.date }}T00:05:00"; echo "PINNED DATE $FAKE_DATE_ISO"; fi
           RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ] || [ "$1" = "betweenle" ]; then
@@ -1374,6 +1413,9 @@ jobs:
           BROWSER_TZ: 'Pacific/Kiritimati'
           CURSOR_OVERLAY: 'off'
           FORCE_REGENERATE: ${{ inputs.force }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           if [ -n "${{ inputs.date }}" ]; then export FAKE_DATE_ISO="${{ inputs.date }}T00:05:00"; echo "PINNED DATE $FAKE_DATE_ISO"; fi
           RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ] || [ "$1" = "betweenle" ]; then
@@ -1476,6 +1518,9 @@ jobs:
           BROWSER_TZ: 'Pacific/Kiritimati'
           CURSOR_OVERLAY: 'off'
           FORCE_REGENERATE: ${{ inputs.force }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           if [ -n "${{ inputs.date }}" ]; then export FAKE_DATE_ISO="${{ inputs.date }}T00:05:00"; echo "PINNED DATE $FAKE_DATE_ISO"; fi
           RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ] || [ "$1" = "betweenle" ]; then
@@ -1578,6 +1623,9 @@ jobs:
           BROWSER_TZ: 'Pacific/Kiritimati'
           CURSOR_OVERLAY: 'off'
           FORCE_REGENERATE: ${{ inputs.force }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           if [ -n "${{ inputs.date }}" ]; then export FAKE_DATE_ISO="${{ inputs.date }}T00:05:00"; echo "PINNED DATE $FAKE_DATE_ISO"; fi
           RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ] || [ "$1" = "betweenle" ]; then
@@ -1680,6 +1728,9 @@ jobs:
           BROWSER_TZ: 'Pacific/Kiritimati'
           CURSOR_OVERLAY: 'off'
           FORCE_REGENERATE: ${{ inputs.force }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           if [ -n "${{ inputs.date }}" ]; then export FAKE_DATE_ISO="${{ inputs.date }}T00:05:00"; echo "PINNED DATE $FAKE_DATE_ISO"; fi
           RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ] || [ "$1" = "betweenle" ]; then
@@ -1782,6 +1833,9 @@ jobs:
           BROWSER_TZ: 'Pacific/Kiritimati'
           CURSOR_OVERLAY: 'off'
           FORCE_REGENERATE: ${{ inputs.force }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           if [ -n "${{ inputs.date }}" ]; then export FAKE_DATE_ISO="${{ inputs.date }}T00:05:00"; echo "PINNED DATE $FAKE_DATE_ISO"; fi
           RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ] || [ "$1" = "betweenle" ]; then
@@ -1887,6 +1941,9 @@ jobs:
           BROWSER_TZ: 'Pacific/Kiritimati'
           CURSOR_OVERLAY: 'off'
           FORCE_REGENERATE: ${{ inputs.force }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           if [ -n "${{ inputs.date }}" ]; then export FAKE_DATE_ISO="${{ inputs.date }}T00:05:00"; echo "PINNED DATE $FAKE_DATE_ISO"; fi
           RUN() { if [ "$1" = "countryle" ] || [ "$1" = "worgle" ] || [ "$1" = "betweenle" ]; then
