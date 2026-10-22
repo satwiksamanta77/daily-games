@@ -614,16 +614,36 @@ def plan_colorfle(secret, max_guesses=6, n_colors=20):
                     options.append(list(combo))
                     if len(options) > 4000:
                         break
+            # Iter-49: bound the scoring cost for the 4-colour board
+            # (pool 116280 — options x pool exploded to minutes).
+            # Thin OPTIONS deterministically to the same 4000 cap the
+            # permutation fallback already used; scoring still runs
+            # against the TRUE full pool (the recorded lesson stands:
+            # sampling the POOL is what barely narrowed).
+            if len(options) > 4000:
+                _stride = -(-len(options) // 4000)
+                options = options[::_stride][:4000]
             # Minimax beats expected-value here: the site allows only six
             # tries, so what matters is the WORST case, not the average.
+            # Iter-49: exact pruning — while scoring an option, once a
+            # bucket exceeds the incumbent's worst bucket the option is
+            # strictly worse on the (worst, exp) key whatever the rest
+            # of the pool says, so stop early. Same winner, less time.
             best, best_key = None, None
             for c in options:
                 if tuple(c) in used:
                     continue
+                _cap = best_key[0] if best_key is not None else None
                 buckets = {}
+                _pruned = False
                 for other in pool:
                     fb = "".join(mastermind_feedback(c, other))
                     buckets[fb] = buckets.get(fb, 0) + 1
+                    if _cap is not None and buckets[fb] > _cap:
+                        _pruned = True
+                        break
+                if _pruned:
+                    continue
                 worst = max(buckets.values()) if buckets else 0
                 tot = len(pool) or 1
                 exp = sum((v / tot) ** 2 for v in buckets.values())

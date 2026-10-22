@@ -365,7 +365,13 @@ def _install_signal_handlers():
 GAMES = {
     "betweenle": {"name": "Betweenle", "url": "https://betweenle.com", "slug": "betweenle-answer-today"},
     "colordle": {"name": "Colordle", "url": "https://colordle.ryantanen.com", "slug": "colordle-answer-today"},
-    "colorfle": {"name": "Colorfle", "url": "https://colorfle.com", "slug": "colorfle-answer-today"},
+    # Iter-49: fake_iso_mode "next_day_midnight" — wordsJi labels the
+    # game's seed date S as S-1 (verified against their worker data,
+    # ANALYSIS49), so the record for date D must solve seed D+1: the
+    # page is pinned to (D+1) 00:05 local, when the game serves seed
+    # D+1 under its own local-date rule (flip 17:00 local).
+    "colorfle": {"name": "Colorfle", "url": "https://colorfle.com", "slug": "colorfle-answer-today",
+                 "fake_iso_mode": "next_day_midnight"},
     # Framed publishes four separate daily modes, each with its own puzzle and
     # its own URL. They used to be four near-identical videos, so the channel
     # was flooded with thin look-alikes and the three extra modes were easy to
@@ -3691,18 +3697,115 @@ def _colorfle_verify_win(page, colors):
     return False, detail
 
 
-def solve_colorfle(page, ans):
-    """Real Colorfle solve: Mastermind deduction, then the winning board.
+def _colorfle_close_stats_modal(page):
+    """Close the post-win Statistics modal so the mode switch is clickable.
 
-    Verification uses the game's own end state. The old check was
-    `"100%" in body`, which matched the static How-to-Play instructions before
-    a single guess was made, so it reported a win no matter what happened.
+    The win opens #statsModal over the board. Click its own close
+    control when present; otherwise hide it directly. Polls the
+    computed display (the same signal the win verifier reads) instead
+    of sleeping blind. Returns True when the modal is not displayed.
+    """
+    try:
+        page.evaluate("""() => {
+          const m = document.getElementById('statsModal');
+          if (m) {
+            const x = m.querySelector('.close, .closeBtn, [data-close]');
+            if (x) { x.click(); return; }
+            m.style.display = 'none';
+          }
+        }""")
+    except Exception:
+        pass
+    import time as _t
+    _end = _t.time() + 1.5
+    while _t.time() < _end:
+        try:
+            disp = page.evaluate(
+                "() => { const m = document.getElementById('statsModal');"
+                " return m ? getComputedStyle(m).display : 'none'; }")
+        except Exception:
+            disp = "none"
+        if disp != "block":
+            return True
+        try:
+            page.wait_for_timeout(150)
+        except Exception:
+            break
+    return False
+
+
+def _colorfle_switch_to_hard(page):
+    """Switch Colorfle to its HARD board via the site's own toggle.
+
+    The header switch is `.switch-button-case.right` ("Hard"); the
+    site persists the choice in localStorage 'mode' ('1') and renders
+    the separate 4-colour board (guessBoardHard/gameOverHard). Click
+    for real (bounding-box mouse click, evaluate-click fallback),
+    then poll the site's own mode flag — the switch counts only when
+    the site says it is in mode 1. Fail-closed: False on timeout.
+    """
+    btn = None
+    try:
+        btn = page.query_selector(".switch-button-case.right")
+    except Exception:
+        btn = None
+    if btn is not None:
+        clicked = False
+        try:
+            bb = btn.bounding_box()
+            if bb:
+                page.mouse.click(bb["x"] + bb["width"] / 2,
+                                 bb["y"] + bb["height"] / 2)
+                clicked = True
+        except Exception:
+            clicked = False
+        if not clicked:
+            try:
+                btn.evaluate("e => e.click()")
+            except Exception:
+                pass
+    else:
+        try:
+            page.evaluate(
+                "() => { const b = document.querySelector("
+                "'.switch-button-case.right'); if (b) b.click(); }")
+        except Exception:
+            pass
+    import time as _t
+    _end = _t.time() + 3.0
+    while _t.time() < _end:
+        try:
+            m = page.evaluate(
+                "() => { try { return localStorage.getItem('mode'); }"
+                " catch (e) { return null; } }")
+        except Exception:
+            m = None
+        if str(m) == "1":
+            try:
+                page.wait_for_timeout(500)
+            except Exception:
+                pass
+            return True
+        try:
+            page.wait_for_timeout(150)
+        except Exception:
+            break
+    return False
+
+
+def _colorfle_play_mode(page, colors, mode_idx, shared_played):
+    """Play ONE Colorfle board (Normal mode_idx=0, Hard mode_idx=1).
+
+    Mastermind deduction via the planner (<=3 probes + the verified
+    answer, 2-4 attempts — the standing Colorfle rule), clicks only,
+    win proven from the SITE's own state for the CURRENT mode
+    (_colorfle_verify_win keys off localStorage 'mode'). Appends the
+    played combos to shared_played and mirrors them into
+    _PLAYED['colorfle'] after every guess, like the single-mode
+    solver did. Returns (won, detail).
     """
     _close_modals(page)
     _dismiss_colorfle_modal(page)
-    colors = ans.get("colors") if isinstance(ans, dict) else None
-    if not colors:
-        return False, "no color answer available"
     colors = [int(c) for c in colors]
 
     sw = _colorfle_swatches(page)
@@ -3729,7 +3832,7 @@ def solve_colorfle(page, ans):
         else:
             el.evaluate("e => e.click()")
 
-    _played_cf = []
+    _played_cf = list(shared_played)
     for _n, combo in enumerate(seq):
         combo = [int(c) for c in combo]
         # First action anchor (fix-loop iter 4): colorfle uses clicks, never
@@ -3758,6 +3861,7 @@ def solve_colorfle(page, ans):
         _click(enter)
         page.wait_for_timeout(3400)
         _played_cf.append(list(combo))
+        shared_played.append(list(combo))
         _PLAYED["colorfle"] = [list(c) for c in _played_cf]
         try:
             _tail = (page.evaluate(
@@ -3779,6 +3883,62 @@ def solve_colorfle(page, ans):
                        f"({_win_detail})")
     return False, (f"no site win after {len(seq)} guesses "
                    f"({_win_detail})")
+
+
+def solve_colorfle(page, ans):
+    """Real Colorfle solve: BOTH daily modes back to back in one session.
+
+    Colorfle has two daily boards — Normal (3 colours) and Hard
+    (4 colours), each with its own seed and its own win state — and
+    the answers site shows both. The pre-iter-49 solver played only
+    the default Normal board, so the video never showed the Hard
+    answer (user report, 2026-10-22). Now: win Normal, close the
+    stats modal, flip the site's own NORMAL/HARD switch, win Hard.
+    Each mode follows the standing rules (planner deduction, 2-4
+    attempts, verified answer last, no hints) and each win is proven
+    from the site's own per-mode state. An answer dict without the
+    Hard entry (legacy shape) keeps the old single-mode behaviour.
+    """
+    gid = getattr(page, "_qp_gid", "colorfle")
+    if not isinstance(ans, dict) or not ans.get("colors"):
+        return False, "no color answer available"
+    colors0 = [int(c) for c in ans["colors"]]
+    hard = ans.get("colors_hard")
+    if not hard:
+        hard = ((ans.get("modes") or {}).get("hard") or {}).get("colors")
+    colors1 = [int(c) for c in hard] if hard else None
+
+    shared = []
+    won0, det0 = _colorfle_play_mode(page, colors0, 0, shared)
+    _n0 = len(shared)
+    results = [{"mode": "normal", "answer": colors0, "guesses": _n0,
+                "solved": bool(won0)}]
+    _COLORFLE_MODE_RESULTS[gid] = results
+    if not won0:
+        return False, f"normal mode not won: {det0}"
+    if colors1 is None:
+        return True, det0
+    _colorfle_close_stats_modal(page)
+    if not _colorfle_switch_to_hard(page):
+        return False, (f"normal won ({det0}); hard mode switch failed "
+                       f"(site mode never became '1')")
+    try:
+        _t0 = _REC_T0.get(gid)
+        if _t0:
+            _COLORFLE_MODE_MARKS[gid] = round(time.time() - _t0, 1)
+    except Exception:
+        pass
+    _dbg(gid, "colorfle hard board active "
+              f"(mark={_COLORFLE_MODE_MARKS.get(gid)}); solving hard "
+              f"{colors1}")
+    won1, det1 = _colorfle_play_mode(page, colors1, 1, shared)
+    results.append({"mode": "hard", "answer": colors1,
+                    "guesses": len(shared) - _n0, "solved": bool(won1)})
+    _COLORFLE_MODE_RESULTS[gid] = results
+    if not won1:
+        return False, f"normal won ({det0}); hard mode not won: {det1}"
+    return True, (f"site win verified both modes: normal {det0}; "
+                  f"hard {det1}")
 
 
 def _framed_wait_board_ready(page, cap_ms=6000):
@@ -5390,6 +5550,64 @@ _PLANS = {}
 _HEX = {}
 # Colorfle's winning colour indices, needed by the Mastermind planner.
 _COLORS = {}
+# Iter-49: Colorfle HARD mode (4 colours) — the second daily board.
+# _COLORFLE_HARD stashes the hard-mode secret for the steps planner;
+# _COLORFLE_MODE_RESULTS carries the per-mode outcome into result.json
+# + the DB record; _COLORFLE_MODE_MARKS stamps the recording-relative
+# second when the Hard board became active (assembly splits there and
+# splices the "Hard Mode" card, Framed-style).
+_COLORFLE_HARD = {}
+_COLORFLE_MODE_RESULTS = {}
+_COLORFLE_MODE_MARKS = {}
+
+
+def _colorfle_seed_date(record_date):
+    """The game's seed date behind a DB record date (Colorfle only).
+
+    wordsJi's worker labels seed date S as S-1 (verified verbatim for
+    2026-10-20..23 against this repo's seed computation, ANALYSIS49):
+    their "Oct-22" answers are the game's seed-Oct-23 answers. The
+    record for date D must therefore solve seed D+1, or the video on
+    the site's D page shows the answers the site files under D-1 —
+    the exact mismatch the user reported on 2026-10-22.
+    """
+    return record_date + timedelta(days=1)
+
+
+def _colorfle_answers_by_mode(mode_results):
+    """DB shape for the two-mode record: {"normal": [...], "hard": [...]}.
+
+    Returns None when there are no per-mode results (legacy single-mode
+    runs keep the old record shape untouched).
+    """
+    out = {}
+    for r in mode_results or []:
+        try:
+            out[str(r.get("mode"))] = [int(c) for c in r.get("answer") or []]
+        except Exception:
+            continue
+    return out or None
+
+
+def _colorfle_split_seconds(gd, mark_raw, kept_segments):
+    """Polished-gameplay second where the Hard-mode footage starts.
+
+    Maps the solver's raw-recording stamp through the autocrop kept
+    segments (same math as the Worldle chapter mapping). Returns None
+    when the split would be unusable (no mark, or it lands within half
+    a second of either end) so assembly falls back to the single
+    segment instead of shipping a broken cut. Pure function.
+    """
+    if mark_raw is None:
+        return None
+    try:
+        split = _s_worldle_raw_to_polished(float(mark_raw), kept_segments)
+        gd = float(gd)
+    except Exception:
+        return None
+    if split is None or split < 0.5 or split > gd - 0.5:
+        return None
+    return round(split, 1)
 
 
 # Widely-known titles Framed is likely to accept as a guess. Framed reveals
@@ -5534,6 +5752,19 @@ def _plan_for(gid, answer):
         if cols:
             # Iter-39: same 4-attempt cap as the solver (<=3 probes + answer).
             p = S.plan_colorfle([int(c) for c in cols], max_guesses=4)
+            _hard = _COLORFLE_HARD.get(gid)
+            if _hard:
+                # Iter-49: steps cover BOTH boards, in play order, so
+                # _result_steps can merge the played ledger against the
+                # full two-mode plan (pool chains + patterns per mode).
+                _p1 = S.plan_colorfle([int(c) for c in _hard],
+                                      max_guesses=4)
+                _seq = list(p[0]) + list(_p1[0])
+                _steps2 = [dict(s, mode="normal") for s in p[1]]
+                _steps2 += [dict(s, mode="hard",
+                                 turn=len(_steps2) + i + 1)
+                            for i, s in enumerate(_p1[1])]
+                p = (_seq, _steps2)
         else:
             p = _honest_fallback(a, max_guesses=4, seed=_day_seed(gid))
     elif gid in ("semantle", "contexto"):
@@ -7044,6 +7275,14 @@ def _align_answer_to_live_day(gid, ans, page=None):
         _HEX[gid] = out["hex"]
     if out.get("colors"):
         _COLORS[gid] = out["colors"]
+        if gid == "colorfle":
+            # Iter-49: keep the Hard secret in step with a re-resolved
+            # answer (the live-day align never fires for colorfle —
+            # its page exposes no date signal — but stay consistent).
+            if out.get("colors_hard"):
+                _COLORFLE_HARD[gid] = out["colors_hard"]
+            else:
+                _COLORFLE_HARD.pop(gid, None)
     return out, want
 
 
@@ -24286,6 +24525,13 @@ def _fake_iso_for(gid, tgt):
     if _env:
         return _env
     try:
+        if (GAMES.get(gid) or {}).get("fake_iso_mode") == "next_day_midnight":
+            # Iter-49 (Colorfle): pin the page to the day AFTER the
+            # record date, 00:05 local — the game computes its seed
+            # from the page's LOCAL date (17:00 local flip), so this
+            # serves seed (record + 1), which is the board the answers
+            # site files under the record date (ANALYSIS49).
+            return (tgt + timedelta(days=1)).strftime("%Y-%m-%dT00:05:00")
         if (GAMES.get(gid) or {}).get("fake_iso_mode") == "et_noon":
             from datetime import datetime as _dt, timezone as _tz
             from zoneinfo import ZoneInfo as _ZI
@@ -24338,6 +24584,9 @@ def run_one(gid):
     _TYPE_WINDOWS.pop(gid, None)
     _PLAYED.pop(gid, None)
     _REJECTED.pop(gid, None)
+    _COLORFLE_HARD.pop(gid, None)
+    _COLORFLE_MODE_RESULTS.pop(gid, None)
+    _COLORFLE_MODE_MARKS.pop(gid, None)
     _dbg(gid, f"START env tz={os.environ.get('BROWSER_TZ')} "
               f"tzoff={os.environ.get('TZ_OFFSET_MINUTES')} "
               f"fake={os.environ.get('FAKE_DATE_ISO', '') or 'auto'} "
@@ -24373,7 +24622,11 @@ def run_one(gid):
     if g.get("all_modes"):
         return run_framed_all(gid, g, tgt, date_key, today, short)
     try:
-        ans = getattr(A, key)(tgt)
+        # Iter-49 (Colorfle): the record date is the SITE's label; the
+        # game's seed behind that label is record + 1 (ANALYSIS49), so
+        # the engine answers for the seed date, not the record date.
+        _ans_date = _colorfle_seed_date(tgt) if gid == "colorfle" else tgt
+        ans = getattr(A, key)(_ans_date)
     except SystemExit as e:
         # Iteration 2: marveldle is NOT special here. The old fallback set
         # ans={"answer": None} and "browser solved" the site's board — but
@@ -24414,6 +24667,13 @@ def run_one(gid):
     if gid == "colorfle" and ans.get("colors"):
         _COLORS[gid] = ans["colors"]
         _PLANS.pop(gid, None)
+        # Iter-49: stash the HARD secret for the two-mode steps plan,
+        # and log the label/seed convention in the artifact.
+        if ans.get("colors_hard"):
+            _COLORFLE_HARD[gid] = ans["colors_hard"]
+        _dbg(gid, f"colorfle label/seed convention: record {date_key} "
+                  f"solves seed {_colorfle_seed_date(tgt).isoformat()} "
+                  f"(site label = seed - 1 day; ANALYSIS49)")
     print(f"[{gid}] answer ready (len {len(str(aval))})")
     vdir = HERE / "videos" / gid
     vdir.mkdir(parents=True, exist_ok=True)
@@ -24952,13 +25212,69 @@ def run_one(gid):
             gameplay = VideoFileClip(play_src)
             gd = float(gameplay.duration or 0)
 
-            parts, chapters, cur = [], [], 0.0
-            for p, secs, title in _assembly_segments(
-                    gid, g["name"], nguess, gd, recap_p, hints_p,
-                    reveal_p, facts_p, teaser_p):
-                chapters.append((round(cur, 1), title))
-                parts.append(gameplay if p is None else _still(p, secs))
-                cur += gd if p is None else secs
+            # Iter-49 (Colorfle): two-mode splice, Framed-style — one
+            # continuous recording split at the solver's hard-board
+            # stamp (mapped raw -> polished through the autocrop kept
+            # segments), a mode card before each board, per-mode solve
+            # chapters. Any doubt -> the standard assembly below.
+            _cf_built = None
+            if gid == "colorfle":
+                try:
+                    _res = _COLORFLE_MODE_RESULTS.get(gid) or []
+                    _kept = ((QP.LAST_POLISH or {}).get("autocrop")
+                             or {}).get("segments")
+                    _split = _colorfle_split_seconds(
+                        gd, _COLORFLE_MODE_MARKS.get(gid), _kept)
+                    if _split and len(_res) == 2 and all(
+                            r.get("solved") for r in _res):
+                        _n0 = int(_res[0].get("guesses") or 0)
+                        _n1 = int(_res[1].get("guesses") or 0)
+                        _card0 = vdir / "mode_normal.png"
+                        _card1 = vdir / "mode_hard.png"
+                        DP.generate_mode_card(str(_card0), g["name"],
+                                              "Normal Mode", "Round 1 of 2")
+                        DP.generate_mode_card(str(_card1), g["name"],
+                                              "Hard Mode", "Round 2 of 2")
+                        _p2, _c2, _cur2 = [], [], 0.0
+                        _c2.append((0.0, f"Today's {g['name']} puzzle"))
+                        _p2.append(_still(recap_p, 5))
+                        _cur2 += 5
+                        _c2.append((round(_cur2, 1), "Normal Mode"))
+                        _p2.append(_still(_card0, 2.5))
+                        _cur2 += 2.5
+                        _c2.append((round(_cur2, 1),
+                                    f"Normal mode solve ({_n0} guesses)"))
+                        _p2.append(gameplay.subclip(0, _split))
+                        _cur2 += _split
+                        _c2.append((round(_cur2, 1), "Hard Mode"))
+                        _p2.append(_still(_card1, 2.5))
+                        _cur2 += 2.5
+                        _c2.append((round(_cur2, 1),
+                                    f"Hard mode solve ({_n1} guesses)"))
+                        _p2.append(gameplay.subclip(_split, gd))
+                        _cur2 += gd - _split
+                        _c2.append((round(_cur2, 1), "Tomorrow's puzzle"))
+                        _p2.append(_still(teaser_p, 5))
+                        _cur2 += 5
+                        _cf_built = (_p2, _c2, _cur2)
+                        _dbg(gid, f"colorfle two-mode splice: "
+                                  f"split={_split}s of {gd:.1f}s, "
+                                  f"normal={_n0} guesses, hard={_n1} "
+                                  f"guesses")
+                except Exception as _cfe:
+                    _dbg(gid, f"colorfle two-mode splice failed, single "
+                              f"segment kept: {str(_cfe)[:120]}")
+                    _cf_built = None
+            if _cf_built is not None:
+                parts, chapters, cur = _cf_built
+            else:
+                parts, chapters, cur = [], [], 0.0
+                for p, secs, title in _assembly_segments(
+                        gid, g["name"], nguess, gd, recap_p, hints_p,
+                        reveal_p, facts_p, teaser_p):
+                    chapters.append((round(cur, 1), title))
+                    parts.append(gameplay if p is None else _still(p, secs))
+                    cur += gd if p is None else secs
             total = cur
 
             clip = concatenate_videoclips(parts, method="compose")
@@ -25186,7 +25502,9 @@ def run_one(gid):
          "rejected": _REJECTED.get(gid, []),
          "steps": _result_steps(gid, aval), "chapters": chapters, "qc": _qc,
          "modes": ([dict(r) for r in _WORLDLE_MODES]
-                   if gid == "worldle" else []),
+                   if gid == "worldle" else
+                   ([dict(r) for r in _COLORFLE_MODE_RESULTS.get(gid, [])]
+                    if gid == "colorfle" else [])),
          # Iteration 37: publish state (published=true ONLY on a real
          # YouTube video id; gate-off runs record published=false).
          **{k: pub.get(k) for k in PUBLISH_FIELDS}}, indent=1))
@@ -25196,6 +25514,15 @@ def run_one(gid):
                              "evidence": evidence,
                              "answer": (str(aval) if solved else None),
                              "video": str(final) if final else None,
+                             # Iter-49: Colorfle records carry BOTH
+                             # modes' answers; "answer" above stays the
+                             # Normal-mode string (existing consumers
+                             # unchanged — wordsJi reads only
+                             # published/youtube_video_id).
+                             **({"answers_by_mode":
+                                 _colorfle_answers_by_mode(
+                                     _COLORFLE_MODE_RESULTS.get(gid))}
+                                if gid == "colorfle" and solved else {}),
                              **{k: pub.get(k) for k in PUBLISH_FIELDS}})
     _report_game(gid, date_key, answer=f"{aval} ({ans.get('via', '?')})",
                  guesses=([str(x) for x in _PLAYED[gid]] if _PLAYED.get(gid)

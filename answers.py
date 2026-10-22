@@ -170,13 +170,45 @@ def colordle(d=None):
 
 
 # ---------- colorfle ----------
-def colorfle(d=None, mode=0):
-    d = d or target_date()
+def _colorfle_mode(d, mode):
     out = subprocess.run(["node", str(HERE / "colorfle_answer.js"), d.isoformat(), str(mode)],
                          capture_output=True, text=True, timeout=60)
     if out.returncode != 0:
         raise SystemExit(f"colorfle node failed: {out.stderr[:300]}")
     return json.loads(out.stdout)
+
+
+def _colorfle_combine(normal, hard):
+    """Merge the two per-mode Colorfle answers into ONE answer dict.
+
+    The top level keeps the NORMAL mode's shape exactly (existing
+    consumers read "colors" / "colorHexes" / "puzzleNumber"), and the
+    Hard mode rides along under "colors_hard" + "modes" so the runner
+    can solve BOTH boards (the game has two daily modes — Normal with
+    3 colours, Hard with 4 — and the answers site shows both).
+    Pure function of the two node outputs.
+    """
+    out = dict(normal)
+    out["colors_hard"] = list((hard or {}).get("colors") or [])
+    out["modes"] = {"normal": dict(normal), "hard": dict(hard)}
+    return out
+
+
+def colorfle(d=None, mode=None):
+    """Colorfle answers for the SEED date `d` (the game's own day key).
+
+    mode=None (the default) returns BOTH modes combined (see
+    _colorfle_combine); an explicit mode=0/1 returns just that mode's
+    dict, exactly as before. NOTE the seed date is the game's own:
+    wordsJi labels seed date S as S-1 (their worker rows were verified
+    against this function for 2026-10-20..23 in ANALYSIS49), so the
+    runner asks for seed = record date + 1 — see
+    runner._colorfle_seed_date.
+    """
+    d = d or target_date()
+    if mode is not None:
+        return _colorfle_mode(d, mode)
+    return _colorfle_combine(_colorfle_mode(d, 0), _colorfle_mode(d, 1))
 
 
 # ---------- framed (all modes) ----------
