@@ -14,30 +14,28 @@
  "enrichment": {
   "thumbnail": {
    "status": "deferred",
-   "reason": "quotaExceeded",
-   "cost": 50
+   "reason": "thumbnail file not present in this run",
+   "cost": 0
   },
   "playlist": {
    "status": "deferred",
-   "reason": "quota: quotaExceeded",
+   "reason": "no playlist add succeeded",
    "cost": 0
   },
   "comment": {
-   "status": "deferred",
-   "reason": "quota \u2014 bucket exhausted, deferred",
+   "status": "done",
+   "reason": "",
    "cost": 0
   },
   "captions": {
-   "status": "deferred",
-   "reason": "quota \u2014 bucket exhausted, deferred",
+   "status": "done",
+   "reason": "",
    "cost": 0
   }
  },
  "enrichment_deferred": [
   "thumbnail",
-  "playlist",
-  "comment",
-  "captions"
+  "playlist"
  ],
  "quota_estimate": {
   "upload_calls": 1,
