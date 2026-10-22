@@ -190,6 +190,64 @@ class TestPlanHardMode(unittest.TestCase):
         self.assertEqual(steps[-1]["pool_after"], 1)
 
 
+class TestSolveOrchestration(unittest.TestCase):
+    """solve_colorfle must prime BOTH plans before the first board is
+    played (the 4-colour plan otherwise computes mid-video, after the
+    switch, and airs as a frozen board — run 39792244083), then play
+    Normal, switch, and play Hard. Fakes record the call order."""
+
+    def tearDown(self):
+        import runner as R
+        R._COLORFLE_MODE_RESULTS.pop("colorfle", None)
+        R._COLORFLE_MODE_MARKS.pop("colorfle", None)
+
+    def test_prime_then_both_modes(self):
+        import runner as R
+        calls = []
+        orig_plan = R.S.plan_colorfle
+        orig_play = R._colorfle_play_mode
+        orig_close = R._colorfle_close_stats_modal
+        orig_switch = R._colorfle_switch_to_hard
+
+        def fake_plan(colors, max_guesses=4):
+            calls.append(("plan", list(colors)))
+            return ([list(colors)], [])
+
+        def fake_play(page, colors, mode_idx, shared):
+            calls.append(("play", mode_idx))
+            shared.append(list(colors))
+            return True, f"win{mode_idx}"
+
+        class _Pg:
+            _qp_gid = "colorfle"
+
+        R.S.plan_colorfle = fake_plan
+        R._colorfle_play_mode = fake_play
+        R._colorfle_close_stats_modal = lambda page: True
+        R._colorfle_switch_to_hard = lambda page: True
+        try:
+            ans = {"colors": [19, 2, 6],
+                   "colors_hard": [14, 19, 2, 6],
+                   "modes": {"normal": {"colors": [19, 2, 6]},
+                             "hard": {"colors": [14, 19, 2, 6]}}}
+            won, ev = R.solve_colorfle(_Pg(), ans)
+        finally:
+            R.S.plan_colorfle = orig_plan
+            R._colorfle_play_mode = orig_play
+            R._colorfle_close_stats_modal = orig_close
+            R._colorfle_switch_to_hard = orig_switch
+        self.assertTrue(won, ev)
+        kinds = [c[0] for c in calls]
+        self.assertEqual(kinds, ["plan", "plan", "play", "play"])
+        self.assertEqual(calls[0][1], [19, 2, 6])
+        self.assertEqual(calls[1][1], [14, 19, 2, 6])
+        self.assertEqual([c[1] for c in calls if c[0] == "play"], [0, 1])
+        res = R._COLORFLE_MODE_RESULTS["colorfle"]
+        self.assertEqual([r["mode"] for r in res], ["normal", "hard"])
+        self.assertTrue(all(r["solved"] for r in res))
+        self.assertIn("both modes", ev)
+
+
 class TestStepsTwoModes(unittest.TestCase):
     def tearDown(self):
         import runner as R

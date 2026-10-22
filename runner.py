@@ -3908,6 +3908,20 @@ def solve_colorfle(page, ans):
         hard = ((ans.get("modes") or {}).get("hard") or {}).get("colors")
     colors1 = [int(c) for c in hard] if hard else None
 
+    # Iter-49: prime BOTH planner memos BEFORE the first click. The
+    # 4-colour plan took ~60 s on the runner; computed inside
+    # _colorfle_play_mode AFTER the mode switch it aired as a frozen
+    # board mid-video (run 39792244083: hard-board stamp 14:03:56,
+    # first hard guess 14:04:56), because the autocrop anchor trims
+    # only the LEADING idle. Priming here lands all planning in the
+    # pre-first-action window, which that anchor trims.
+    for _cols in (colors0, colors1):
+        if _cols:
+            try:
+                S.plan_colorfle([int(c) for c in _cols], max_guesses=4)
+            except Exception as _pe:
+                print(f"[colorfle] plan prime failed: {_pe}")
+
     shared = []
     won0, det0 = _colorfle_play_mode(page, colors0, 0, shared)
     _n0 = len(shared)
