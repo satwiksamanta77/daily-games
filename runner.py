@@ -7722,8 +7722,21 @@ def _s_worldle_label_key(s):
 
 def _s_worldle_cmp_key(s):
     """Comparison-option key: lowercase, whitespace-collapsed (the same
-    key form answers.py uses for gdp_lookup / size_lookup). Pure."""
-    return " ".join(str(s or "").lower().split())
+    key form answers.py uses for gdp_lookup / size_lookup). Pure.
+
+    Iter-51 (ANALYSIS51): the GDP comparison renders each option as
+    'Name (YYYY)' — the year is that country's GDP-data year
+    (live-proven in run 40031682553: 'New Caledonia (2019)',
+    'Papua New Guinea (2025)', 'Solomon Islands (2024)',
+    'Vanuatu (2023)'). The suffix is display chrome, not part of
+    the country name, so a trailing parenthesized 4-digit year is
+    stripped here — with it, every shown GDP option missed the
+    plain-name lookups and the comparison never resolved. Non-year
+    parentheses are part of a name (e.g. 'Congo (Brazzaville)')
+    and are kept; the pick still returns the option's ORIGINAL
+    display name, so clicks target the real button text."""
+    key = " ".join(str(s or "").lower().split())
+    return re.sub(r"\s*\(\d{4}\)$", "", key)
 
 
 # Normalized (_s_worldle_label_key form) chrome strings that may appear
@@ -15193,7 +15206,12 @@ def _s_worldle_play_gdp(page, gid, day):
     lookup = day.get("gdp_lookup") or {}
 
     def _nm(s):
-        return " ".join(str(s or "").lower().split())
+        # Iter-51: the shared comparison key — the shown GDP
+        # options carry a ' (YYYY)' data-year suffix that must not
+        # break the lookup membership test (with the old local key
+        # `shown` came back empty and the code fell through to the
+        # day prediction, which the game may not even show).
+        return _s_worldle_cmp_key(s)
 
     opts = _s_worldle_visible_options(page)
     shown = []
@@ -17059,7 +17077,13 @@ def _s_worldle_fetch_country_stat(page, names, stat):
                   .then(r => r.ok ? r.json() : null)
                   .then(rec => [want[k], rec ? rec[args.stat] : null])));
             }).catch(() => [])""",
-            {"names": list(names or []), "stat": str(stat)}) or []
+            # Iter-51: clean the names through the comparison key
+            # first — the JS matcher compares them against the CDN
+            # list's PLAIN names, so a displayed 'Name (YYYY)' (the
+            # GDP comparison's data-year suffix) matched nothing
+            # and the resolver returned {} for every shown option.
+            {"names": [_s_worldle_cmp_key(n) for n in (names or [])],
+             "stat": str(stat)}) or []
     except Exception:
         return {}
     out = {}
