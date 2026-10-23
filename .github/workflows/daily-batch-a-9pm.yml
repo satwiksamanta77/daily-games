@@ -343,7 +343,7 @@ jobs:
     permissions:
       contents: write
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 75
     # Workflow-honesty (fix-loop iter 10): game selection lives at the
     # JOB level. A job whose game is not selected shows SKIPPED,
     # never Success. The old step-level skip + always() upload/commit
@@ -955,7 +955,7 @@ jobs:
     permissions:
       contents: write
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 75
     # Workflow-honesty (fix-loop iter 10): game selection lives at the
     # JOB level. A job whose game is not selected shows SKIPPED,
     # never Success. The old step-level skip + always() upload/commit
