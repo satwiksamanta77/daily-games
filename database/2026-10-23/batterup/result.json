@@ -5,15 +5,90 @@
  "evidence": "all-green row (unnamed) after 3 submitted guesses (submitted=['Eric Wagaman', 'Tim Tawa', 'Maikel Garcia'], attempted-pick-failed=[], attempted-submit-failed=[]; board rows=3 feedback=18) [batterup date-keying: cdn_game_date=2026-10-23 cdn_game_number=978 cdn_answer='Maikel Garcia' site_header=#978 10/23/26 2026-10-23 target=2026-10-23; served board is the target day's board]",
  "answer": "Maikel Garcia",
  "video": "/home/runner/work/daily-games/daily-games/videos/batterup/batterup_final_2026-10-23.mp4",
- "published": false,
- "youtube_video_id": null,
- "youtube_url": null,
- "published_at": null,
- "publish_attempts": 0,
- "last_publish_error": "publish gate off (YOUTUBE_PUBLISH not truthy)",
- "enrichment": {},
- "enrichment_deferred": [],
- "quota_estimate": {},
+ "published": true,
+ "youtube_video_id": "rvN4PhZp5WE",
+ "youtube_url": "https://www.youtube.com/watch?v=rvN4PhZp5WE",
+ "published_at": "2026-10-23T22:50:31Z",
+ "publish_attempts": 1,
+ "last_publish_error": null,
+ "enrichment": {
+  "thumbnail": {
+   "status": "deferred",
+   "reason": "quotaExceeded",
+   "cost": 50
+  },
+  "playlist": {
+   "status": "deferred",
+   "reason": "quota: quotaExceeded",
+   "cost": 0
+  },
+  "comment": {
+   "status": "deferred",
+   "reason": "quota \u2014 bucket exhausted, deferred",
+   "cost": 0
+  },
+  "captions": {
+   "status": "deferred",
+   "reason": "quota \u2014 bucket exhausted, deferred",
+   "cost": 0
+  }
+ },
+ "enrichment_deferred": [
+  "thumbnail",
+  "playlist",
+  "comment",
+  "captions"
+ ],
+ "quota_estimate": {
+  "upload_calls": 1,
+  "general_units_estimated": 0
+ },
  "shorts_video_id": null,
- "enrichment_context": {}
+ "enrichment_context": {
+  "comment_text": "What was your first guess today? \ud83e\udd14\n\ud83d\udfe9 = got it    \ud83d\udfe8 = close    \u2b1b = stumped\n\n\u23f1\ufe0f Chapters:\n0:00 Intro\n0:20 Today's Batterup puzzle\n0:25 Hints before the solve\n0:35 Full solve (3 guesses)\n1:02 Answer & deduction path\n1:10 Solve breakdown\n1:18 Tomorrow's puzzle\nBatterup answer archive: https://wordsolverx.com/batterup-answer-today\n\n\ud83d\udd14 Subscribe for a new Batterup answer every day!",
+  "playlist_titles": [
+   [
+    "Batterup Answers \u2014 October 2026",
+    "Daily Batterup solution videos for October 2026."
+   ],
+   [
+    "Batterup Answers \u2014 2026",
+    "All daily Batterup solution videos from 2026."
+   ]
+  ],
+  "duration_s": 83.95,
+  "date_str": "October 23, 2026",
+  "game": "Batterup",
+  "chapters": [
+   [
+    0,
+    "Intro"
+   ],
+   [
+    20.0,
+    "Today's Batterup puzzle"
+   ],
+   [
+    25.0,
+    "Hints before the solve"
+   ],
+   [
+    35.0,
+    "Full solve (3 guesses)"
+   ],
+   [
+    62.9,
+    "Answer & deduction path"
+   ],
+   [
+    70.9,
+    "Solve breakdown"
+   ],
+   [
+    78.9,
+    "Tomorrow's puzzle"
+   ]
+  ],
+  "thumbnail_path": "/home/runner/work/daily-games/daily-games/videos/batterup/thumb.png"
+ }
 }
