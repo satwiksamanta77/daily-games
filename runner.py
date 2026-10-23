@@ -24532,12 +24532,27 @@ def _fake_iso_for(gid, tgt):
       context timezone is. DST-safe via zoneinfo (EDT UTC-4, EST
       UTC-5).
     - Otherwise: the generic `YYYY-MM-DDT00:05:00` instant.
-    An explicit FAKE_DATE_ISO env value always wins (operator
-    override) — the per-game override applies only to the default.
+    An explicit FAKE_DATE_ISO env value wins (operator override),
+    with ONE exception (iter-50, ANALYSIS50): the batch workflows
+    export FAKE_DATE_ISO="<date>T00:05:00" on DATE-TARGETED
+    dispatches — that is this function's own generic pin, not an
+    operator-chosen instant, so for `et_noon` games the mode
+    computation below still applies to it (see the check inline).
     """
     _env = os.environ.get("FAKE_DATE_ISO", "")
     if _env:
-        return _env
+        # Iter-50: in an explicit-date run the env pin 00:05-naive is
+        # still D-1 in America/New_York, so Batterup's site served
+        # #977 (10/22) against target 2026-10-23 (run 40031686330,
+        # job log: "per-game override iso=2026-10-23T00:05:00
+        # (mode=et_noon)" — the mode branch never ran). When the env
+        # value IS the generic pin for this target, fall through to
+        # the per-game computation: the exact ET-noon instant the
+        # dawn/auto path (env unset) produces. Any other env value
+        # remains a genuine operator override and wins for all games.
+        if not ((GAMES.get(gid) or {}).get("fake_iso_mode") == "et_noon"
+                and _env == tgt.strftime("%Y-%m-%dT00:05:00")):
+            return _env
     try:
         if (GAMES.get(gid) or {}).get("fake_iso_mode") == "next_day_midnight":
             # Iter-49 (Colorfle): pin the page to the day AFTER the

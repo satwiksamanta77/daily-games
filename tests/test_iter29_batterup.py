@@ -12,7 +12,10 @@ Fixes (runner.py):
    "et_noon" -> _fake_iso_for returns target-date 12:00 noon ET
    as an explicit-offset UTC ISO (16:00 UTC in EDT), whose ET
    date IS the target. Other games keep the generic instant;
-   an explicit FAKE_DATE_ISO env value still wins.
+   an explicit FAKE_DATE_ISO env value still wins. (Iter-50:
+   except when the env value IS the generic pin itself — the
+   workflows export exactly that on explicit-date dispatches,
+   which silently bypassed this fix; see test_iter50.)
 2. Batterup pick = click-submit (RE Q5): the site has NO
    'selected' state and NO Enter handler — clicking a suggestion
    <li> IS the submit. _batterup_click_submit types, real-pointer
@@ -140,10 +143,16 @@ class TestFakeIsoFor(unittest.TestCase):
         self.assertEqual(et_date, _dt.date(2026, 10, 18))
 
     def test_env_override_wins_for_batterup(self):
+        # Iter-50 narrowed this contract: an env value EQUAL to the
+        # generic pin "<target>T00:05:00" is the workflows' own date
+        # pin, not an operator override, and no longer wins for
+        # et_noon games (run 40031686330). A GENUINE operator instant
+        # still wins — pinned here with a non-generic value; the
+        # generic-pin case lives in test_iter50.
         with mock.patch.dict(
-                os.environ, {"FAKE_DATE_ISO": "2026-10-18T00:05:00"}):
+                os.environ, {"FAKE_DATE_ISO": "2026-10-18T09:30:00"}):
             got = R._fake_iso_for("batterup", _dt.date(2026, 10, 18))
-        self.assertEqual(got, "2026-10-18T00:05:00")
+        self.assertEqual(got, "2026-10-18T09:30:00")
 
     def test_other_games_keep_generic_instant(self):
         with mock.patch.dict(os.environ, {}, clear=True):
