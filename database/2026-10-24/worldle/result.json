@@ -2,18 +2,125 @@
  "game": "worldle",
  "date": "2026-10-24",
  "solved": true,
- "evidence": "worldle all-modes: Solomon Islands (SB); 13/13 offered modes solved; chapters=[(14.6, 'Country Solve'), (71.2, 'Neighbours Solve'), (141.7, 'Capital Solve'), (165.2, 'Orientation Solve'), (187.7, 'Flag Solve'), (201.3, 'Trivia Solve'), (226.9, 'Landmark Solve'), (244.6, 'Emblem Solve'), (258.1, 'Spoken languages Solve'), (275.2, 'GDP Per Capita Solve'), (295.5, 'Population & Currency Solve'), (326.7, 'Populous cities Solve'), (349.2, 'Area Solve')]",
+ "evidence": "worldle all-modes: Solomon Islands (SB); 13/13 offered modes solved; chapters=[(13.3, 'Country Solve'), (74.7, 'Neighbours Solve'), (140.7, 'Capital Solve'), (166.9, 'Orientation Solve'), (186.7, 'Flag Solve'), (200.5, 'Trivia Solve'), (223.1, 'Landmark Solve'), (241.5, 'Emblem Solve'), (254.3, 'Spoken languages Solve'), (275.1, 'GDP Per Capita Solve'), (295.0, 'Population & Currency Solve'), (323.5, 'Populous cities Solve'), (346.1, 'Area Solve')]",
  "answer": "Solomon Islands",
  "video": "/home/runner/work/daily-games/daily-games/videos/worldle/worldle_final_2026-10-24.mp4",
- "published": false,
- "youtube_video_id": null,
- "youtube_url": null,
- "published_at": null,
- "publish_attempts": 0,
- "last_publish_error": "publish gate off (YOUTUBE_PUBLISH not truthy)",
- "enrichment": {},
- "enrichment_deferred": [],
- "quota_estimate": {},
+ "published": true,
+ "youtube_video_id": "KABeEFyQjUw",
+ "youtube_url": "https://www.youtube.com/watch?v=KABeEFyQjUw",
+ "published_at": "2026-10-24T00:21:04Z",
+ "publish_attempts": 1,
+ "last_publish_error": null,
+ "enrichment": {
+  "thumbnail": {
+   "status": "deferred",
+   "reason": "quotaExceeded",
+   "cost": 50
+  },
+  "playlist": {
+   "status": "deferred",
+   "reason": "quota: quotaExceeded",
+   "cost": 0
+  },
+  "comment": {
+   "status": "deferred",
+   "reason": "quota \u2014 bucket exhausted, deferred",
+   "cost": 0
+  },
+  "captions": {
+   "status": "deferred",
+   "reason": "quota \u2014 bucket exhausted, deferred",
+   "cost": 0
+  }
+ },
+ "enrichment_deferred": [
+  "thumbnail",
+  "playlist",
+  "comment",
+  "captions"
+ ],
+ "quota_estimate": {
+  "upload_calls": 1,
+  "general_units_estimated": 0
+ },
  "shorts_video_id": null,
- "enrichment_context": {}
+ "enrichment_context": {
+  "comment_text": "What was your first guess today? \ud83e\udd14\n\ud83d\udfe9 = got it    \ud83d\udfe8 = close    \u2b1b = stumped\n\n\u23f1\ufe0f Chapters:\n0:00 Intro\n0:35 Country Solve\n1:35 Neighbours Solve\n2:41 Capital Solve\n3:07 Orientation Solve\n3:27 Flag Solve\n3:41 Trivia Solve\n4:04 Landmark Solve\n4:22 Emblem Solve\n4:35 Spoken languages Solve\n4:56 GDP Per Capita Solve\n5:15 Population & Currency Solve\n5:44 Populous cities Solve\n6:07 Area Solve\n6:28 Summary\nWorldle answer archive: https://wordsolverx.com/worldle-answer-today\n\n\ud83d\udd14 Subscribe for a new Worldle answer every day!",
+  "playlist_titles": [
+   [
+    "Worldle Answers \u2014 October 2026",
+    "Daily Worldle solution videos for October 2026."
+   ],
+   [
+    "Worldle Answers \u2014 2026",
+    "All daily Worldle solution videos from 2026."
+   ]
+  ],
+  "duration_s": 409.20000000000005,
+  "date_str": "October 24, 2026",
+  "game": "Worldle",
+  "chapters": [
+   [
+    0,
+    "Intro"
+   ],
+   [
+    35.0,
+    "Country Solve"
+   ],
+   [
+    95.6,
+    "Neighbours Solve"
+   ],
+   [
+    161.6,
+    "Capital Solve"
+   ],
+   [
+    187.8,
+    "Orientation Solve"
+   ],
+   [
+    207.6,
+    "Flag Solve"
+   ],
+   [
+    221.4,
+    "Trivia Solve"
+   ],
+   [
+    244.0,
+    "Landmark Solve"
+   ],
+   [
+    262.4,
+    "Emblem Solve"
+   ],
+   [
+    275.2,
+    "Spoken languages Solve"
+   ],
+   [
+    296.0,
+    "GDP Per Capita Solve"
+   ],
+   [
+    315.9,
+    "Population & Currency Solve"
+   ],
+   [
+    344.4,
+    "Populous cities Solve"
+   ],
+   [
+    367.0,
+    "Area Solve"
+   ],
+   [
+    388.2,
+    "Summary"
+   ]
+  ],
+  "thumbnail_path": "/home/runner/work/daily-games/daily-games/videos/worldle/thumb.png"
+ }
 }
