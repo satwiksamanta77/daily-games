@@ -1,0 +1,107 @@
+{
+ "game": "colorfle",
+ "date": "2026-10-28",
+ "solved": true,
+ "evidence": "site win verified both modes: normal site win verified after 4 guesses (gameOver=2 last_row=[11, 2, 15] expected=[11, 2, 15] modal=block winStat=1 hardWinStat=0); hard site win verified after 4 guesses (gameOver=2 last_row=[5, 2, 16, 15] expected=[5, 2, 16, 15] modal=block winStat=2 hardWinStat=1)",
+ "answer": "[11, 2, 15]",
+ "video": "/home/runner/work/daily-games/daily-games/videos/colorfle/colorfle_final_2026-10-28.mp4",
+ "answers_by_mode": {
+  "normal": [
+   11,
+   2,
+   15
+  ],
+  "hard": [
+   5,
+   2,
+   16,
+   15
+  ]
+ },
+ "published": true,
+ "youtube_video_id": "6Fd9M1MuTiM",
+ "youtube_url": "https://www.youtube.com/watch?v=6Fd9M1MuTiM",
+ "published_at": "2026-10-27T20:29:26Z",
+ "publish_attempts": 1,
+ "last_publish_error": null,
+ "enrichment": {
+  "thumbnail": {
+   "status": "deferred",
+   "reason": "quotaExceeded",
+   "cost": 50
+  },
+  "playlist": {
+   "status": "deferred",
+   "reason": "quota: quotaExceeded",
+   "cost": 0
+  },
+  "comment": {
+   "status": "deferred",
+   "reason": "quota \u2014 bucket exhausted, deferred",
+   "cost": 0
+  },
+  "captions": {
+   "status": "deferred",
+   "reason": "quota \u2014 bucket exhausted, deferred",
+   "cost": 0
+  }
+ },
+ "enrichment_deferred": [
+  "thumbnail",
+  "playlist",
+  "comment",
+  "captions"
+ ],
+ "quota_estimate": {
+  "upload_calls": 1,
+  "general_units_estimated": 0
+ },
+ "shorts_video_id": null,
+ "enrichment_context": {
+  "comment_text": "What was your first guess today? \ud83e\udd14\n\ud83d\udfe9 = got it    \ud83d\udfe8 = close    \u2b1b = stumped\n\n\u23f1\ufe0f Chapters:\n0:00 Intro\n0:20 Today's Colorfle puzzle\n0:25 Normal Mode\n0:27 Normal mode solve (4 guesses)\n2:19 Hard Mode\n2:21 Hard mode solve (4 guesses)\n2:45 Tomorrow's puzzle\nColorfle answer archive: https://wordsolverx.com/colorfle-answer-today\n\n\ud83d\udd14 Subscribe for a new Colorfle answer every day!",
+  "playlist_titles": [
+   [
+    "Colorfle Answers \u2014 October 2026",
+    "Daily Colorfle solution videos for October 2026."
+   ],
+   [
+    "Colorfle Answers \u2014 2026",
+    "All daily Colorfle solution videos from 2026."
+   ]
+  ],
+  "duration_s": 170.57,
+  "date_str": "October 28, 2026",
+  "game": "Colorfle",
+  "chapters": [
+   [
+    0,
+    "Intro"
+   ],
+   [
+    20.0,
+    "Today's Colorfle puzzle"
+   ],
+   [
+    25.0,
+    "Normal Mode"
+   ],
+   [
+    27.5,
+    "Normal mode solve (4 guesses)"
+   ],
+   [
+    139.1,
+    "Hard Mode"
+   ],
+   [
+    141.6,
+    "Hard mode solve (4 guesses)"
+   ],
+   [
+    165.5,
+    "Tomorrow's puzzle"
+   ]
+  ],
+  "thumbnail_path": "/home/runner/work/daily-games/daily-games/videos/colorfle/thumb.png"
+ }
+}
