@@ -1,0 +1,94 @@
+{
+ "game": "semantle",
+ "date": "2026-11-06",
+ "solved": true,
+ "evidence": "win signal 'you guessed the secret word' after 5 typed guesses (scores=[('decrease', '20.96'), ('action', '0.54'), ('coordinator', '5.91'), ('run', '-0.40')]; rejected=[])",
+ "answer": "symptom",
+ "video": "/home/runner/work/daily-games/daily-games/videos/semantle/semantle_final_2026-11-06.mp4",
+ "published": true,
+ "youtube_video_id": "2jiZHk2_e9E",
+ "youtube_url": "https://www.youtube.com/watch?v=2jiZHk2_e9E",
+ "published_at": "2026-11-05T21:38:04Z",
+ "publish_attempts": 1,
+ "last_publish_error": null,
+ "enrichment": {
+  "thumbnail": {
+   "status": "deferred",
+   "reason": "quotaExceeded",
+   "cost": 50
+  },
+  "playlist": {
+   "status": "deferred",
+   "reason": "quota: quotaExceeded",
+   "cost": 0
+  },
+  "comment": {
+   "status": "deferred",
+   "reason": "quota \u2014 bucket exhausted, deferred",
+   "cost": 0
+  },
+  "captions": {
+   "status": "deferred",
+   "reason": "quota \u2014 bucket exhausted, deferred",
+   "cost": 0
+  }
+ },
+ "enrichment_deferred": [
+  "thumbnail",
+  "playlist",
+  "comment",
+  "captions"
+ ],
+ "quota_estimate": {
+  "upload_calls": 1,
+  "general_units_estimated": 0
+ },
+ "shorts_video_id": null,
+ "enrichment_context": {
+  "comment_text": "What was your first guess today? \ud83e\udd14\n\ud83d\udfe9 = got it    \ud83d\udfe8 = close    \u2b1b = stumped\n\n\u23f1\ufe0f Chapters:\n0:00 Intro\n0:20 Today's Semantle puzzle\n0:25 Hints before the solve\n0:35 Full solve (5 guesses)\n1:01 Answer & deduction path\n1:09 Solve breakdown\n1:17 Tomorrow's puzzle\nSemantle answer archive: https://wordsolverx.com/semantle-answer-today\n\n\ud83d\udd14 Subscribe for a new Semantle answer every day!",
+  "playlist_titles": [
+   [
+    "Semantle Answers \u2014 November 2026",
+    "Daily Semantle solution videos for November 2026."
+   ],
+   [
+    "Semantle Answers \u2014 2026",
+    "All daily Semantle solution videos from 2026."
+   ]
+  ],
+  "duration_s": 82.36,
+  "date_str": "November 06, 2026",
+  "game": "Semantle",
+  "chapters": [
+   [
+    0,
+    "Intro"
+   ],
+   [
+    20.0,
+    "Today's Semantle puzzle"
+   ],
+   [
+    25.0,
+    "Hints before the solve"
+   ],
+   [
+    35.0,
+    "Full solve (5 guesses)"
+   ],
+   [
+    61.3,
+    "Answer & deduction path"
+   ],
+   [
+    69.3,
+    "Solve breakdown"
+   ],
+   [
+    77.3,
+    "Tomorrow's puzzle"
+   ]
+  ],
+  "thumbnail_path": "/home/runner/work/daily-games/daily-games/videos/semantle/thumb.png"
+ }
+}
