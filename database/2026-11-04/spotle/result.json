@@ -28,14 +28,12 @@
    "cost": 50
   },
   "captions": {
-   "status": "deferred",
-   "reason": "quota: quotaExceeded",
+   "status": "done",
+   "reason": "",
    "cost": 0
   }
  },
- "enrichment_deferred": [
-  "captions"
- ],
+ "enrichment_deferred": [],
  "quota_estimate": {
   "upload_calls": 1,
   "general_units_estimated": 202
