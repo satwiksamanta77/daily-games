@@ -13,41 +13,9 @@
     {
       "name": "_qp_purged",
       "value": "1",
-      "domain": "www.phoodle.net",
+      "domain": "bronze-age.com",
       "path": "/",
-      "expires": 1794438362.133981,
-      "httpOnly": false,
-      "secure": false,
-      "sameSite": "Lax"
-    },
-    {
-      "name": "__cf_bm",
-      "value": "kXOzoUKXpuU.dS2Mqk8lAlTns038PTn6aquMWv5YorA-1794434762.2653217-1.0.1.1-I0CMqx8w5iXceHfjTr4QWyqvTINRAKnwlTQwDYo.Evi7fu2w0qK195XV0kuFw8NpooW6HnTcfHc70QngIP2XCgShQHEuxCPTawPtOER0y1h5mHn0sRgbKaNbdjTTE_Vx",
-      "domain": ".nitropay.com",
-      "path": "/",
-      "expires": 1794436562.350624,
-      "httpOnly": true,
-      "secure": true,
-      "sameSite": "None",
-      "partitionKey": "https://phoodle.net",
-      "_crHasCrossSiteAncestor": true
-    },
-    {
-      "name": "_ga",
-      "value": "GA1.1.110564021.1794391500",
-      "domain": ".phoodle.net",
-      "path": "/",
-      "expires": 1828994762.438307,
-      "httpOnly": false,
-      "secure": false,
-      "sameSite": "Lax"
-    },
-    {
-      "name": "_lr_env_src_ats",
-      "value": "false",
-      "domain": "www.phoodle.net",
-      "path": "/",
-      "expires": 1796983500,
+      "expires": 1794438373.805624,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
@@ -1277,196 +1245,15 @@
   ],
   "origins": [
     {
-      "origin": "https://www.phoodle.net",
+      "origin": "https://bronze-age.com",
       "localStorage": [
         {
-          "name": "nitro.exp.2.pbfloors",
-          "value": "49"
-        },
-        {
-          "name": "aps:da657530-03e5-4306-95bc-d4eb370426c9:idVendors/enabled",
-          "value": "[\"liveintent\",\"merkle\",\"intimateMerger\",\"pair\",\"amx\",\"33across\",\"fTrack\",\"captify\",\"publink\",\"anonymised\",\"quantcast\",\"idPlus\",\"unifiedid\",\"ddb_key_638\",\"fabrick\",\"uid\",\"criteo\",\"yahoo\",\"liveRamp\",\"id5\",\"pubcommon\",\"audigent\",\"lightPublisherAudiences\",\"lotame\"]"
-        },
-        {
-          "name": "au/sid",
-          "value": "{\"v\":\"AU1S-0100-001794391501-9HBWWE5K-G8IR\",\"e\":1794393301381}"
-        },
-        {
-          "name": "BT_tpc",
-          "value": "{\"value\":1,\"expiresAt\":1794405901054}"
-        },
-        {
-          "name": "BT_AA_DETECTION",
-          "value": "{\"ab\":false,\"aa\":true,\"nlf\":false}"
-        },
-        {
-          "name": "id5id_exp",
-          "value": "Tue, 09 Feb 2027 10:05:01 GMT"
-        },
-        {
-          "name": "33acrossId_last",
-          "value": "Wed, 11 Nov 2026 10:05:01 GMT"
+          "name": "statistics",
+          "value": "{\"currentStreak\":1,\"maxStreak\":1,\"guesses\":{\"1\":0,\"2\":0,\"3\":0,\"4\":1,\"5\":0,\"6\":0,\"fail\":0},\"winPercentage\":100,\"gamesPlayed\":1,\"gamesWon\":1,\"averageGuesses\":4}"
         },
         {
           "name": "gameState",
-          "value": "{\"guesses\":[\"SAUCE\",\"BROTH\",\"SPICE\"],\"apiSolution\":\"SPICE\"}"
-        },
-        {
-          "name": "33acrossIdTp",
-          "value": "barstoolsports.com"
-        },
-        {
-          "name": "id5id",
-          "value": "%7B%22signature%22%3A%22ID5_AvtMJ_JbhfOALbT6I7miWmybQD3-E0D-jT59qvCUjV-P1A-vbuFVDyuRmzFvmlW1B71BOeSkAN03bY5aNKJGm_-70pf6u1wlZgSDHYja2YK_ziHc0BD44Eo7uvIK65HOkFHPKXCat1rccnHsidkZhaNTg_bg9RNJvprmPDSkac8Ye0gmQMc%22%2C%22created_at%22%3A%222026-11-11T22%3A06%3A02.952Z%22%2C%22id5_consent%22%3Atrue%2C%22original_uid%22%3A%22ID5*0hMnsFWb7ZophaeKqUdJIuLK52J4m2Y8RdhOqujlcjz__2r05sxaAAEBCmr05soA-XzGrjVb6WBRgyN7v-H9og%22%2C%22universal_uid%22%3A%22ID5*nKGeSdlZdyklx0hbsyw8CEjvaIvueg0RZuJsaxIIKfX__2r05sxaAAEBCmr05soA-Xz1KP6KFu5m9eLdIWKSJw%22%2C%22link_type%22%3A2%2C%22cascade_needed%22%3Atrue%2C%22privacy%22%3A%7B%22jurisdiction%22%3A%22other%22%2C%22id5_consent%22%3Atrue%7D%2C%22ext%22%3A%7B%22linkType%22%3A2%2C%22pba%22%3A%222kpx2fC%2Bl4rA2Md5x3D9d%2Ff7FjVnqzkZ8AMDrONVoZe%2BcB%2FB4CFqFx98Wz9%2FsDnba1wK2qjaXYGxMLCCQaxS5g%3D%3D%22%7D%2C%22cache_control%22%3A%7B%22max_age_sec%22%3A7200%7D%2C%22ids%22%3A%7B%22id5id%22%3A%7B%22eid%22%3A%7B%22source%22%3A%22id5-sync.com%22%2C%22uids%22%3A%5B%7B%22id%22%3A%22ID5*nKGeSdlZdyklx0hbsyw8CEjvaIvueg0RZuJsaxIIKfX__2r05sxaAAEBCmr05soA-Xz1KP6KFu5m9eLdIWKSJw%22%2C%22atype%22%3A1%2C%22ext%22%3A%7B%22linkType%22%3A2%2C%22pba%22%3A%222kpx2fC%2Bl4rA2Md5x3D9d%2Ff7FjVnqzkZ8AMDrONVoZe%2BcB%2FB4CFqFx98Wz9%2FsDnba1wK2qjaXYGxMLCCQaxS5g%3D%3D%22%7D%7D%5D%7D%7D%7D%2C%22tags%22%3A%7B%22id%22%3A%22y%22%7D%2C%22pbjs%22%3A%7B%22482%22%3A%7B%22signature%22%3A%22ID5_AvtMJ_JbhfOALbT6I7miWmybQD3-E0D-jT59qvCUjV-P1A-vbuFVDyuRmzFvmlW1B71BOeSkAN03bY5aNKJGm_-70pf6u1wlZgSDHYja2YK_ziHc0BD44Eo7uvIK65HOkFHPKXCat1rccnHsidkZhaNTg_bg9RNJvprmPDSkac8Ye0gmQMc%22%2C%22created_at%22%3A%222026-11-11T22%3A06%3A02.952Z%22%2C%22id5_consent%22%3Atrue%2C%22original_uid%22%3A%22ID5*0hMnsFWb7ZophaeKqUdJIuLK52J4m2Y8RdhOqujlcjz__2r05sxaAAEBCmr05soA-XzGrjVb6WBRgyN7v-H9og%22%2C%22universal_uid%22%3A%22ID5*nKGeSdlZdyklx0hbsyw8CEjvaIvueg0RZuJsaxIIKfX__2r05sxaAAEBCmr05soA-Xz1KP6KFu5m9eLdIWKSJw%22%2C%22link_type%22%3A2%2C%22cascade_needed%22%3Atrue%2C%22privacy%22%3A%7B%22jurisdiction%22%3A%22other%22%2C%22id5_consent%22%3Atrue%7D%2C%22ext%22%3A%7B%22linkType%22%3A2%2C%22pba%22%3A%222kpx2fC%2Bl4rA2Md5x3D9d%2Ff7FjVnqzkZ8AMDrONVoZe%2BcB%2FB4CFqFx98Wz9%2FsDnba1wK2qjaXYGxMLCCQaxS5g%3D%3D%22%7D%2C%22cache_control%22%3A%7B%22max_age_sec%22%3A7200%7D%2C%22ids%22%3A%7B%22id5id%22%3A%7B%22eid%22%3A%7B%22source%22%3A%22id5-sync.com%22%2C%22uids%22%3A%5B%7B%22id%22%3A%22ID5*nKGeSdlZdyklx0hbsyw8CEjvaIvueg0RZuJsaxIIKfX__2r05sxaAAEBCmr05soA-Xz1KP6KFu5m9eLdIWKSJw%22%2C%22atype%22%3A1%2C%22ext%22%3A%7B%22linkType%22%3A2%2C%22pba%22%3A%222kpx2fC%2Bl4rA2Md5x3D9d%2Ff7FjVnqzkZ8AMDrONVoZe%2BcB%2FB4CFqFx98Wz9%2FsDnba1wK2qjaXYGxMLCCQaxS5g%3D%3D%22%7D%7D%5D%7D%7D%7D%2C%22tags%22%3A%7B%22id%22%3A%22y%22%7D%7D%7D%7D"
-        },
-        {
-          "name": "loglevel",
-          "value": "SILENT"
-        },
-        {
-          "name": "_cc_id",
-          "value": "7845395f4455ee09148f8d0417a7f6e"
-        },
-        {
-          "name": "_cids",
-          "value": "{\"tid\":\"b841cc96-a7c9-47b3-8245-fa1fbae484c8\",\"texp\":1796983501236}"
-        },
-        {
-          "name": "nitro.arcspan",
-          "value": "1"
-        },
-        {
-          "name": "aps:da657530-03e5-4306-95bc-d4eb370426c9:deviceSignal/sua",
-          "value": "{\"architecture\":\"x86\",\"bitness\":\"64\",\"mobile\":0,\"model\":\"\",\"source\":2,\"platform\":{\"brand\":\"Windows\",\"version\":[\"10\",\"0\"]},\"browsers\":[{\"brand\":\"Chromium\",\"version\":[\"158\",\"0\",\"8127\",\"18\"]},{\"brand\":\"Not.A/Brand\",\"version\":[\"24\",\"0\",\"0\",\"0\"]},{\"brand\":\"HeadlessChrome\",\"version\":[\"158\",\"0\",\"8127\",\"18\"]}]}"
-        },
-        {
-          "name": "btUserCountry",
-          "value": "US"
-        },
-        {
-          "name": "au/1d",
-          "value": "{\"v\":\"AU1D-0100-001794391501-KDQNKMPW-FFY7\",\"e\":0}"
-        },
-        {
-          "name": "panoramaId_expiry",
-          "value": "1794521163271"
-        },
-        {
-          "name": "loglevel:nitro",
-          "value": "INFO"
-        },
-        {
-          "name": "nitro.exp.2.usfloor",
-          "value": "69"
-        },
-        {
-          "name": "id5id_cached_consent_data",
-          "value": "5290625798431421"
-        },
-        {
-          "name": "gameStats",
-          "value": "{\"winDistribution\":[0,0,1,0,0,0],\"gamesFailed\":0,\"currentStreak\":1,\"bestStreak\":1,\"totalGames\":1,\"successRate\":100}"
-        },
-        {
-          "name": "phoodle-daily-content",
-          "value": "{\"date\":\"2026-11-12\",\"content\":{\"_id\":\"2026-11-12\",\"word\":\"spice\",\"description\":\"Kraft’s Cinnamon Roll Mac & Cheese, a limited-edition holiday release, blends its signature cheese sauce with cinnamon spice inspired by the breakfast pastry, raising the question of whether it’s breakfast or dinner.\",\"popUp\":null,\"recipeLink\":\"https://www.walmart.com/ip/7-25Z-M-C-CINNAMON-ROLL-12/21117964723\",\"recipeName\":\"A holiday twist!\",\"recipeSponsor\":null,\"recipeImage\":\"https://phoodle-prod-files20221221190533120400000002.s3.us-west-2.amazonaws.com/uploaded/7e803e49-043d-4fd8-bf1a-8db39fcc4d7b.file\",\"lightLogoOverride\":null,\"darkLogoOverride\":null,\"songUrl\":null,\"songTitle\":null,\"songArtist\":null,\"spotifyUrl\":null,\"appleMusicUrl\":null,\"extraField1\":null,\"extraField2\":null,\"extraField3\":null,\"extraField4\":null,\"extraField5\":null}}"
-        },
-        {
-          "name": "_pubcid_exp",
-          "value": "Thu, 11 Nov 2027 10:05:01 GMT"
-        },
-        {
-          "name": "id5id_v2_4352522230773121",
-          "value": "{\"data\":{\"response\":{\"signature\":\"ID5_AvtMJ_JbhfOALbT6I7miWmybQD3-E0D-jT59qvCUjV-P1A-vbuFVDyuRmzFvmlW1B71BOeSkAN03bY5aNKJGm_-70pf6u1wlZgSDHYja2YK_ziHc0BD44Eo7uvIK65HOkFHPKXCat1rccnHsidkZhaNTg_bg9RNJvprmPDSkac8Ye0gmQMc\",\"created_at\":\"2026-11-11T22:06:02.952Z\",\"id5_consent\":true,\"original_uid\":\"ID5*97aVBXA-Xy8MIBU_jOL7l8dvVdddPtSJYH38H81AwIn__2r05sxaAAEBCmr05soA-XyVqB2H-R8AXKv3Z-mpAw\",\"universal_uid\":\"ID5*xgK1XIP6XDx_ZGNO6Y8XHRJMQ5602SYEPEFHfkirAuD__2r05sxaAAEBCmr05soA-XxY2J-QffbewICTYBSfCg\",\"link_type\":2,\"cascade_needed\":true,\"privacy\":{\"jurisdiction\":\"other\",\"id5_consent\":true},\"ext\":{\"linkType\":2,\"pba\":\"2kpx2fC+l4rA2Md5x3D9d/f7FjVnqzkZ8AMDrONVoZe+cB/B4CFqFx98Wz9/sDnbpjuENeQ0vfrNf93OHUtH7g==\"},\"cache_control\":{\"max_age_sec\":7200},\"ids\":{\"id5id\":{\"eid\":{\"source\":\"id5-sync.com\",\"uids\":[{\"id\":\"ID5*xgK1XIP6XDx_ZGNO6Y8XHRJMQ5602SYEPEFHfkirAuD__2r05sxaAAEBCmr05soA-XxY2J-QffbewICTYBSfCg\",\"atype\":1,\"ext\":{\"linkType\":2,\"pba\":\"2kpx2fC+l4rA2Md5x3D9d/f7FjVnqzkZ8AMDrONVoZe+cB/B4CFqFx98Wz9/sDnbpjuENeQ0vfrNf93OHUtH7g==\"}}]}}},\"tags\":{\"id\":\"y\"}},\"responseTimestamp\":1794391501968,\"consents\":{\"gdpr\":false,\"us_privacy\":\"1---\",\"gpp\":\"\",\"gpp_sid\":\"\"}},\"expireAt\":1795687501969}"
-        },
-        {
-          "name": "id5id_v2_signature",
-          "value": "{\"data\":{\"signature\":\"ID5_AvtMJ_JbhfOALbT6I7miWmybQD3-E0D-jT59qvCUjV-P1A-vbuFVDyuRmzFvmlW1B71BOeSkAN03bY5aNKJGm_-70pf6u1wlZgSDHYja2YK_ziHc0BD44Eo7uvIK65HOkFHPKXCat1rccnHsidkZhaNTg_bg9RNJvprmPDSkac8Ye0gmQMc\"},\"expireAt\":1795687501968}"
-        },
-        {
-          "name": "au/last_seen_pixels",
-          "value": "{\"v\":{\"apn\":1794391501,\"openx\":1794391501,\"pub\":1794391501,\"rub\":1794391501,\"ttd\":1794391501,\"tapad\":1794391501,\"adx\":1794391501,\"amo\":1794391501,\"son\":1794391501,\"impr\":1794391501},\"e\":0}"
-        },
-        {
-          "name": "au/seg",
-          "value": "{\"v\":{\"segments\":[]},\"e\":1794413101381}"
-        },
-        {
-          "name": "au/tid",
-          "value": "{\"v\":\"4eebeb37eea066f583064c5d57f7a828\",\"e\":1794395101381}"
-        },
-        {
-          "name": "id5id_extensions",
-          "value": "{\"data\":{\"lbCDN\":\"%%LB_CDN%%\",\"lb\":\"X8XjdzHasUUF500jks9UOQ==\",\"ttl\":28800,\"bounce\":{\"setCookie\":false},\"lbs\":\"SFVTS6U+Kbuo/oWbL9U6Ub0AbcvKdQHnj40N5zTg1NM=\"},\"expireAt\":1794420301873}"
-        },
-        {
-          "name": "id5id_cst",
-          "value": "9ID6bg=="
-        },
-        {
-          "name": "id5id_privacy",
-          "value": "{\"jurisdiction\":\"other\",\"id5_consent\":true}"
-        },
-        {
-          "name": "id5id_last",
-          "value": "Wed, 11 Nov 2026 10:05:01 GMT"
-        },
-        {
-          "name": "_pubcid",
-          "value": "36b111cc-5490-477d-8e84-96cb7460c8ab"
-        },
-        {
-          "name": "btUserIsFromRestrictedCountry",
-          "value": "false"
-        },
-        {
-          "name": "BT_device",
-          "value": "{\"value\":{\"os\":\"Windows\",\"osv\":\"10.0\",\"ext\":{\"fiftyonedegrees_deviceId\":\"15364-38914-130366-18092\"}},\"expiresAt\":1794405901131}"
-        },
-        {
-          "name": "33acrossId_exp",
-          "value": "Tue, 09 Feb 2027 10:05:01 GMT"
-        },
-        {
-          "name": "33acrossId",
-          "value": "J6Nqr1Pw8+VRBsk+o18ZP4dOEUHclNX/Mby+x7KKv6JixCi1XWE1+pprlIws1lr3U4+5UdCq+HacKsP6vrVzJg==.0010b00002VqwyFAAR.1059.59FSMF/g6X9aVj3IkLCzR0mdAALGycoQX2o6+Vj1WIo="
-        },
-        {
-          "name": "id5id_privacy_exp",
-          "value": "Fri, 11 Dec 2026 10:05:01 GMT"
-        },
-        {
-          "name": "33acrossId_csti",
-          "value": "6158203196586298:4931510993209684:6158203196586298:0"
-        },
-        {
-          "name": "id5id_cached_consent_data_exp",
-          "value": "Fri, 11 Dec 2026 10:05:01 GMT"
-        },
-        {
-          "name": "_cc_id_update_ts",
-          "value": "1794391501151"
-        },
-        {
-          "name": "nitro.exp.2.vrefresh",
-          "value": "66"
-        },
-        {
-          "name": "btUserCountryExpiry",
-          "value": "1794391804289"
-        },
-        {
-          "name": "id5id_v2_1122535588191854",
-          "value": "{\"data\":{\"response\":{\"signature\":\"ID5_AvtMJ_JbhfOALbT6I7miWmybQD3-E0D-jT59qvCUjV-P1A-vbuFVDyuRmzFvmlW1B71BOeSkAN03bY5aNKJGm_-70pf6u1wlZgSDHYja2YK_ziHc0BD44Eo7uvIK65HOkFHPKXCat1rccnHsidkZhaNTg_bg9RNJvprmPDSkac8Ye0gmQMc\",\"created_at\":\"2026-11-11T22:06:02.952Z\",\"id5_consent\":true,\"original_uid\":\"ID5*0hMnsFWb7ZophaeKqUdJIuLK52J4m2Y8RdhOqujlcjz__2r05sxaAAEBCmr05soA-XzGrjVb6WBRgyN7v-H9og\",\"universal_uid\":\"ID5*nKGeSdlZdyklx0hbsyw8CEjvaIvueg0RZuJsaxIIKfX__2r05sxaAAEBCmr05soA-Xz1KP6KFu5m9eLdIWKSJw\",\"link_type\":2,\"cascade_needed\":true,\"privacy\":{\"jurisdiction\":\"other\",\"id5_consent\":true},\"ext\":{\"linkType\":2,\"pba\":\"2kpx2fC+l4rA2Md5x3D9d/f7FjVnqzkZ8AMDrONVoZe+cB/B4CFqFx98Wz9/sDnba1wK2qjaXYGxMLCCQaxS5g==\"},\"cache_control\":{\"max_age_sec\":7200},\"ids\":{\"id5id\":{\"eid\":{\"source\":\"id5-sync.com\",\"uids\":[{\"id\":\"ID5*nKGeSdlZdyklx0hbsyw8CEjvaIvueg0RZuJsaxIIKfX__2r05sxaAAEBCmr05soA-Xz1KP6KFu5m9eLdIWKSJw\",\"atype\":1,\"ext\":{\"linkType\":2,\"pba\":\"2kpx2fC+l4rA2Md5x3D9d/f7FjVnqzkZ8AMDrONVoZe+cB/B4CFqFx98Wz9/sDnba1wK2qjaXYGxMLCCQaxS5g==\"}}]}}},\"tags\":{\"id\":\"y\"}},\"responseTimestamp\":1794391501968,\"consents\":{\"gdpr\":false,\"us_privacy\":\"1---\",\"gpp\":\"\",\"gpp_sid\":\"\"}},\"expireAt\":1795687501969}"
-        }
-      ]
-    },
-    {
-      "origin": "https://www.google.com",
-      "localStorage": [
-        {
-          "name": "rc::h",
-          "value": "1794434763416"
+          "value": "{\"boardState\":[\"retain\",\"branch\",\"normal\",\"narrow\",\"\",\"\"],\"evaluations\":[[\"present\",\"absent\",\"absent\",\"present\",\"absent\",\"present\"],[\"absent\",\"present\",\"present\",\"present\",\"absent\",\"absent\"],[\"correct\",\"present\",\"correct\",\"absent\",\"present\",\"absent\"],[\"correct\",\"correct\",\"correct\",\"correct\",\"correct\",\"correct\"],null,null],\"rowIndex\":4,\"solution\":\"narrow\",\"gameStatus\":\"WIN\",\"lastPlayedTs\":1794391524517,\"lastCompletedTs\":1794391524517,\"restoringFromLocalStorage\":null,\"hardMode\":false}"
         }
       ]
     }
