@@ -1,349 +1,131 @@
 {
   "cookies": [
     {
+      "name": "sync",
+      "value": "CgoIoQEQrtnEtp00CgoIxAIQrtnEtp00CgoI5gEQrtnEtp00CgoIhwIQrtnEtp00CgoIxwIQrtnEtp00CgkIOhCu2cS2nTQKCgi7AhCu2cS2nTQKCQgbEK7ZxLadNAoKCIwCEK7ZxLadNAoKCL8CEK7ZxLadNA==",
+      "domain": ".3lift.com",
+      "path": "/sync",
+      "expires": 1797197395.144525,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "_li_ss",
+      "value": "CggKBgiiARCGHw",
+      "domain": "i.liadm.com",
+      "path": "/s",
+      "expires": 1797197396.062931,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
       "name": "_qp_purged",
       "value": "1",
-      "domain": "www.phoodle.net",
+      "domain": "www.canucklegame.ca",
       "path": "/",
-      "expires": 1794608961.275286,
+      "expires": 1794608982.125476,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
-    },
-    {
-      "name": "__cf_bm",
-      "value": "4E9DDO02c7C.sQ1HBi_4OM3SWwOBl6VRlgvEWH.6_UI-1794605361.4314952-1.0.1.1-3KqB9Cm_dZCuKfpfJc8sJQViS0E1zJbV.E1j.EQK9weMfp9P5uyo5nOHYnF.VMZEdheCpFZuzvq.0L_Dcd9rDQOqlsYmUTNK42lmDgTZ60m19L3E6L9vvhIv1pZZG8qD",
-      "domain": ".nitropay.com",
-      "path": "/",
-      "expires": 1794607161.493989,
-      "httpOnly": true,
-      "secure": true,
-      "sameSite": "None",
-      "partitionKey": "https://phoodle.net",
-      "_crHasCrossSiteAncestor": true
     },
     {
       "name": "_ga",
-      "value": "GA1.1.1742408079.1794564300",
-      "domain": ".phoodle.net",
+      "value": "GA1.1.308669196.1794564304",
+      "domain": ".canucklegame.ca",
       "path": "/",
-      "expires": 1829165361.629926,
+      "expires": 1829165386.175231,
       "httpOnly": false,
-      "secure": false,
-      "sameSite": "Lax"
-    },
-    {
-      "name": "_lr_env_src_ats",
-      "value": "false",
-      "domain": "www.phoodle.net",
-      "path": "/",
-      "expires": 1797156300,
-      "httpOnly": false,
-      "secure": false,
-      "sameSite": "Lax"
-    },
-    {
-      "name": "_lr_geo_location_state",
-      "value": "IL",
-      "domain": "www.phoodle.net",
-      "path": "/",
-      "expires": 1794778162.263518,
-      "httpOnly": false,
-      "secure": false,
-      "sameSite": "Lax"
-    },
-    {
-      "name": "_lr_geo_location",
-      "value": "US",
-      "domain": "www.phoodle.net",
-      "path": "/",
-      "expires": 1794778162.263641,
-      "httpOnly": false,
-      "secure": false,
-      "sameSite": "Lax"
-    },
-    {
-      "name": "_nitroID",
-      "value": "dc572e6829b364f558650fa8f5ca2da0",
-      "domain": ".phoodle.net",
-      "path": "/",
-      "expires": 1826100301,
-      "httpOnly": false,
-      "secure": false,
-      "sameSite": "Lax"
-    },
-    {
-      "name": "ncmp.domain",
-      "value": "phoodle.net",
-      "domain": ".phoodle.net",
-      "path": "/",
-      "expires": 1826100301,
-      "httpOnly": false,
-      "secure": false,
-      "sameSite": "Lax"
-    },
-    {
-      "name": "__cf_bm",
-      "value": "DIKqiweiBhytIj50OUc7YdNsq_TZcremhfLymTlgCJU-1794605362.6332436-1.0.1.1-IH8yLhqsHBXoTT_t0RNvSIBMs3Il8hBkZAwSDWvKmGNC3xhTN4niKuwxsrYBqLkH5EYL6CwoOVyCIWp2zCQ8O9LGokwyPpLhqIoUssa9DrZ9mAl0c.q7fots6vZUYP9u",
-      "domain": ".33across.com",
-      "path": "/",
-      "expires": 1794607162.640857,
-      "httpOnly": true,
       "secure": true,
-      "sameSite": "None",
-      "partitionKey": "https://phoodle.net",
-      "_crHasCrossSiteAncestor": true
-    },
-    {
-      "name": "_pubcid",
-      "value": "441e8975-08a4-4763-b409-872b754a85b1",
-      "domain": ".www.phoodle.net",
-      "path": "/",
-      "expires": 1817892301,
-      "httpOnly": false,
-      "secure": false,
-      "sameSite": "Lax"
+      "sameSite": "None"
     },
     {
       "name": "_cc_dc",
-      "value": "0",
+      "value": "3",
       "domain": ".crwdcntrl.net",
       "path": "/",
-      "expires": 1817932080.783996,
+      "expires": 1817932080.671452,
       "httpOnly": false,
       "secure": true,
       "sameSite": "None"
     },
     {
       "name": "_cc_id",
-      "value": "7841d3ea30438967375ba9ca36500a91",
+      "value": "1fbdd824a5925bdbe31914b32a7b5640",
       "domain": ".crwdcntrl.net",
       "path": "/",
-      "expires": 1817932080.784037,
+      "expires": 1817932080.671524,
       "httpOnly": false,
       "secure": true,
       "sameSite": "None"
     },
     {
-      "name": "_cc_id",
-      "value": "7841d3ea30438967375ba9ca36500a91",
-      "domain": ".www.phoodle.net",
+      "name": "_cc_cc",
+      "value": "\"ACZ4nGNQMExLSkmxMDJJNLU0Mk1KSUo1NrQ0NEkyNko0TzI1MzFgAIKs740BDAgAAGC%2BCwc%3D\"",
+      "domain": ".crwdcntrl.net",
       "path": "/",
-      "expires": 1817892301,
-      "httpOnly": false,
-      "secure": false,
-      "sameSite": "Lax"
-    },
-    {
-      "name": "panoramaId_expiry",
-      "value": "1794691762763",
-      "domain": ".www.phoodle.net",
-      "path": "/",
-      "expires": 1794691763,
-      "httpOnly": false,
-      "secure": false,
-      "sameSite": "Lax"
-    },
-    {
-      "name": "TDID",
-      "value": "5e8ae3cf-7378-4bb7-8c0c-be6f632aa2e5",
-      "domain": ".adsrvr.org",
-      "path": "/",
-      "expires": 1826141363.029223,
+      "expires": 1817933392.671542,
       "httpOnly": false,
       "secure": true,
       "sameSite": "None"
     },
     {
-      "name": "_au_1d",
-      "value": "AU1D-0100-001794564302-8BM9W9TG-W1VL",
-      "domain": ".phoodle.net",
+      "name": "_cc_aud",
+      "value": "\"ABR4nGNgYGDI%2Bt4YwAAHABvlAjM%3D\"",
+      "domain": ".crwdcntrl.net",
       "path": "/",
-      "expires": 1826141362.850423,
-      "httpOnly": false,
-      "secure": true,
-      "sameSite": "None"
-    },
-    {
-      "name": "XANDR_PANID",
-      "value": "cCBw1qU-52PB_RBTX5I-bh1WlcDA1vh7AVVQC_8Cjp4AOi9n0pOZJAWk-IN_fSFD3yeyVj5zWY6ZCR84_Tsu1Y6XKSJNHMiOb4VsTnk8oZE.",
-      "domain": ".adnxs.com",
-      "path": "/",
-      "expires": 1802381363.252322,
-      "httpOnly": false,
-      "secure": true,
-      "sameSite": "None",
-      "partitionKey": "https://phoodle.net",
-      "_crHasCrossSiteAncestor": true
-    },
-    {
-      "name": "uuid2",
-      "value": "712838406308940217",
-      "domain": ".adnxs.com",
-      "path": "/",
-      "expires": 1802381363.252376,
-      "httpOnly": true,
-      "secure": true,
-      "sameSite": "None"
-    },
-    {
-      "name": "IDE",
-      "value": "AHWqTUkOqJCvoammde7tX4MhCtPjo9SPOHtOeTe8G-f-uQGwvQ11GE9UENMJOvx6r5U",
-      "domain": ".doubleclick.net",
-      "path": "/",
-      "expires": 1829165362.9102,
-      "httpOnly": true,
-      "secure": true,
-      "sameSite": "None"
-    },
-    {
-      "name": "__uis",
-      "value": "36101d31-974a-4059-97dc-12f8f9ba777b",
-      "domain": ".go.sonobi.com",
-      "path": "/",
-      "expires": 1826141361.920408,
-      "httpOnly": false,
-      "secure": true,
-      "sameSite": "None"
-    },
-    {
-      "name": "HAPLB8G",
-      "value": "s86181|aveBN",
-      "domain": ".go.sonobi.com",
-      "path": "/",
-      "expires": -1,
-      "httpOnly": false,
-      "secure": true,
-      "sameSite": "None"
-    },
-    {
-      "name": "khaos",
-      "value": "MWFHP4A4-H-1BWU",
-      "domain": ".rubiconproject.com",
-      "path": "/",
-      "expires": 1826141362.934319,
-      "httpOnly": false,
-      "secure": true,
-      "sameSite": "None"
-    },
-    {
-      "name": "khaos_p",
-      "value": "MWFHP4A4-H-1BWU",
-      "domain": ".rubiconproject.com",
-      "path": "/",
-      "expires": 1826141362.934355,
-      "httpOnly": false,
-      "secure": true,
-      "sameSite": "None",
-      "partitionKey": "https://phoodle.net",
-      "_crHasCrossSiteAncestor": true
-    },
-    {
-      "name": "uid",
-      "value": "2511174508020185987",
-      "domain": ".turn.com",
-      "path": "/",
-      "expires": 1810157362.941466,
+      "expires": 1817933392.671561,
       "httpOnly": false,
       "secure": true,
       "sameSite": "None"
     },
     {
       "name": "i",
-      "value": "1295328c-3535-4179-9b60-0fb63f75a2f7|1794605362",
+      "value": "814242bc-dd7b-4945-b632-ac5da1254f22|1794605393",
       "domain": ".openx.net",
       "path": "/",
-      "expires": 1826141363.279206,
+      "expires": 1826141393.309958,
       "httpOnly": false,
       "secure": true,
       "sameSite": "None"
     },
     {
-      "name": "KTPCACOOKIE",
-      "value": "true",
-      "domain": ".pubmatic.com",
+      "name": "pd",
+      "value": "v2|1794605393|kWgyvMvPxh",
+      "domain": ".openx.net",
       "path": "/",
-      "expires": 1802381362.949882,
+      "expires": 1795901393.31003,
       "httpOnly": false,
       "secure": true,
       "sameSite": "None"
     },
     {
-      "name": "TapAd_TS",
-      "value": "1794605362928",
-      "domain": ".tapad.com",
+      "name": "A3",
+      "value": "d=AQABBFGB92oCEIOo0Vt7lO9OqXkq65j2KBwFEgEBAQHS-GoBa9wp0iMA_eMDAA&S=AQAAAk3GB5Xzsa5LfId6MM6ciMs",
+      "domain": ".yahoo.com",
       "path": "/",
-      "expires": 1799789363.075994,
-      "httpOnly": false,
-      "secure": true,
-      "sameSite": "None"
-    },
-    {
-      "name": "TapAd_DID",
-      "value": "106c3bca-4e7b-4d3c-9346-e5e8a9d40cce",
-      "domain": ".tapad.com",
-      "path": "/",
-      "expires": 1799789363.076034,
-      "httpOnly": false,
-      "secure": true,
-      "sameSite": "None"
-    },
-    {
-      "name": "tuuid",
-      "value": "0e5687f3-f4ff-45c3-8816-16455c7f8bf3",
-      "domain": ".360yield.com",
-      "path": "/",
-      "expires": 1802381363.7703,
+      "expires": 1826162995.22135,
       "httpOnly": true,
       "secure": true,
       "sameSite": "None"
     },
     {
-      "name": "tuuid_lu",
-      "value": "1794605363",
-      "domain": ".360yield.com",
+      "name": "connectId",
+      "value": "{\"ttl\":86400000,\"lastUsed\":1794564311215,\"lastSynced\":1794564311215}",
+      "domain": ".canucklegame.ca",
       "path": "/",
-      "expires": 1802381363.770354,
-      "httpOnly": true,
+      "expires": 1826141393.339712,
+      "httpOnly": false,
       "secure": true,
       "sameSite": "None"
     },
     {
-      "name": "TDCPM",
-      "value": "CAESFAoFdGFwYWQSCwigjPv75vXgPxAFGAEgASgCMgsIyoL-qP314D8QBTgBWgV0YXBhZGAC",
+      "name": "TDID",
+      "value": "746eaa30-649e-4404-aea2-23d79a061bb1",
       "domain": ".adsrvr.org",
       "path": "/",
-      "expires": 1826141363.029265,
-      "httpOnly": false,
-      "secure": true,
-      "sameSite": "None"
-    },
-    {
-      "name": "au_id",
-      "value": "AU1D-0100-001794564302-8BM9W9TG-W1VL",
-      "domain": ".ad.gt",
-      "path": "/",
-      "expires": 1826141363.068322,
-      "httpOnly": false,
-      "secure": true,
-      "sameSite": "None"
-    },
-    {
-      "name": "au_3p_check",
-      "value": "1",
-      "domain": ".ad.gt",
-      "path": "/",
-      "expires": -1,
-      "httpOnly": false,
-      "secure": true,
-      "sameSite": "None"
-    },
-    {
-      "name": "TapAd_3WAY_SYNCS",
-      "value": "1!7629",
-      "domain": ".tapad.com",
-      "path": "/",
-      "expires": 1799789363.076075,
+      "expires": 1826141395.191849,
       "httpOnly": false,
       "secure": true,
       "sameSite": "None"
@@ -482,10 +264,10 @@
     },
     {
       "name": "ad-id",
-      "value": "A_pohWDo8Ui_pUELv6SFU3Y",
+      "value": "A0cqP6azKkQpgTO8ZZ2WbPo",
       "domain": ".amazon-adsystem.com",
       "path": "/",
-      "expires": 1814477363.672081,
+      "expires": 1814477393.5249,
       "httpOnly": true,
       "secure": true,
       "sameSite": "None"
@@ -495,67 +277,367 @@
       "value": "aveBMdHM4W0AKDi.ADn6UQAA",
       "domain": ".casalemedia.com",
       "path": "/",
-      "expires": 1829165363.672147,
+      "expires": 1829165393.524975,
       "httpOnly": true,
       "secure": true,
       "sameSite": "None"
     },
     {
-      "name": "id5",
-      "value": "4d29b613-4d70-74af-8770-979e8bc287bc#1794605362228#3",
-      "domain": ".id5-sync.com",
+      "name": "iuid",
+      "value": "9dtxKBfx4B/yYQuTtFZtekktLZFy40I/VzglEvK0wpq33SRe0o8I8E7luF8gtc1axQNmZXA6vx55tops9c/eNNGqMvSM5GSbQQ==",
+      "domain": ".mygaru.com",
       "path": "/",
-      "expires": 1802381363.747269,
+      "expires": 1802640593.866939,
       "httpOnly": false,
       "secure": true,
       "sameSite": "None"
     },
     {
-      "name": "um",
-      "value": "!313,laL32FZtgfUWw6tNpGtYKxQHPGJHQbxzq-0LDee2KNjYEsCK,1794864563",
-      "domain": ".360yield.com",
-      "path": "/",
-      "expires": 1802381363.770405,
-      "httpOnly": true,
-      "secure": true,
-      "sameSite": "None"
-    },
-    {
-      "name": "umeh",
-      "value": "!313,0,1857677363,-1",
-      "domain": ".360yield.com",
-      "path": "/",
-      "expires": 1802381363.770444,
-      "httpOnly": true,
-      "secure": true,
-      "sameSite": "None"
-    },
-    {
-      "name": "3pi",
-      "value": "124#1794605363827#1542528442",
+      "name": "id5",
+      "value": "51979f84-975c-735f-90b4-451b0bb87e37#1794605392942#2",
       "domain": ".id5-sync.com",
       "path": "/",
-      "expires": 1802381363.879947,
+      "expires": 1802381394.235226,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "IDE",
+      "value": "AHWqTUlQ10IPN7s_E7i9HqpAP9RuY_26FM2l_btQn_HAZq_g9h0KJpB30OwoMojiBsc",
+      "domain": ".doubleclick.net",
+      "path": "/",
+      "expires": 1829165394.304794,
       "httpOnly": true,
       "secure": true,
       "sameSite": "None"
     },
     {
-      "name": "sw_marker",
+      "name": "__gads",
+      "value": "ID=cd4060052a74ecd6:T=1794605393:RT=1794605393:S=ALNI_MYZh29AjhWD8AiyfRjYqaJwDMS4mw",
+      "domain": ".canucklegame.ca",
+      "path": "/",
+      "expires": 1828301393,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "__gpi",
+      "value": "UID=000016dec0ac1914:T=1794605393:RT=1794605393:S=ALNI_MY4aq9xtsuqCF_wz9DPq1GvXUfW4g",
+      "domain": ".canucklegame.ca",
+      "path": "/",
+      "expires": 1828301393,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "__eoi",
+      "value": "ID=20b373bf6b9f670a:T=1794605393:RT=1794605393:S=AA-Afjas7kvJGSP7sce_94tOvGeC",
+      "domain": ".canucklegame.ca",
+      "path": "/",
+      "expires": 1810157393,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "tuuid_lu",
+      "value": "1794605394",
+      "domain": ".360yield.com",
+      "path": "/",
+      "expires": 1802381394.904472,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "ADK_EX_11",
       "value": "1",
-      "domain": ".smilewanted.com",
+      "domain": ".adkernel.com",
       "path": "/",
-      "expires": 1826162316.016206,
+      "expires": 1795814994.807394,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "ADKUID",
+      "value": "A9211034733485613737",
+      "domain": ".adkernel.com",
+      "path": "/",
+      "expires": 1797197394.807439,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "tuuid",
+      "value": "c59270b9-5130-4d5d-892a-c89bb504d216",
+      "domain": ".360yield.com",
+      "path": "/",
+      "expires": 1802381394.904418,
       "httpOnly": true,
       "secure": true,
       "sameSite": "None"
     },
     {
-      "name": "_ga_PGCV3ZPNVT",
-      "value": "GS2.1.s1794564300$o1$g1$t1794564305$j55$l0$h0",
-      "domain": ".phoodle.net",
+      "name": "flashtalkingad1",
+      "value": "\"GUID=68916D190C0158\"",
+      "domain": ".flashtalking.com",
       "path": "/",
-      "expires": 1829165366.555562,
+      "expires": 1828769394.91781,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "demdex",
+      "value": "37605392688194559426443767351104677983",
+      "domain": ".demdex.net",
+      "path": "/",
+      "expires": 1810157394.986124,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "t",
+      "value": "v_4867516b-0f12-4dd6-9a36-220f1005e729",
+      "domain": ".uncn.jp",
+      "path": "/",
+      "expires": 1826141394.981275,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "u",
+      "value": "1794605394",
+      "domain": ".uncn.jp",
+      "path": "/",
+      "expires": 1826141394.981357,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "citgroup",
+      "value": "37605392688194559426443767351104677983",
+      "domain": ".citgroup.demdex.net",
+      "path": "/",
+      "expires": 1810157394.986081,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "tluid",
+      "value": "3505990289115899077099",
+      "domain": ".3lift.com",
+      "path": "/",
+      "expires": 1802381395.472989,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "TDCPM",
+      "value": "CAESFgoHc3Z4OXQ1MBILCLKNzq7p9eA_EAUYASABKAIyCwjOgtHb__XgPxAFOAFaB3N2eDl0NTBgAg..",
+      "domain": ".adsrvr.org",
+      "path": "/",
+      "expires": 1826141395.191934,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "IDSYNC",
+      "value": "\"19h2~2zbx:19h0~2zbx\"",
+      "domain": ".analytics.yahoo.com",
+      "path": "/",
+      "expires": 1826141395.221292,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "sa-user-id",
+      "value": "s%3A0-d0fb853c-af36-58b4-41ee-ccd4996f3af2.qKpN2V%2BrMWCN2Z973PKofr3bKRzgGU4FLFplniXCK%2B8",
+      "domain": "sync.srv.stackadapt.com",
+      "path": "/",
+      "expires": 1826141395.417065,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "sa-user-id",
+      "value": "s%3A0-d0fb853c-af36-58b4-41ee-ccd4996f3af2.qKpN2V%2BrMWCN2Z973PKofr3bKRzgGU4FLFplniXCK%2B8",
+      "domain": ".srv.stackadapt.com",
+      "path": "/",
+      "expires": 1826141395.417112,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "sa-user-id-v2",
+      "value": "s%3A0PuFPK82WLRB7szUmW868hSpcrk.nhidAnfjQzBNRN9eRZZ0DR%2FH2t4bUV5bioy8fH%2B9%2BAg",
+      "domain": "sync.srv.stackadapt.com",
+      "path": "/",
+      "expires": 1826141395.417134,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "sa-user-id-v2",
+      "value": "s%3A0PuFPK82WLRB7szUmW868hSpcrk.nhidAnfjQzBNRN9eRZZ0DR%2FH2t4bUV5bioy8fH%2B9%2BAg",
+      "domain": ".srv.stackadapt.com",
+      "path": "/",
+      "expires": 1826141395.417154,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "sa-user-id-v4",
+      "value": "s%3ACiQwMWExZDZkMS0yZGMwLTcyNTAtYWVhYS1iYzczZjA3NjFlOTIQBBoCTkEgWw.jBA%2B33d5wVaL7IKB9SzEgjAtR3RHRHHlgHRDhCUi1O4",
+      "domain": "sync.srv.stackadapt.com",
+      "path": "/",
+      "expires": 1826141395.417172,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "sa-user-id-v4",
+      "value": "s%3ACiQwMWExZDZkMS0yZGMwLTcyNTAtYWVhYS1iYzczZjA3NjFlOTIQBBoCTkEgWw.jBA%2B33d5wVaL7IKB9SzEgjAtR3RHRHHlgHRDhCUi1O4",
+      "domain": ".srv.stackadapt.com",
+      "path": "/",
+      "expires": 1826141395.417193,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "lidid",
+      "value": "f129b66c-0a91-425b-8032-03cca5564ff2",
+      "domain": ".liadm.com",
+      "path": "/",
+      "expires": 1829165396.063038,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "zync-uuid",
+      "value": "28005d12-8aff-4293-a3a8-08a632d0beb1:1794605395.6072555",
+      "domain": ".rezync.com",
+      "path": "/",
+      "expires": 1828301395.965225,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "ruds",
+      "value": "H4sIAAAAAAAA_-MSNjIwtLAwsLA0MbcwMTI0NTGxNBfiM9QtNQgx8ktP8yvLdM0HAPXKVZclAAAA",
+      "domain": ".rfihub.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "euds",
+      "value": "H4sIAAAAAAAA_wXBwRGAMAgEwI_t4ByQA2I3ZGIKsXJ3vyutAG41qT5Hhk2X9i5BdbhtrHfpozlHgD55B9JI_pFkL4g6AAAA",
+      "domain": ".rfihub.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "rud",
+      "value": "H4sIAAAAAAAA_-MSNjIwtLAwsLA0MbcwMTI0NTGxNBfiM9QtNQgx8ktP8yvLdM0HAPXKVZclAAAA",
+      "domain": ".rfihub.com",
+      "path": "/",
+      "expires": 1828301395.837609,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "eud",
+      "value": "H4sIAAAAAAAA_1XIuQ2AMAwAwAmoMoeRn_hjG0chA1FSMiklory7mnMg6iSGqLWgcwqUVABGmfDEcQ46yLMbqqTuhs6qerfty2B__o4Xauf_YVoAAAA",
+      "domain": ".rfihub.com",
+      "path": "/",
+      "expires": 1828301395.837632,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "sd-session-id",
+      "value": ".eJwVylEOgyAMANC79FuWUigULmNw1IRsukX0Z8a7b_t8yTthfOu2lFXXHfK-HTrA_dl-6pBP6O2z6AMyEFoRlOSjeLLsfYpwDdC19_Zax1b_RxC5WjJS5tl4Ss4UV8SglOCo4qSTzTYmH5Bd4lvASMwM1xejxiVp.aveBUw.XGd4WgycXvmd72ySDeYUH-FElHo",
+      "domain": "live.rezync.com",
+      "path": "/",
+      "expires": 1828301395.965275,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "didts",
+      "value": "1794605396",
+      "domain": ".pippio.com",
+      "path": "/",
+      "expires": 1826141396.192613,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "nnls",
+      "value": "",
+      "domain": ".pippio.com",
+      "path": "/",
+      "expires": 1799789396.192632,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "pxrc",
+      "value": "CAA=",
+      "domain": ".pippio.com",
+      "path": "/",
+      "expires": 1799789396.192652,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "did",
+      "value": "s3FvM-P4GLGfS2lO",
+      "domain": ".pippio.com",
+      "path": "/",
+      "expires": 1826141396.192567,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "_ga_RPLYG6MC2K",
+      "value": "GS2.1.s1794564304$o1$g1$t1794564332$j32$l0$h0",
+      "domain": ".canucklegame.ca",
+      "path": "/",
+      "expires": 1829165414.961967,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
@@ -563,27 +645,23 @@
   ],
   "origins": [
     {
-      "origin": "https://www.phoodle.net",
+      "origin": "https://www.canucklegame.ca",
       "localStorage": [
         {
-          "name": "nitro.exp.2.pbfloors",
-          "value": "8"
+          "name": "flutter.playClock",
+          "value": "\"{}\""
         },
         {
-          "name": "aps:da657530-03e5-4306-95bc-d4eb370426c9:idVendors/enabled",
-          "value": "[\"liveintent\",\"merkle\",\"intimateMerger\",\"pair\",\"amx\",\"33across\",\"fTrack\",\"captify\",\"publink\",\"anonymised\",\"quantcast\",\"idPlus\",\"unifiedid\",\"ddb_key_638\",\"fabrick\",\"uid\",\"criteo\",\"yahoo\",\"liveRamp\",\"id5\",\"pubcommon\",\"audigent\",\"lightPublisherAudiences\",\"lotame\"]"
-        },
-        {
-          "name": "au/sid",
-          "value": "{\"v\":\"AU1S-0100-001794564302-WZQSMV61-AFZL\",\"e\":1794566101639}"
+          "name": "_GESPSK-crwdcntrl.net",
+          "value": "[\"crwdcntrl.net\",null,1794564310927,null,null,null,null,null,null,[100]]"
         },
         {
           "name": "BT_tpc",
-          "value": "{\"value\":1,\"expiresAt\":1794578701309}"
+          "value": "{\"value\":1,\"expiresAt\":1794578710435}"
         },
         {
           "name": "id5id_exp",
-          "value": "Thu, 11 Feb 2027 10:05:02 GMT"
+          "value": "Thu, 11 Feb 2027 10:05:12 GMT"
         },
         {
           "name": "BT_AA_DETECTION",
@@ -591,99 +669,103 @@
         },
         {
           "name": "33acrossId_last",
-          "value": "Fri, 13 Nov 2026 10:05:01 GMT"
+          "value": "Fri, 13 Nov 2026 10:05:10 GMT"
         },
         {
-          "name": "gameState",
-          "value": "{\"guesses\":[\"SAUCE\",\"SWEET\",\"SHRED\"],\"apiSolution\":\"SHRED\"}"
+          "name": "33acrossId_cst",
+          "value": "znv0HA=="
+        },
+        {
+          "name": "_GESPSK-esp.criteo.com",
+          "value": "[\"esp.criteo.com\",null,1794564310948,null,null,null,null,null,null,[109]]"
+        },
+        {
+          "name": "33acrossIdTp",
+          "value": "xdN+iEQD6RPXUJMf50t+JF/egMHl+MLax87wJ6Gc/9o="
         },
         {
           "name": "id5id",
-          "value": "%7B%22signature%22%3A%22ID5_ArAB442umxrhdmbMmbuGKxzEVttNVmQgFjBMnFnZaTNHGWFGSp0fAOpvmglKg3bVbqcsfLEuKc8gd8GV6_eUVb99eUhG8_lL0nGnXzCY5JRgFjZiXCKg8d0su0UL_xyLxKVCQxQhRNrmPen1eny5glA89mG5pk5FzsArJ6jivcPvO4KfVLU%22%2C%22created_at%22%3A%222026-11-13T21%3A29%3A22.228Z%22%2C%22id5_consent%22%3Atrue%2C%22original_uid%22%3A%22ID5*RFI0dfwmcmB2hL4ZbZZbzGZskYfvJ4cL-ezw2ZYeFcz__2r3gTNaAAEBCmr3gTIA-lt9PbuDyIlJXB8nbKHZxg%22%2C%22universal_uid%22%3A%22ID5*LpmdfZdnfPFTLxHjRD9Cnm8fSGCeeN1xJ4lGwItmpa___2r3gTNaAAEBCmr3gTIA-lufe_XCXz_70SI63AePpw%22%2C%22link_type%22%3A2%2C%22cascade_needed%22%3Atrue%2C%22privacy%22%3A%7B%22jurisdiction%22%3A%22other%22%2C%22id5_consent%22%3Atrue%7D%2C%22ext%22%3A%7B%22linkType%22%3A2%2C%22pba%22%3A%22kxfW11ii%2B%2BOEQV6NA9k8YM5MVHSiiubRDkprYRjSGs80c0BmzyY6UOfz%2B6J7f%2FEBgaI2MFfRiMkitvyL%2FW%2BFTQ%3D%3D%22%7D%2C%22cache_control%22%3A%7B%22max_age_sec%22%3A7200%7D%2C%22ids%22%3A%7B%22id5id%22%3A%7B%22eid%22%3A%7B%22source%22%3A%22id5-sync.com%22%2C%22uids%22%3A%5B%7B%22id%22%3A%22ID5*LpmdfZdnfPFTLxHjRD9Cnm8fSGCeeN1xJ4lGwItmpa___2r3gTNaAAEBCmr3gTIA-lufe_XCXz_70SI63AePpw%22%2C%22atype%22%3A1%2C%22ext%22%3A%7B%22linkType%22%3A2%2C%22pba%22%3A%22kxfW11ii%2B%2BOEQV6NA9k8YM5MVHSiiubRDkprYRjSGs80c0BmzyY6UOfz%2B6J7f%2FEBgaI2MFfRiMkitvyL%2FW%2BFTQ%3D%3D%22%7D%7D%5D%7D%7D%7D%2C%22tags%22%3A%7B%22id%22%3A%22y%22%7D%2C%22pbjs%22%3A%7B%22482%22%3A%7B%22signature%22%3A%22ID5_ArAB442umxrhdmbMmbuGKxzEVttNVmQgFjBMnFnZaTNHGWFGSp0fAOpvmglKg3bVbqcsfLEuKc8gd8GV6_eUVb99eUhG8_lL0nGnXzCY5JRgFjZiXCKg8d0su0UL_xyLxKVCQxQhRNrmPen1eny5glA89mG5pk5FzsArJ6jivcPvO4KfVLU%22%2C%22created_at%22%3A%222026-11-13T21%3A29%3A22.228Z%22%2C%22id5_consent%22%3Atrue%2C%22original_uid%22%3A%22ID5*RFI0dfwmcmB2hL4ZbZZbzGZskYfvJ4cL-ezw2ZYeFcz__2r3gTNaAAEBCmr3gTIA-lt9PbuDyIlJXB8nbKHZxg%22%2C%22universal_uid%22%3A%22ID5*LpmdfZdnfPFTLxHjRD9Cnm8fSGCeeN1xJ4lGwItmpa___2r3gTNaAAEBCmr3gTIA-lufe_XCXz_70SI63AePpw%22%2C%22link_type%22%3A2%2C%22cascade_needed%22%3Atrue%2C%22privacy%22%3A%7B%22jurisdiction%22%3A%22other%22%2C%22id5_consent%22%3Atrue%7D%2C%22ext%22%3A%7B%22linkType%22%3A2%2C%22pba%22%3A%22kxfW11ii%2B%2BOEQV6NA9k8YM5MVHSiiubRDkprYRjSGs80c0BmzyY6UOfz%2B6J7f%2FEBgaI2MFfRiMkitvyL%2FW%2BFTQ%3D%3D%22%7D%2C%22cache_control%22%3A%7B%22max_age_sec%22%3A7200%7D%2C%22ids%22%3A%7B%22id5id%22%3A%7B%22eid%22%3A%7B%22source%22%3A%22id5-sync.com%22%2C%22uids%22%3A%5B%7B%22id%22%3A%22ID5*LpmdfZdnfPFTLxHjRD9Cnm8fSGCeeN1xJ4lGwItmpa___2r3gTNaAAEBCmr3gTIA-lufe_XCXz_70SI63AePpw%22%2C%22atype%22%3A1%2C%22ext%22%3A%7B%22linkType%22%3A2%2C%22pba%22%3A%22kxfW11ii%2B%2BOEQV6NA9k8YM5MVHSiiubRDkprYRjSGs80c0BmzyY6UOfz%2B6J7f%2FEBgaI2MFfRiMkitvyL%2FW%2BFTQ%3D%3D%22%7D%7D%5D%7D%7D%7D%2C%22tags%22%3A%7B%22id%22%3A%22y%22%7D%7D%7D%7D"
-        },
-        {
-          "name": "loglevel",
-          "value": "SILENT"
+          "value": "%7B%22signature%22%3A%22ID5_At5aAGfKOtRSF4gw8kguohihR9NvJPEU0XsUtUj8kjHGLjYr3LQw-VmRtLYq3WZtRYgn0iXVJvMXYGu56YApsrspY1WA7V-Z_vkshYT9eCgm-8R7_xLXr1K29MLIUgUICIP-qhgE4xbl6uPZkS-s3HpPJKcOz5frDRqkvn3Rpdv_Vup8F60%22%2C%22created_at%22%3A%222026-11-13T21%3A29%3A52.942Z%22%2C%22id5_consent%22%3Atrue%2C%22original_uid%22%3A%22ID5*zdukXEjCiSsp_XbtwDXzMs1BxUfNUC7ph-tgdnJBaWf__2r3gVJaAAEBCmr3gVAA-lut0D9w0H311dA82dP_Ag%22%2C%22universal_uid%22%3A%22ID5*mcnBFzvaDVg5AE4t4_jIJV9m6dXM1EbPNxUIphpaZS3__2r3gVJaAAEBCmr3gVAA-lvA-KsvG8F3QNO79pMOvQ%22%2C%22link_type%22%3A2%2C%22cascade_needed%22%3Atrue%2C%22privacy%22%3A%7B%22jurisdiction%22%3A%22other%22%2C%22id5_consent%22%3Atrue%7D%2C%22ext%22%3A%7B%22linkType%22%3A2%2C%22pba%22%3A%222ulbcDuzANhKy5LrpivPVmst9OJ8hs7MvHyqv%2FfFbEXc%2BIO9n2eBZkRgOcY4i6W0I1h5lAcwazgDGvqHdbbs1g%3D%3D%22%7D%2C%22cache_control%22%3A%7B%22max_age_sec%22%3A7200%7D%2C%22ids%22%3A%7B%22id5id%22%3A%7B%22eid%22%3A%7B%22source%22%3A%22id5-sync.com%22%2C%22uids%22%3A%5B%7B%22id%22%3A%22ID5*mcnBFzvaDVg5AE4t4_jIJV9m6dXM1EbPNxUIphpaZS3__2r3gVJaAAEBCmr3gVAA-lvA-KsvG8F3QNO79pMOvQ%22%2C%22atype%22%3A1%2C%22ext%22%3A%7B%22linkType%22%3A2%2C%22pba%22%3A%222ulbcDuzANhKy5LrpivPVmst9OJ8hs7MvHyqv%2FfFbEXc%2BIO9n2eBZkRgOcY4i6W0I1h5lAcwazgDGvqHdbbs1g%3D%3D%22%7D%7D%5D%7D%7D%7D%2C%22tags%22%3A%7B%22id%22%3A%22y%22%7D%2C%22pbjs%22%3A%7B%221661%22%3A%7B%22signature%22%3A%22ID5_At5aAGfKOtRSF4gw8kguohihR9NvJPEU0XsUtUj8kjHGLjYr3LQw-VmRtLYq3WZtRYgn0iXVJvMXYGu56YApsrspY1WA7V-Z_vkshYT9eCgm-8R7_xLXr1K29MLIUgUICIP-qhgE4xbl6uPZkS-s3HpPJKcOz5frDRqkvn3Rpdv_Vup8F60%22%2C%22created_at%22%3A%222026-11-13T21%3A29%3A52.942Z%22%2C%22id5_consent%22%3Atrue%2C%22original_uid%22%3A%22ID5*zdukXEjCiSsp_XbtwDXzMs1BxUfNUC7ph-tgdnJBaWf__2r3gVJaAAEBCmr3gVAA-lut0D9w0H311dA82dP_Ag%22%2C%22universal_uid%22%3A%22ID5*mcnBFzvaDVg5AE4t4_jIJV9m6dXM1EbPNxUIphpaZS3__2r3gVJaAAEBCmr3gVAA-lvA-KsvG8F3QNO79pMOvQ%22%2C%22link_type%22%3A2%2C%22cascade_needed%22%3Atrue%2C%22privacy%22%3A%7B%22jurisdiction%22%3A%22other%22%2C%22id5_consent%22%3Atrue%7D%2C%22ext%22%3A%7B%22linkType%22%3A2%2C%22pba%22%3A%222ulbcDuzANhKy5LrpivPVmst9OJ8hs7MvHyqv%2FfFbEXc%2BIO9n2eBZkRgOcY4i6W0I1h5lAcwazgDGvqHdbbs1g%3D%3D%22%7D%2C%22cache_control%22%3A%7B%22max_age_sec%22%3A7200%7D%2C%22ids%22%3A%7B%22id5id%22%3A%7B%22eid%22%3A%7B%22source%22%3A%22id5-sync.com%22%2C%22uids%22%3A%5B%7B%22id%22%3A%22ID5*mcnBFzvaDVg5AE4t4_jIJV9m6dXM1EbPNxUIphpaZS3__2r3gVJaAAEBCmr3gVAA-lvA-KsvG8F3QNO79pMOvQ%22%2C%22atype%22%3A1%2C%22ext%22%3A%7B%22linkType%22%3A2%2C%22pba%22%3A%222ulbcDuzANhKy5LrpivPVmst9OJ8hs7MvHyqv%2FfFbEXc%2BIO9n2eBZkRgOcY4i6W0I1h5lAcwazgDGvqHdbbs1g%3D%3D%22%7D%7D%5D%7D%7D%7D%2C%22tags%22%3A%7B%22id%22%3A%22y%22%7D%7D%7D%7D"
         },
         {
           "name": "_cc_id",
-          "value": "7841d3ea30438967375ba9ca36500a91"
+          "value": "1fbdd824a5925bdbe31914b32a7b5640"
         },
         {
-          "name": "_cids",
-          "value": "{\"tid\":\"5e8ae3cf-7378-4bb7-8c0c-be6f632aa2e5\",\"texp\":1797156301568}"
+          "name": "connectId",
+          "value": "{\"ttl\":86400000,\"lastUsed\":1794564311215,\"lastSynced\":1794564311215}"
         },
         {
-          "name": "nitro.arcspan",
-          "value": "1"
+          "name": "myg_otp",
+          "value": "{\"id\":\"9dtxKBfx4B/yYQuTtFZtekktLZFy40I/VzglEvK0wpq33SRe0o8I8E7luF8gtc1axQNmZXA6vx55tops9c/eNNGqMvSM5GSbQQ==\",\"carrier\":\"00000000-0000-0000-0000-000000000000\",\"ts\":1794564311744}"
         },
         {
-          "name": "aps:da657530-03e5-4306-95bc-d4eb370426c9:deviceSignal/sua",
-          "value": "{\"architecture\":\"x86\",\"bitness\":\"64\",\"mobile\":0,\"model\":\"\",\"source\":2,\"platform\":{\"brand\":\"Windows\",\"version\":[\"10\",\"0\"]},\"browsers\":[{\"brand\":\"Chromium\",\"version\":[\"158\",\"0\",\"8127\",\"18\"]},{\"brand\":\"Not.A/Brand\",\"version\":[\"24\",\"0\",\"0\",\"0\"]},{\"brand\":\"HeadlessChrome\",\"version\":[\"158\",\"0\",\"8127\",\"18\"]}]}"
+          "name": "YMPB_OPTIONS._CASE_SESSION",
+          "value": "{\"value\":{\"name\":3,\"random\":8,\"uuid\":\"839230d8-c436-4479-9143-c956d485926f\",\"cv0\":0,\"track_at\":0,\"sref\":\"\",\"sland\":\"https://www.canucklegame.ca/\",\"cmpShowAt\":0},\"created_at\":1794564303641,\"updated_at\":1794564303641,\"expires\":1794566103641,\"ttl\":1800}"
+        },
+        {
+          "name": "arena.playedToday",
+          "value": "{\"ed\":20771,\"ids\":[\"canuckle\"]}"
+        },
+        {
+          "name": "_GESPSK-yahoo.com",
+          "value": "[\"yahoo.com\",null,1794564311063,null,null,null,null,null,null,[111]]"
         },
         {
           "name": "btUserCountry",
           "value": "US"
         },
         {
-          "name": "au/1d",
-          "value": "{\"v\":\"AU1D-0100-001794564302-8BM9W9TG-W1VL\",\"e\":0}"
+          "name": "_GESPSK-mygaruID",
+          "value": "[\"mygaruID\",\"9dtxKBfx4B/yYQuTtFZtekktLZFy40I/VzglEvK0wpq33SRe0o8I8E7luF8gtc1axQNmZXA6vx55tops9c/eNNGqMvSM5GSbQQ==\",1794564311744,null,null,null,null,null,0]"
+        },
+        {
+          "name": "flutter.normalStats",
+          "value": "\"{\\\"oneGuessWins\\\":0,\\\"twoGuessWins\\\":0,\\\"threeGuessWins\\\":0,\\\"fourGuessWins\\\":1,\\\"fiveGuessWins\\\":0,\\\"sixGuessWins\\\":0,\\\"losses\\\":0}\""
+        },
+        {
+          "name": "flutter.hasShownEmailMessage",
+          "value": "true"
         },
         {
           "name": "panoramaId_expiry",
-          "value": "1794691762763"
+          "value": "1794691792643"
         },
         {
-          "name": "loglevel:nitro",
-          "value": "INFO"
+          "name": "_GESPSK-esp.pubmatic.com",
+          "value": "[\"esp.pubmatic.com\",null,1794564310927,null,null,null,null,null,null,[100]]"
         },
         {
-          "name": "nitro.exp.2.usfloor",
-          "value": "87"
-        },
-        {
-          "name": "id5id_cached_consent_data",
-          "value": "5290625798431421"
-        },
-        {
-          "name": "gameStats",
-          "value": "{\"winDistribution\":[0,0,1,0,0,0],\"gamesFailed\":0,\"currentStreak\":1,\"bestStreak\":1,\"totalGames\":1,\"successRate\":100}"
-        },
-        {
-          "name": "phoodle-daily-content",
-          "value": "{\"date\":\"2026-11-14\",\"content\":{\"_id\":\"2026-11-14\",\"word\":\"shred\",\"description\":\" Sugarcone cabbage, a new variety with a pointed head and sweet, tender leaves, is easy to shred into salads and slaws, but it can also be salted, oiled, wrapped and slow-roasted whole, then pressed flat and sliced into wedges like a savory pie.\",\"popUp\":null,\"recipeLink\":\"https://www.row7seeds.com/blogs/cook/sugarcone-cabbage-wedge-with-dill-yogurt\",\"recipeName\":\"Make it for Thanksgiving!\",\"recipeSponsor\":null,\"recipeImage\":\"https://phoodle-prod-files20221221190533120400000002.s3.us-west-2.amazonaws.com/uploaded/dc7df1be-1333-46b0-8ab9-e42d61cdfba4.file\",\"lightLogoOverride\":null,\"darkLogoOverride\":null,\"songUrl\":null,\"songTitle\":null,\"songArtist\":null,\"spotifyUrl\":null,\"appleMusicUrl\":null,\"extraField1\":null,\"extraField2\":null,\"extraField3\":null,\"extraField4\":null,\"extraField5\":null}}"
-        },
-        {
-          "name": "_pubcid_exp",
-          "value": "Sat, 13 Nov 2027 10:05:01 GMT"
-        },
-        {
-          "name": "id5id_v2_4352522230773121",
-          "value": "{\"data\":{\"response\":{\"signature\":\"ID5_ArAB442umxrhdmbMmbuGKxzEVttNVmQgFjBMnFnZaTNHGWFGSp0fAOpvmglKg3bVbqcsfLEuKc8gd8GV6_eUVb99eUhG8_lL0nGnXzCY5JRgFjZiXCKg8d0su0UL_xyLxKVCQxQhRNrmPen1eny5glA89mG5pk5FzsArJ6jivcPvO4KfVLU\",\"created_at\":\"2026-11-13T21:29:22.228Z\",\"id5_consent\":true,\"original_uid\":\"ID5*tU-ySQ079FyHmTglnIvd8JdxF7seOgE3CPF25WcDk_D__2r3gTNaAAEBCmr3gTIA-lu83C49saxoDKBlmhep-A\",\"universal_uid\":\"ID5*VZ3sVexjDdkoK2DLPzszthQbOUjlfKxZXI036PBi1If__2r3gTNaAAEBCmr3gTIA-luLKgOiKCSUntLIAEYfzw\",\"link_type\":2,\"cascade_needed\":true,\"privacy\":{\"jurisdiction\":\"other\",\"id5_consent\":true},\"ext\":{\"linkType\":2,\"pba\":\"kxfW11ii++OEQV6NA9k8YM5MVHSiiubRDkprYRjSGs80c0BmzyY6UOfz+6J7f/EBumJUbGyP/2n6c02OM6hdFg==\"},\"cache_control\":{\"max_age_sec\":7200},\"ids\":{\"id5id\":{\"eid\":{\"source\":\"id5-sync.com\",\"uids\":[{\"id\":\"ID5*VZ3sVexjDdkoK2DLPzszthQbOUjlfKxZXI036PBi1If__2r3gTNaAAEBCmr3gTIA-luLKgOiKCSUntLIAEYfzw\",\"atype\":1,\"ext\":{\"linkType\":2,\"pba\":\"kxfW11ii++OEQV6NA9k8YM5MVHSiiubRDkprYRjSGs80c0BmzyY6UOfz+6J7f/EBumJUbGyP/2n6c02OM6hdFg==\"}}]}}},\"tags\":{\"id\":\"y\"}},\"responseTimestamp\":1794564302361,\"consents\":{\"gdpr\":false,\"us_privacy\":\"1---\",\"gpp\":\"\",\"gpp_sid\":\"\"}},\"expireAt\":1795860302362}"
+          "name": "flutter.arenaGameSwitches",
+          "value": "{}"
         },
         {
           "name": "id5id_v2_signature",
-          "value": "{\"data\":{\"signature\":\"ID5_ArAB442umxrhdmbMmbuGKxzEVttNVmQgFjBMnFnZaTNHGWFGSp0fAOpvmglKg3bVbqcsfLEuKc8gd8GV6_eUVb99eUhG8_lL0nGnXzCY5JRgFjZiXCKg8d0su0UL_xyLxKVCQxQhRNrmPen1eny5glA89mG5pk5FzsArJ6jivcPvO4KfVLU\"},\"expireAt\":1795860302362}"
+          "value": "{\"data\":{\"signature\":\"ID5_At5aAGfKOtRSF4gw8kguohihR9NvJPEU0XsUtUj8kjHGLjYr3LQw-VmRtLYq3WZtRYgn0iXVJvMXYGu56YApsrspY1WA7V-Z_vkshYT9eCgm-8R7_xLXr1K29MLIUgUICIP-qhgE4xbl6uPZkS-s3HpPJKcOz5frDRqkvn3Rpdv_Vup8F60\"},\"expireAt\":1795860312113}"
         },
         {
-          "name": "au/last_seen_pixels",
-          "value": "{\"v\":{\"apn\":1794564302,\"openx\":1794564302,\"pub\":1794564302,\"rub\":1794564302,\"ttd\":1794564302,\"tapad\":1794564302,\"adx\":1794564302,\"amo\":1794564302,\"son\":1794564302,\"impr\":1794564302},\"e\":0}"
+          "name": "_GESPSK-id5-sync.com",
+          "value": "[\"id5-sync.com\",null,1794564311433,null,null,null,null,null,0,[106]]"
         },
         {
-          "name": "au/seg",
-          "value": "{\"v\":{\"segments\":[]},\"e\":1794585901639}"
+          "name": "YOLLA_CACHE_VERSION.VERSION",
+          "value": "1"
         },
         {
-          "name": "au/tid",
-          "value": "{\"v\":\"4eebeb37eea066f583064c5d57f7a828\",\"e\":1794567901639}"
+          "name": "YMPB_OPTIONS._PURGE",
+          "value": "1794564310277"
         },
         {
-          "name": "id5id_extensions",
-          "value": "{\"data\":{\"lbCDN\":\"%%LB_CDN%%\",\"lb\":\"Z/RmK7rh1wge3aKL6px4yw==\",\"ttl\":28800,\"bounce\":{\"setCookie\":false},\"lbs\":\"S0k++BCEblftNvM0CygyXzhJSHk076YsrlKZimAUFgQ=\",\"usedApiBase\":\"\"},\"expireAt\":1794593102251}"
+          "name": "flutter.oldFirestoreUsernames",
+          "value": "[\"OC110M0M\"]"
+        },
+        {
+          "name": "YMPB_OPTIONS._GEO",
+          "value": "{\"value\":{\"source\":\"api\",\"regionalGroup\":\"\",\"timezone\":\"Pacific/Kiritimati\",\"timezoneOffset\":-840,\"gdpr_consent\":false,\"__time\":5986,\"is_gdpr\":false,\"is_better_ads\":true,\"is_asia\":false,\"countryCode\":\"US\",\"ip\":\"MjAuMTY5LjExNC4xODU6NTk0NjU%3D\",\"__retry\":0,\"__status\":200,\"__preload_retry\":0},\"created_at\":1794564309628,\"updated_at\":1794564310398,\"expires\":1794650709628,\"ttl\":86400}"
         },
         {
           "name": "id5id_cst",
-          "value": "9ID6bg=="
+          "value": "znv0HA=="
         },
         {
           "name": "id5id_privacy",
@@ -691,11 +773,15 @@
         },
         {
           "name": "id5id_last",
-          "value": "Fri, 13 Nov 2026 10:05:02 GMT"
+          "value": "Fri, 13 Nov 2026 10:05:12 GMT"
         },
         {
-          "name": "_pubcid",
-          "value": "441e8975-08a4-4763-b409-872b754a85b1"
+          "name": "flutter.hasPlayedBefore",
+          "value": "true"
+        },
+        {
+          "name": "arena.nextUpSkips",
+          "value": "{\"canolitaire\":{\"days\":1,\"ed\":20771}}"
         },
         {
           "name": "btUserIsFromRestrictedCountry",
@@ -703,43 +789,47 @@
         },
         {
           "name": "BT_device",
-          "value": "{\"value\":{\"os\":\"Windows\",\"osv\":\"10.0\",\"ext\":{\"fiftyonedegrees_deviceId\":\"15364-38914-130366-18092\"}},\"expiresAt\":1794578701386}"
+          "value": "{\"value\":{\"os\":\"Windows\",\"osv\":\"10.0\",\"ext\":{\"fiftyonedegrees_deviceId\":\"15364-38914-130366-18092\"}},\"expiresAt\":1794578710507}"
         },
         {
           "name": "33acrossId_exp",
-          "value": "Thu, 11 Feb 2027 10:05:01 GMT"
+          "value": "Sun, 13 Dec 2026 10:05:10 GMT"
         },
         {
           "name": "33acrossId",
-          "value": "null.0010b00002VqwyFAAR.1059.YBDkB4NIKvBCQ/ojN8IPrNHWPBro+ixLE5lg1nyoKCs="
+          "value": "v1.0010b00002Ed7U2AAJ.1059.ZSeSRKhpYGfu45nzpHAxj5NEwe%2F%2FdPBK35%2B83JvqvETmGsxegGd73a2n%2Bz71d7nrOw8kWNTKHy%2BPwZQsZpA%2F5xkuRwUGlBHii4lSM7Qt%2Ffn8SwYJqsHhpcaa8FhIgl1WZVadvyIuvM6FoYNrs5oI9AiNTM5ODIvad1KiZTEzMV9GxNqOwv%2Fl9b4ddcKE8wt0lmNF6wRewNHkyJXn0VZKh%2FgHtSPratEFLXZ57KPDID9fyIJx0h65mdEbwsnl25X%2Bk%2Fg%2B7obSWMHF8Oo3s1%2BvCGU%2BVt%2BrZmc0J2nKmXC4NTR1CxZz0OhO54JKeAY6LpjQJuX8RtsGjAidQCc%2FQ5L2VIJVrahVqe0heOcNp%2FXVGnUytqDVADlAsvODtHlATVDFAnTT3iQpgFUEqO18vAPv0QmeYqZzHfCJm4BDhJWnd0oEluji6Zrc4gEMIIHShfJNGFadH%2F3t4%2F4mLXpRcZ4D5NgHuU5cTV3yoW4rV4NL51KWh345E6JiiU6IYI0sjO1LY%2FxQsujYc0XDLEURtGtswhZi4tk%2B3KoiN3QJ36q%2BBrW0%2B4DO6hR81oINjkOq1wB25ZdVR0d5DCmAAbkJ1HV8aQ%3D%3D"
+        },
+        {
+          "name": "_GESPSK-openx",
+          "value": "[\"openx\",\"eyJpIjoiZ1VKQ3ZOMTdTVVcyTXF4ZG9TVlBJZz09In0=\",1794564311098]"
         },
         {
           "name": "id5id_privacy_exp",
-          "value": "Sun, 13 Dec 2026 10:05:02 GMT"
-        },
-        {
-          "name": "33acrossId_csti",
-          "value": "6158203196586298:4931510993209684:6158203196586298:0"
-        },
-        {
-          "name": "id5id_cached_consent_data_exp",
-          "value": "Sun, 13 Dec 2026 10:05:01 GMT"
-        },
-        {
-          "name": "_cc_id_update_ts",
-          "value": "1794564301511"
-        },
-        {
-          "name": "nitro.exp.2.vrefresh",
-          "value": "46"
+          "value": "Sun, 13 Dec 2026 10:05:12 GMT"
         },
         {
           "name": "btUserCountryExpiry",
-          "value": "1794564604576"
+          "value": "1794564614381"
         },
         {
-          "name": "id5id_v2_1122535588191854",
-          "value": "{\"data\":{\"response\":{\"signature\":\"ID5_ArAB442umxrhdmbMmbuGKxzEVttNVmQgFjBMnFnZaTNHGWFGSp0fAOpvmglKg3bVbqcsfLEuKc8gd8GV6_eUVb99eUhG8_lL0nGnXzCY5JRgFjZiXCKg8d0su0UL_xyLxKVCQxQhRNrmPen1eny5glA89mG5pk5FzsArJ6jivcPvO4KfVLU\",\"created_at\":\"2026-11-13T21:29:22.228Z\",\"id5_consent\":true,\"original_uid\":\"ID5*RFI0dfwmcmB2hL4ZbZZbzGZskYfvJ4cL-ezw2ZYeFcz__2r3gTNaAAEBCmr3gTIA-lt9PbuDyIlJXB8nbKHZxg\",\"universal_uid\":\"ID5*LpmdfZdnfPFTLxHjRD9Cnm8fSGCeeN1xJ4lGwItmpa___2r3gTNaAAEBCmr3gTIA-lufe_XCXz_70SI63AePpw\",\"link_type\":2,\"cascade_needed\":true,\"privacy\":{\"jurisdiction\":\"other\",\"id5_consent\":true},\"ext\":{\"linkType\":2,\"pba\":\"kxfW11ii++OEQV6NA9k8YM5MVHSiiubRDkprYRjSGs80c0BmzyY6UOfz+6J7f/EBgaI2MFfRiMkitvyL/W+FTQ==\"},\"cache_control\":{\"max_age_sec\":7200},\"ids\":{\"id5id\":{\"eid\":{\"source\":\"id5-sync.com\",\"uids\":[{\"id\":\"ID5*LpmdfZdnfPFTLxHjRD9Cnm8fSGCeeN1xJ4lGwItmpa___2r3gTNaAAEBCmr3gTIA-lufe_XCXz_70SI63AePpw\",\"atype\":1,\"ext\":{\"linkType\":2,\"pba\":\"kxfW11ii++OEQV6NA9k8YM5MVHSiiubRDkprYRjSGs80c0BmzyY6UOfz+6J7f/EBgaI2MFfRiMkitvyL/W+FTQ==\"}}]}}},\"tags\":{\"id\":\"y\"}},\"responseTimestamp\":1794564302361,\"consents\":{\"gdpr\":false,\"us_privacy\":\"1---\",\"gpp\":\"\",\"gpp_sid\":\"\"}},\"expireAt\":1795860302362}"
+          "name": "flutter.syncDeviceId",
+          "value": "\"wXFnLhzv2ru9\""
+        },
+        {
+          "name": "_GESPSK-rtbhouse",
+          "value": "[\"rtbhouse\",null,1794564311218,null,null,null,null,null,null,[106]]"
+        },
+        {
+          "name": "id5id_v2_5211727033333453",
+          "value": "{\"data\":{\"response\":{\"signature\":\"ID5_At5aAGfKOtRSF4gw8kguohihR9NvJPEU0XsUtUj8kjHGLjYr3LQw-VmRtLYq3WZtRYgn0iXVJvMXYGu56YApsrspY1WA7V-Z_vkshYT9eCgm-8R7_xLXr1K29MLIUgUICIP-qhgE4xbl6uPZkS-s3HpPJKcOz5frDRqkvn3Rpdv_Vup8F60\",\"created_at\":\"2026-11-13T21:29:52.942Z\",\"id5_consent\":true,\"original_uid\":\"ID5*zdukXEjCiSsp_XbtwDXzMs1BxUfNUC7ph-tgdnJBaWf__2r3gVJaAAEBCmr3gVAA-lut0D9w0H311dA82dP_Ag\",\"universal_uid\":\"ID5*mcnBFzvaDVg5AE4t4_jIJV9m6dXM1EbPNxUIphpaZS3__2r3gVJaAAEBCmr3gVAA-lvA-KsvG8F3QNO79pMOvQ\",\"link_type\":2,\"cascade_needed\":true,\"privacy\":{\"jurisdiction\":\"other\",\"id5_consent\":true},\"ext\":{\"linkType\":2,\"pba\":\"2ulbcDuzANhKy5LrpivPVmst9OJ8hs7MvHyqv/fFbEXc+IO9n2eBZkRgOcY4i6W0I1h5lAcwazgDGvqHdbbs1g==\"},\"cache_control\":{\"max_age_sec\":7200},\"ids\":{\"id5id\":{\"eid\":{\"source\":\"id5-sync.com\",\"uids\":[{\"id\":\"ID5*mcnBFzvaDVg5AE4t4_jIJV9m6dXM1EbPNxUIphpaZS3__2r3gVJaAAEBCmr3gVAA-lvA-KsvG8F3QNO79pMOvQ\",\"atype\":1,\"ext\":{\"linkType\":2,\"pba\":\"2ulbcDuzANhKy5LrpivPVmst9OJ8hs7MvHyqv/fFbEXc+IO9n2eBZkRgOcY4i6W0I1h5lAcwazgDGvqHdbbs1g==\"}}]}}},\"tags\":{\"id\":\"y\"}},\"responseTimestamp\":1794564312112,\"consents\":{\"gdpr\":false}},\"expireAt\":1795860312113}"
+        },
+        {
+          "name": "tabs",
+          "value": "1"
+        },
+        {
+          "name": "flutter.FirestoreUsername",
+          "value": "\"OC110M0M\""
         }
       ]
     },
@@ -748,7 +838,7 @@
       "localStorage": [
         {
           "name": "rc::h",
-          "value": "1794605362578"
+          "value": "1794605393596"
         }
       ]
     }
