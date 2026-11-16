@@ -19,22 +19,22 @@
  "enrichment": {
   "thumbnail": {
    "status": "deferred",
-   "reason": "quotaExceeded",
-   "cost": 50
+   "reason": "thumbnail file not present in this run",
+   "cost": 0
   },
   "playlist": {
    "status": "deferred",
-   "reason": "quota: quotaExceeded",
+   "reason": "<HttpError 403 when requesting https://youtube.googleapis.com/youtube/v3/playlistItems?part=snippet&alt=json returned \"The request cannot be completed because you have exceeded your <a href=\"/youtube/",
    "cost": 0
   },
   "comment": {
    "status": "deferred",
-   "reason": "quota \u2014 bucket exhausted, deferred",
+   "reason": "<HttpError 403 when requesting https://youtube.googleapis.com/youtube/v3/commentThreads?part=snippet&alt=json returned \"The request cannot be completed because you have exceeded your <a href=\"/youtube",
    "cost": 0
   },
   "captions": {
    "status": "deferred",
-   "reason": "quota \u2014 bucket exhausted, deferred",
+   "reason": "<HttpError 403 when requesting https://youtube.googleapis.com/upload/youtube/v3/captions?part=snippet&alt=json&uploadType=multipart returned \"The request cannot be completed because you have exceeded ",
    "cost": 0
   }
  },
