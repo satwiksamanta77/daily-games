@@ -1,47 +1,2103 @@
 {
   "cookies": [
     {
+      "name": "rxs_p_adaptmx",
+      "value": "1795874661",
+      "domain": ".plusoneads.com",
+      "path": "/sync",
+      "expires": 1795961061.805772,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "sync",
+      "value": "CgkIOhDi2OKTojQ=",
+      "domain": ".3lift.com",
+      "path": "/sync",
+      "expires": 1798466663.532885,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
       "name": "_qp_purged",
       "value": "1",
-      "domain": "marveldle.com",
+      "domain": "www.batter-up.app",
       "path": "/",
-      "expires": 1795849619.343623,
+      "expires": 1795878257.155747,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
     },
     {
       "name": "_ga",
-      "value": "GA1.1.2033487028.1795773900",
-      "domain": ".marveldle.com",
+      "value": "GA1.1.60979832.1795885200",
+      "domain": ".batter-up.app",
       "path": "/",
-      "expires": 1830406024.361635,
+      "expires": 1830434659.677152,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
     },
     {
-      "name": "_ga_QH6FLX730F",
-      "value": "GS2.1.s1795773900$o1$g1$t1795773900$j56$l0$h0",
-      "domain": ".marveldle.com",
+      "name": "_adm-gpp",
+      "value": "DBABLA~BVQqAAAAAABY.VA",
+      "domain": ".www.batter-up.app",
       "path": "/",
-      "expires": 1830406024.405421,
+      "expires": 1830013200.576,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "_iiq_fdata",
+      "value": "%7B%22pcid%22%3A%22fb3c01f8-cf3b-1999-c1c7-2e689ae03f9e%22%2C%22pcidDate%22%3A1795885200559%7D",
+      "domain": "www.batter-up.app",
+      "path": "/",
+      "expires": 1830434660.556106,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
+    },
+    {
+      "name": "IQver",
+      "value": "1.9",
+      "domain": ".intentiq.com",
+      "path": "/",
+      "expires": 1830434661.28355,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "_pubcid",
+      "value": "5f3042f2-396f-4d30-ad90-5dc649dd9577",
+      "domain": ".batter-up.app",
+      "path": "/",
+      "expires": 1801069200,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_pubcid_cst",
+      "value": "znv0HA%3D%3D",
+      "domain": ".batter-up.app",
+      "path": "/",
+      "expires": 1801069200,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_pubcid_last",
+      "value": "Sat%2C%2028%20Nov%202026%2017%3A00%3A00%20GMT",
+      "domain": ".batter-up.app",
+      "path": "/",
+      "expires": 1801069200,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_lr_retry_request",
+      "value": "true",
+      "domain": "www.batter-up.app",
+      "path": "/",
+      "expires": 1795888800,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_lr_env_src_ats",
+      "value": "false",
+      "domain": "www.batter-up.app",
+      "path": "/",
+      "expires": 1798477200,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "i",
+      "value": "08bd2ab7-49d0-4698-a3fa-5218259e05b2|1795874658",
+      "domain": ".openx.net",
+      "path": "/",
+      "expires": 1827410666.022092,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "TDID",
+      "value": "777a9e59-6a48-4d68-b6d1-ca14f4120523",
+      "domain": ".adsrvr.org",
+      "path": "/",
+      "expires": 1827410665.901023,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "CMID",
+      "value": "awrfYtHM790AEcw0AOrdKQAA",
+      "domain": ".casalemedia.com",
+      "path": "/",
+      "expires": 1827410660.831872,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "CMPS",
+      "value": "1531",
+      "domain": ".casalemedia.com",
+      "path": "/",
+      "expires": 1803650658.666738,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "CMPRO",
+      "value": "1531",
+      "domain": ".casalemedia.com",
+      "path": "/",
+      "expires": 1803650660.831941,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "tluid",
+      "value": "460711502594597132088",
+      "domain": ".3lift.com",
+      "path": "/",
+      "expires": 1803650664.935191,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "wrvUserID",
+      "value": "9bc211b2-cd90-48e2-b97c-cd82cbb09747_s",
+      "domain": ".yellowblue.io",
+      "path": "/",
+      "expires": 1798466660.754206,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "khaos",
+      "value": "MX0HEJ5E-F-7KW7",
+      "domain": ".rubiconproject.com",
+      "path": "/",
+      "expires": 1827410665.996959,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "khaos_p",
+      "value": "MX0HEJ5E-F-7KW7",
+      "domain": ".rubiconproject.com",
+      "path": "/",
+      "expires": 1827410665.997205,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None",
+      "partitionKey": "https://batter-up.app",
+      "_crHasCrossSiteAncestor": true
+    },
+    {
+      "name": "receive-cookie-deprecation",
+      "value": "1",
+      "domain": ".rubiconproject.com",
+      "path": "/",
+      "expires": 1803650665.997488,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None",
+      "partitionKey": "https://batter-up.app",
+      "_crHasCrossSiteAncestor": true
+    },
+    {
+      "name": "visitor-id",
+      "value": "4388762584288368000V10",
+      "domain": ".media.net",
+      "path": "/",
+      "expires": 1827410658.700861,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "A3",
+      "value": "d=AQABBGLfCmsCEFmX8wThpkDE9O4EAKH6HmgFEgEBAQEwDGsUa9xV0iMA_eMDAA&S=AQAAAsLPkcnYtblpBpphdY0ptaE",
+      "domain": ".yahoo.com",
+      "path": "/",
+      "expires": 1827432265.914222,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "ljt_reader",
+      "value": "NwKs0LZHAaIieJmMYoOCuBBa",
+      "domain": ".lijit.com",
+      "path": "/",
+      "expires": 1827410665.903458,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "_cc_dc",
+      "value": "0",
+      "domain": ".crwdcntrl.net",
+      "path": "/",
+      "expires": 1819202880.762049,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "_cc_id",
+      "value": "d336a24e427ecde46762c79fa2141a05",
+      "domain": ".crwdcntrl.net",
+      "path": "/",
+      "expires": 1819202880.762131,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "_cc_cc",
+      "value": "\"ACZ4nGNQSDE2Nks0Mkk1MTJPTU5JNTEzNzNKNrdMSzQyNDFMNDBlAIJsrvtJDAgAAE%2BoCmI%3D\"",
+      "domain": ".crwdcntrl.net",
+      "path": "/",
+      "expires": 1819202658.7622,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "_cc_aud",
+      "value": "\"ABR4nGNgYGDI5rqfxAAHABUYAbc%3D\"",
+      "domain": ".crwdcntrl.net",
+      "path": "/",
+      "expires": 1819202658.76226,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "tvid",
+      "value": "60aa5fb97d46423ba08f70f40d703f5f",
+      "domain": ".tremorhub.com",
+      "path": "/",
+      "expires": 1827431560.805358,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "XANDR_PANID",
+      "value": "1uIWr1CFr1v4mj09OK2Y9V2qEmN1r1w68IOdTZuGRrvkCzGvfLEcVJyMv_0tFkAApMr7V_1AU9fXHUET5uEOMU-TRmehoaYasXjHaXsscIg.",
+      "domain": ".adnxs.com",
+      "path": "/",
+      "expires": 1803650666.793543,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None",
+      "partitionKey": "https://batter-up.app",
+      "_crHasCrossSiteAncestor": true
+    },
+    {
+      "name": "uuid2",
+      "value": "7322953894470418886",
+      "domain": ".adnxs.com",
+      "path": "/",
+      "expires": 1803650666.793596,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "tvssa",
+      "value": "1795874658769",
+      "domain": ".tremorhub.com",
+      "path": "/",
+      "expires": 1796306660.805399,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "intentIQCDate",
+      "value": "1795874658782",
+      "domain": ".intentiq.com",
+      "path": "/",
+      "expires": 1830434661.283447,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "intentIQ",
+      "value": "AFMuf1ZB81",
+      "domain": ".intentiq.com",
+      "path": "/",
+      "expires": 1830434661.283492,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "pid",
+      "value": "6044917568105557006",
+      "domain": ".smartadserver.com",
+      "path": "/",
+      "expires": 1803650658.829207,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "viewer_token",
+      "value": "c5c14bd8-0cb0-419b-83d2-7222b4c807af",
+      "domain": ".csync.loopme.me",
+      "path": "/",
+      "expires": 1803650666.514645,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "vdz_sync",
+      "value": "35ec6d9c-7c20-2477-8272-93daf41c09be",
+      "domain": ".kueezrtb.com",
+      "path": "/",
+      "expires": 1798466660.879297,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "instUid",
+      "value": "739e3030-fbb4-4507-a124-ca42933793d3",
+      "domain": ".ingage.tech",
+      "path": "/",
+      "expires": 1795882441.899705,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "pbjs-unifiedid_cst",
+      "value": "znv0HA%3D%3D",
+      "domain": "www.batter-up.app",
+      "path": "/",
+      "expires": 1801069201,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "pbjs-unifiedid_last",
+      "value": "Sat%2C%2028%20Nov%202026%2017%3A00%3A01%20GMT",
+      "domain": "www.batter-up.app",
+      "path": "/",
+      "expires": 1801069201,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "xxuid",
+      "value": "968737cc-ef1e-4998-8aba-4382b7dd3fd9",
+      "domain": ".nexx360.io",
+      "path": "/",
+      "expires": 1803650690.693597,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "otad_key",
+      "value": "4e9582ca-ee01-40af-9725-4c3c11ef41df",
+      "domain": ".ottadvisors.com",
+      "path": "/",
+      "expires": 1797084260.911439,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "33x_ps",
+      "value": "u%3D214114620033513%3As1%3D1795874659046%3Ats%3D1795874659046",
+      "domain": ".33across.com",
+      "path": "/",
+      "expires": 1827410660.076158,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "__uis",
+      "value": "7ab0f346-e68e-4756-94c0-99168626b4ec",
+      "domain": ".go.sonobi.com",
+      "path": "/",
+      "expires": 1827410663.819328,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "data-pbs",
+      "value": "{{APID}}~~3",
+      "domain": ".media.net",
+      "path": "/",
+      "expires": 1827410659.116898,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "visitor",
+      "value": "7ef9a855-a6c8-4977-ac14-87079672e468",
+      "domain": ".postrelease.com",
+      "path": "/",
+      "expires": 1827410661.221111,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "status",
+      "value": "0",
+      "domain": ".postrelease.com",
+      "path": "/",
+      "expires": 1827410661.221159,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "st_uid",
+      "value": "01a22278-9b38-72f2-8a38-ff62c8210083",
+      "domain": ".seedtag.com",
+      "path": "/",
+      "expires": 1827410690.418944,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "st_usi",
+      "value": "1",
+      "domain": ".seedtag.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "sa-user-id",
+      "value": "s%3A0-ef99fbda-f0da-5ae1-48d4-357486deb668.jNYxQgn89yKf%2FZc4KJ%2BKcyg2US7c%2Fzw4axvIKhzxlwE",
+      "domain": "sync.srv.stackadapt.com",
+      "path": "/",
+      "expires": 1827410659.142461,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "sa-user-id",
+      "value": "s%3A0-ef99fbda-f0da-5ae1-48d4-357486deb668.jNYxQgn89yKf%2FZc4KJ%2BKcyg2US7c%2Fzw4axvIKhzxlwE",
+      "domain": ".srv.stackadapt.com",
+      "path": "/",
+      "expires": 1827410659.142485,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "sa-user-id-v2",
+      "value": "s%3A75n72vDaWuFI1DV0ht62aBRq58Q.aPnBiTjtOyX%2F0R5EdedePaQRPblpWMHzpgN02xFTKPk",
+      "domain": "sync.srv.stackadapt.com",
+      "path": "/",
+      "expires": 1827410659.142506,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "sa-user-id-v2",
+      "value": "s%3A75n72vDaWuFI1DV0ht62aBRq58Q.aPnBiTjtOyX%2F0R5EdedePaQRPblpWMHzpgN02xFTKPk",
+      "domain": ".srv.stackadapt.com",
+      "path": "/",
+      "expires": 1827410659.142527,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "sa-user-id-v4",
+      "value": "s%3ACiQwMWEyMjI3OC05YjNiLTdiN2EtOTMxMi04MjRkY2FjNTI2NTMQBBoCTkEgVg.8XCEZwrgeST%2FkoSnSJxKN3jLyFzYNiktziw1q9h5Qg0",
+      "domain": "sync.srv.stackadapt.com",
+      "path": "/",
+      "expires": 1827410659.142549,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "sa-user-id-v4",
+      "value": "s%3ACiQwMWEyMjI3OC05YjNiLTdiN2EtOTMxMi04MjRkY2FjNTI2NTMQBBoCTkEgVg.8XCEZwrgeST%2FkoSnSJxKN3jLyFzYNiktziw1q9h5Qg0",
+      "domain": ".srv.stackadapt.com",
+      "path": "/",
+      "expires": 1827410659.142572,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "amuid2",
+      "value": "f3643475-817d-4ed7-9a6a-76e9c6ef3174",
+      "domain": ".a-mo.net",
+      "path": "/",
+      "expires": 1827410661.84003,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "sd_amuid2",
+      "value": "f3643475-817d-4ed7-9a6a-76e9c6ef3174",
+      "domain": ".sync.a-mo.net",
+      "path": "/",
+      "expires": 1827410661.840058,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "pamuid2",
+      "value": "f3643475-817d-4ed7-9a6a-76e9c6ef3174",
+      "domain": ".a-mo.net",
+      "path": "/",
+      "expires": 1827410661.840085,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None",
+      "partitionKey": "https://batter-up.app",
+      "_crHasCrossSiteAncestor": true
+    },
+    {
+      "name": "psd_amuid2",
+      "value": "f3643475-817d-4ed7-9a6a-76e9c6ef3174",
+      "domain": ".sync.a-mo.net",
+      "path": "/",
+      "expires": 1827410661.840113,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None",
+      "partitionKey": "https://batter-up.app",
+      "_crHasCrossSiteAncestor": true
+    },
+    {
+      "name": "zeta-ssp-user-id",
+      "value": "ua-21b07300-1e78-3424-8365-be6419b519f8",
+      "domain": ".disqus.com",
+      "path": "/",
+      "expires": 1827410666.199083,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "uid",
+      "value": "5971747696636232018",
+      "domain": ".adform.net",
+      "path": "/",
+      "expires": 1801058665.953855,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "uid",
+      "value": "2808047222986282351",
+      "domain": ".turn.com",
+      "path": "/",
+      "expires": 1811426662.89401,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "IDE",
+      "value": "AHWqTUk-MJqbE5fSj_tSVtPk4Hagmemmh4czuxwqZ4uDDQOHHrK5gGIyCMU9uCBSBfQ",
+      "domain": ".doubleclick.net",
+      "path": "/",
+      "expires": 1830434659.254881,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "_rxuuid",
+      "value": "%7B%22rx_uuid%22%3A%22RX-58653516-9456-4952-bcf7-d3fe892cda0c-005%22%7D",
+      "domain": ".targeting.unrulymedia.com",
+      "path": "/",
+      "expires": 1827410666.392387,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "ad-id",
+      "value": "A0JT7VJZQE_-oe3TUJ06UEI",
+      "domain": ".amazon-adsystem.com",
+      "path": "/",
+      "expires": 1814450659.320556,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "ad-privacy",
+      "value": "0",
+      "domain": ".amazon-adsystem.com",
+      "path": "/",
+      "expires": 1830434659.320623,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "admtr",
+      "value": "274f1c7f-5339-4d33-93d6-b53119ae08cd",
+      "domain": ".admanmedia.com",
+      "path": "/",
+      "expires": 1796478737.914608,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "yieldmo_id",
+      "value": "wFACe55ccC538sNx58Nd%7C1795824000000%7C0",
+      "domain": ".yieldmo.com",
+      "path": "/",
+      "expires": 1827410659.328141,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "xeroid",
+      "value": "10924824.9d2578b7-25e5-4519-a3f6-45eda4ef2902",
+      "domain": ".rbstsystems.live",
+      "path": "/",
+      "expires": 1827410659.481482,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "xeroid_311",
+      "value": "none",
+      "domain": ".rbstsystems.live",
+      "path": "/",
+      "expires": 1795961059.331159,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "xeroid_3111246",
+      "value": "460711502594597132088",
+      "domain": ".rbstsystems.live",
+      "path": "/",
+      "expires": 1795961059.481539,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "_ga_5DE21FR6DB",
+      "value": "GS2.1.s1795885200$o1$g1$t1795885200$j58$l0$h0",
+      "domain": ".batter-up.app",
+      "path": "/",
+      "expires": 1830434659.698438,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "data-pri",
+      "value": "6b0adf63eec09~~3",
+      "domain": ".media.net",
+      "path": "/",
+      "expires": 1827410660.854273,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "otad_red",
+      "value": "7:1797084260897",
+      "domain": ".ottadvisors.com",
+      "path": "/",
+      "expires": 1797084260.913066,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "ruds",
+      "value": "H4sIAAAAAAAA_-MSNrQwNDYwNTA3MzMwMzQ0Mze1NBLiM9QtKfFyC8qsNCzTTQkAABSYiU0lAAAA",
+      "domain": ".rfihub.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "eud",
+      "value": "H4sIAAAAAAAA_9vFyGtobmlqYW5iZmZoYGYEAMGP90sQAAAA",
+      "domain": ".rfihub.com",
+      "path": "/",
+      "expires": 1829570661.067892,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "rud",
+      "value": "H4sIAAAAAAAA_-MSNrQwNDYwNTA3MzMwMzQ0Mze1NBLiM9QtKfFyC8qsNCzTTQkAABSYiU0lAAAA",
+      "domain": ".rfihub.com",
+      "path": "/",
+      "expires": 1829570661.067946,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "copr_key",
+      "value": "336f9bba-5f15-43eb-93f7-aa26f754b10e",
+      "domain": ".copper6.com",
+      "path": "/",
+      "expires": 1797084261.078663,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "copr_red",
+      "value": "205:1797084261064",
+      "domain": ".copper6.com",
+      "path": "/",
+      "expires": 1797084261.078703,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "cu",
+      "value": "8b09c26e-6a6d-43b3-8845-b129152f0bb2|1795874661168",
+      "domain": ".ipredictive.com",
+      "path": "/",
+      "expires": 1827410666.193952,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "ccpa",
+      "value": "1NNN",
+      "domain": ".contextweb.com",
+      "path": "/",
+      "expires": 1798466661.193433,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "V",
+      "value": "sbcqcElMIfaQ",
+      "domain": ".contextweb.com",
+      "path": "/",
+      "expires": 1826978662.833146,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "VP",
+      "value": "part_sbcqcElMIfaQ",
+      "domain": ".contextweb.com",
+      "path": "/",
+      "expires": 1826978662.833206,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None",
+      "partitionKey": "https://batter-up.app",
+      "_crHasCrossSiteAncestor": true
+    },
+    {
+      "name": "CDIUSER",
+      "value": "di_1ca22ef3bdaf5d1a4f217",
+      "domain": ".deepintent.com",
+      "path": "/",
+      "expires": 1830434665.911502,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "ssi",
+      "value": "17239f42-bfcc-47d8-9f91-75c9477703db#1795874661209",
+      "domain": ".sitescout.com",
+      "path": "/",
+      "expires": 1827410665.913821,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "suid",
+      "value": "9BCA537E12814DB4A368CAD26F2805E0",
+      "domain": ".simpli.fi",
+      "path": "/",
+      "expires": 1827497061.220644,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "ver",
+      "value": "1",
+      "domain": ".postrelease.com",
+      "path": "/",
+      "expires": 1827410661.221187,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "bito",
+      "value": "ACIrtE7WFb8AAAGhpNr_EA",
+      "domain": ".bidr.io",
+      "path": "/",
+      "expires": 1829984667.093047,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "bitoIsSecure",
+      "value": "ok",
+      "domain": ".bidr.io",
+      "path": "/",
+      "expires": 1829984661.276752,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "IQPData",
+      "value": "342550468#1795874661266#0#1795874658842",
+      "domain": ".intentiq.com",
+      "path": "/",
+      "expires": 1830434661.283522,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "g",
+      "value": "lrg50Y9JBen5oy6j54xr_1795874661255",
+      "domain": ".creativecdn.com",
+      "path": "/",
+      "expires": 1827410661.305039,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "ts",
+      "value": "1795874661",
+      "domain": ".creativecdn.com",
+      "path": "/",
+      "expires": 1827410661.305084,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None",
+      "partitionKey": "https://batter-up.app",
+      "_crHasCrossSiteAncestor": true
+    },
+    {
+      "name": "KRTBCOOKIE_699",
+      "value": "22727-ACIrtE7WFb8AAAGhpNr_EA&KRTB&22744-ACIrtE7WFb8AAAGhpNr_EA&KRTB&22745-ACIrtE7WFb8AAAGhpNr_EA&KRTB&23649-ACIrtE7WFb8AAAGhpNr_EA",
+      "domain": ".pubmatic.com",
+      "path": "/",
+      "expires": 1803650661.413586,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "pbjs-unifiedid",
+      "value": "%7B%22TDID%22%3A%22777a9e59-6a48-4d68-b6d1-ca14f4120523%22%2C%22TDID_LOOKUP%22%3A%22TRUE%22%2C%22TDID_CREATED_AT%22%3A%222026-10-28T14%3A04%3A20%22%7D",
+      "domain": "www.batter-up.app",
+      "path": "/",
+      "expires": 1801069201,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "rxid",
+      "value": "rx-f82cb5a4-8c1a-4940-b802-001a4fb1ff77",
+      "domain": ".plusoneads.com",
+      "path": "/",
+      "expires": 1827410661.805659,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "_sv3_7",
+      "value": "1",
+      "domain": ".a-mo.net",
+      "path": "/",
+      "expires": 1795961061.839951,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "p_sv3_7",
+      "value": "1",
+      "domain": ".a-mo.net",
+      "path": "/",
+      "expires": 1795961061.840004,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None",
+      "partitionKey": "https://batter-up.app",
+      "_crHasCrossSiteAncestor": true
+    },
+    {
+      "name": "ktcid",
+      "value": "2a2b4e0a-1fe4-0b18-1336-381c9d3452cb",
+      "domain": ".kargo.com",
+      "path": "/",
+      "expires": 1827410690.405682,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "vst",
+      "value": "u_9b16e84b-154b-4b82-a1af-e338fb82f98c",
+      "domain": ".gumgum.com",
+      "path": "/",
+      "expires": 1827410661.85325,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "receive-cookie-deprecation",
+      "value": "1",
+      "domain": ".smartadserver.com",
+      "path": "/",
+      "expires": 1811426667.232612,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None",
+      "partitionKey": "https://batter-up.app",
+      "_crHasCrossSiteAncestor": true
+    },
+    {
+      "name": "sasd2",
+      "value": "q=%24qc%3D0%3B%24ql%3DUnknown%3B%24qpc%3D20189%3B%24qpc%3D20*%3B%24qpc%3D201*%3B%24qpc%3D2018*%3B%24qpc%3D20189*%3B%24qt%3D152_720_38339t%3B%24dma%3D511%3B%24qo%3D6&c=1&l=-1966129755&lo=1039792379&lt=639314714618747121&o=1",
+      "domain": ".smartadserver.com",
+      "path": "/",
+      "expires": 1795961061.923735,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "sasd",
+      "value": "%24qc%3D0%3B%24ql%3DUnknown%3B%24qpc%3D20189%3B%24qpc%3D20*%3B%24qpc%3D201*%3B%24qpc%3D2018*%3B%24qpc%3D20189*%3B%24qt%3D152_720_38339t%3B%24dma%3D511%3B%24qo%3D6",
+      "domain": ".smartadserver.com",
+      "path": "/",
+      "expires": 1795961061.923764,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "st_ssp",
+      "value": "Y291bnRyeV9uYW1lPVVuaXRlZCBTdGF0ZXMmY291bnRyeV9pc28yPVVTJmNvdW50cnlfaXNvMz1VU0EmcmVnaW9uX25hbWU9VmlyZ2luaWEmcmVnaW9uX2lzbzI9VkEmY2l0eV9pZD00NzU2NjM2JmNpdHlfbmFtZT1EdWxsZXMmbG9uZ2l0dWRlPS03Ny40MjA5JmxhdGl0dWRlPTM5LjAzNjcmYWNjdXJhY3lfcmFkaXVzPTIwJm1ldHJvPTUxMSZ6aXA9MjAxODk=",
+      "domain": ".seedtag.com",
+      "path": "/",
+      "expires": 1798466690.419007,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "_au_1d",
+      "value": "AU1D-0100-001795885203-M9KLQIXT-XAZG",
+      "domain": ".batter-up.app",
+      "path": "/",
+      "expires": 1827410662.137872,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "KADUSERCOOKIE",
+      "value": "908F5DBD-DFCC-42E4-B2CE-0AE86E52F989",
+      "domain": ".pubmatic.com",
+      "path": "/",
+      "expires": 1827410662.180734,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "HAPLB8G",
+      "value": "s8586|awrfa",
+      "domain": ".go.sonobi.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "TapAd_TS",
+      "value": "1795874662225",
+      "domain": ".tapad.com",
+      "path": "/",
+      "expires": 1801058666.836513,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "TapAd_DID",
+      "value": "ffc066f8-c293-423b-a7bc-3b0ae1604051",
+      "domain": ".tapad.com",
+      "path": "/",
+      "expires": 1801058666.836574,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "tuuid",
+      "value": "e525ff1c-03f2-4270-8395-1e12b518e5e5",
+      "domain": ".360yield.com",
+      "path": "/",
+      "expires": 1803650665.861868,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "au_id",
+      "value": "AU1D-0100-001795885203-M9KLQIXT-XAZG",
+      "domain": ".ad.gt",
+      "path": "/",
+      "expires": 1827410662.4125,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "au_3p_check",
+      "value": "1",
+      "domain": ".ad.gt",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "connectId",
+      "value": "{\"ttl\":86400000,\"lastUsed\":1795885203135,\"lastSynced\":1795885203135}",
+      "domain": ".batter-up.app",
+      "path": "/",
+      "expires": 1827410662.64399,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "pb_rtb_ev",
+      "value": "3-28jl|7dN.0.ACIrtE7WFb8AAAGhpNr_EA|8gU.0.2e436580-85ce-4d04-b1cb-b2f8e8a13017|8i8.0.1",
+      "domain": ".contextweb.com",
+      "path": "/",
+      "expires": 1827410662.833248,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "pb_rtb_ev_part",
+      "value": "3-28jl|7dN.0.ACIrtE7WFb8AAAGhpNr_EA|8gU.0.2e436580-85ce-4d04-b1cb-b2f8e8a13017|8i8.0.1",
+      "domain": ".contextweb.com",
+      "path": "/",
+      "expires": 1827410662.833279,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None",
+      "partitionKey": "https://batter-up.app",
+      "_crHasCrossSiteAncestor": true
+    },
+    {
+      "name": "tuuid",
+      "value": "7071e5ad-4a7b-47ff-aecb-c8dd1bbf6bd8",
+      "domain": ".bidswitch.net",
+      "path": "/",
+      "expires": 1827410663.028166,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "c",
+      "value": "1795874662",
+      "domain": ".bidswitch.net",
+      "path": "/",
+      "expires": 1827410662.919785,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "tuuid_lu",
+      "value": "1795874663",
+      "domain": ".bidswitch.net",
+      "path": "/",
+      "expires": 1827410663.028271,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "__gads",
+      "value": "ID=cf50c8701cd02339:T=1795874662:RT=1795874662:S=ALNI_MY2JJofpF5yp4MLI-JOYzPG_fO7KA",
+      "domain": ".batter-up.app",
+      "path": "/",
+      "expires": 1829570662,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "__gpi",
+      "value": "UID=0000164d4c6ccedb:T=1795874662:RT=1795874662:S=ALNI_MaeLam1l72165eN7ugvr6F8PlxCHA",
+      "domain": ".batter-up.app",
+      "path": "/",
+      "expires": 1829570662,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "__eoi",
+      "value": "ID=a0b1ddfa18032d16:T=1795874662:RT=1795874662:S=AA-AfjaBMJB6SX3fE9Ioe0vcUTi-",
+      "domain": ".batter-up.app",
+      "path": "/",
+      "expires": 1811426662,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "_awl",
+      "value": "2.1795874663.5-d75f1a29d16646ca5dbbb5acf235a0c1-6763652d75732d6561737431-0",
+      "domain": ".batter-up.app",
+      "path": "/",
+      "expires": 1830013203.604,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "tuuid",
+      "value": "ab3d3a24-9ad9-4ad5-9f89-6bb59773f36e",
+      "domain": ".creative-serving.com",
+      "path": "/",
+      "expires": 1826978663.250692,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "c",
+      "value": "1795874663",
+      "domain": ".creative-serving.com",
+      "path": "/",
+      "expires": 1826978663.20161,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "tuuid_lu",
+      "value": "1795874663",
+      "domain": ".creative-serving.com",
+      "path": "/",
+      "expires": 1826978663.250762,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "__adroll",
+      "value": "1debdceb45b6c28d6d35dc29255d391f-a_1795874663",
+      "domain": ".d.adroll.com",
+      "path": "/",
+      "expires": 1830002665.964112,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "receive-cookie-deprecation",
+      "value": "1",
+      "domain": ".d.adroll.com",
+      "path": "/",
+      "expires": 1830002665.964157,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None",
+      "partitionKey": "https://batter-up.app",
+      "_crHasCrossSiteAncestor": true
+    },
+    {
+      "name": "receive-cookie-deprecation",
+      "value": "1",
+      "domain": ".adroll.com",
+      "path": "/",
+      "expires": 1830002665.964192,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None",
+      "partitionKey": "https://batter-up.app",
+      "_crHasCrossSiteAncestor": true
+    },
+    {
+      "name": "__adroll_shared",
+      "value": "1debdceb45b6c28d6d35dc29255d391f-a_1795874663",
+      "domain": ".adroll.com",
+      "path": "/",
+      "expires": 1830002665.964225,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "demdex",
+      "value": "16278754210886001761476638694544385980",
+      "domain": ".demdex.net",
+      "path": "/",
+      "expires": 1811426666.722378,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "dpm",
+      "value": "16278754210886001761476638694544385980",
+      "domain": ".dpm.demdex.net",
+      "path": "/",
+      "expires": 1811426666.722426,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "tuuid",
+      "value": "2f2bce70-d00e-4d7d-9bee-b228f9560283",
+      "domain": ".company-target.com",
+      "path": "/",
+      "expires": 1830089063.70878,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "tuuid_lu",
+      "value": "1795874663|eqx:0",
+      "domain": ".company-target.com",
+      "path": "/",
+      "expires": 1830089063.708823,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "csync",
+      "value": "127:ACIrtE7WFb8AAAGhpNr_EA|152:2f2bce70-d00e-4d7d-9bee-b228f9560283|172:y-oYBs9DBE2oMCUUXp1a0WaZ09yudM1q3KHQ9iP8EijaA9~A|187:MWRlYmRjZWI0NWI2YzI4ZDZkMzVkYzI5MjU1ZDM5MWY|191:1",
+      "domain": ".smartadserver.com",
+      "path": "/",
+      "expires": 1798466663.745488,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "flashtalkingad1",
+      "value": "\"GUID=69067E192B3639\"",
+      "domain": ".flashtalking.com",
+      "path": "/",
+      "expires": 1830038664.320888,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "__eDId",
+      "value": "7654a3d5-8017-4fae-931f-eafb4774b555",
+      "domain": ".eskimi.com",
+      "path": "/",
+      "expires": 1798466664.700523,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "DSID",
+      "value": "NO_DATA",
+      "domain": ".doubleclick.net",
+      "path": "/",
+      "expires": 1795878265.199389,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "sw_marker",
+      "value": "1795874665",
+      "domain": ".smilewanted.com",
+      "path": "/",
+      "expires": 1827410665.239212,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "n360-ttd",
+      "value": "777a9e59-6a48-4d68-b6d1-ca14f4120523",
+      "domain": ".nexx360.io",
+      "path": "/",
+      "expires": 1803650665.653326,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "n360-rubicon",
+      "value": "MX0HEJ5E-F-7KW7",
+      "domain": ".nexx360.io",
+      "path": "/",
+      "expires": 1803650665.656579,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "KRTBCOOKIE_80",
+      "value": "0-CAESEP77Y7NG-mt80rktNGkj4Vw",
+      "domain": ".pubmatic.com",
+      "path": "/",
+      "expires": 1803650666.787876,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "st_par",
+      "value": "0",
+      "domain": ".seedtag.com",
+      "path": "/",
+      "expires": 1826978665.734359,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "receive-cookie-deprecation",
+      "value": "1",
+      "domain": ".360yield.com",
+      "path": "/",
+      "expires": 1811426665.86179,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "tuuid_lu",
+      "value": "1795874665",
+      "domain": ".360yield.com",
+      "path": "/",
+      "expires": 1803650665.861979,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "TDCPM",
+      "value": "CAESFAoFdGFwYWQSCwiGsrqR0djmPxAFEhIKA2FhbRILCJD0w57R2OY_EAUSFgoHc3Z4OXQ1MBILCPzwlp3R2OY_EAUSFwoIYXBwbmV4dXMSCwiMyf-w0djmPxAFGAEgASgCMgsIhN224OfY5j8QBTgBWgc1anJoMHJ2YAI.",
+      "domain": ".adsrvr.org",
+      "path": "/",
+      "expires": 1827410665.901072,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "pd",
+      "value": "v2|1795874658.2.2.1.2|kWgyvMvPxhwI.vRmmg6f8eDno.w7hMmKvUhE.iK.f4wwfYcswrwZ",
+      "domain": ".openx.net",
+      "path": "/",
+      "expires": 1797170666.0222,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "CDIPARTNERS",
+      "value": "%7B%221%22%3A%2220261128%22%2C%22154%22%3A%2220261128%22%7D",
+      "domain": ".deepintent.com",
+      "path": "/",
+      "expires": 1830434665.911575,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "TestIfCookieP",
+      "value": "ok",
+      "domain": ".smartadserver.com",
+      "path": "/",
+      "expires": 1827410666.913159,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "pbw",
+      "value": "%24b%3d16999%3b%24o%3d11100",
+      "domain": ".smartadserver.com",
+      "path": "/",
+      "expires": 1827410666.913191,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "_ssuma",
+      "value": "eyI3OSI6MTc5NTg3NDY2NTkwMiwiMTciOjE3OTU4NzQ2NjEyNjQsIjM5IjoxNzk1ODc0NjY1OTAyfQ",
+      "domain": ".sitescout.com",
+      "path": "/",
+      "expires": 1798466665.913866,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "IDSYNC",
+      "value": "\"19du~2zlq:19h2~2zlq:19gn~2zlq:19i9~2zlq\"",
+      "domain": ".analytics.yahoo.com",
+      "path": "/",
+      "expires": 1827410665.914172,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "ac_r",
+      "value": "CS356:1796479465901",
+      "domain": ".admanmedia.com",
+      "path": "/",
+      "expires": 1796478737.914657,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "obuid",
+      "value": "c1ba3570-6593-4756-881f-973f1ce3b7ef",
+      "domain": ".outbrain.com",
+      "path": "/",
+      "expires": 1803650666.018165,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "new",
+      "value": "1",
+      "domain": "syncingbridge.com",
+      "path": "/",
+      "expires": 1797084265.95886,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "did",
+      "value": "0",
+      "domain": "syncingbridge.com",
+      "path": "/",
+      "expires": 1797084265.958895,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "uid",
+      "value": "df6fa7b5-8d59-5435-80fa-e713b9b2f611",
+      "domain": "syncingbridge.com",
+      "path": "/",
+      "expires": 1798034665.958941,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "ssplink",
+      "value": "https://s.seedtag.com/cs/cookiesync/brave?channeluid=df6fa7b5-8d59-5435-80fa-e713b9b2f611",
+      "domain": "syncingbridge.com",
+      "path": "/",
+      "expires": 1795875265.958972,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "gdpr",
+      "value": "0",
+      "domain": "syncingbridge.com",
+      "path": "/",
+      "expires": 1795878265.959023,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "CID",
+      "value": "135e84248383757098180bd27568becf",
+      "domain": ".us.ck-ie.com",
+      "path": "/",
+      "expires": 1796479465.975964,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "DotomiTest",
+      "value": "4462493234810917172",
+      "domain": ".dotomi.com",
+      "path": "/",
+      "expires": 1795874695.992576,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "audit_p",
+      "value": "1|b7EMz/KgZQ9UXkZwKzD3uwXxTBzL5w7x5ARE7euQ3Z0wW8tzASXoUkIAzl0OfYYQF6kUBkhdI29YuqoIiPk057iLOlCEhdvdWaq7z3AQSzO/CJ1/iw6UT9ES+wzatrvcxGZLyAazrKV+9NmG82TmSMGjrRkCbI9SZEzgd9z2FeFYhH4L1DQgzkec07PGRryK",
+      "domain": ".rubiconproject.com",
+      "path": "/",
+      "expires": 1827410665.996707,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None",
+      "partitionKey": "https://batter-up.app",
+      "_crHasCrossSiteAncestor": true
+    },
+    {
+      "name": "audit",
+      "value": "1|b7EMz/KgZQ9UXkZwKzD3uwXxTBzL5w7x5ARE7euQ3Z0wW8tzASXoUkIAzl0OfYYQF6kUBkhdI29YuqoIiPk057iLOlCEhdvdWaq7z3AQSzO/CJ1/iw6UT9ES+wzatrvcxGZLyAazrKV+9NmG82TmSMGjrRkCbI9SZEzgd9z2FeFYhH4L1DQgzkec07PGRryK",
+      "domain": ".rubiconproject.com",
+      "path": "/",
+      "expires": 1827410665.997441,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "id5",
+      "value": "185cec43-ed5f-792c-aabf-0f6c54fdb9a8#1795874658965#5",
+      "domain": ".id5-sync.com",
+      "path": "/",
+      "expires": 1803650666.013429,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "__mguid_",
+      "value": "3f0fa1cd188c65082wjxkd00mx0heouc",
+      "domain": ".mediagotechnology.com",
+      "path": "/",
+      "expires": 1827410666.086547,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "visitor-id",
+      "value": "4388762664356202000V10",
+      "domain": ".trustedstack.com",
+      "path": "/",
+      "expires": 1827410666.125871,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "dc",
+      "value": "was1",
+      "domain": ".betweendigital.com",
+      "path": "/",
+      "expires": 1827410666.294425,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "tuuid",
+      "value": "4a7a133f-dc8e-534c-84a3-2ea5efa9f1cf",
+      "domain": ".betweendigital.com",
+      "path": "/",
+      "expires": 1827410666.294466,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "ss",
+      "value": "1",
+      "domain": ".betweendigital.com",
+      "path": "/",
+      "expires": 1827410666.233949,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "OAU",
+      "value": "OPU4ff9e903ce3a44a0ba5a848a00485ac7",
+      "domain": ".opera.com",
+      "path": "/",
+      "expires": 1827410666.28713,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "ANON_ID",
+      "value": "avnoeUtMPmUUTgUrNPbxe4dW7ZcQEjcX98xobPoJZb",
+      "domain": ".tribalfusion.com",
+      "path": "/",
+      "expires": 1803650666.291657,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "ut",
+      "value": "awrfagAEWUiZnsZO7p3e_eVFyUPnqHa1M3Ovpw==",
+      "domain": ".betweendigital.com",
+      "path": "/",
+      "expires": 1827410666.294497,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "mxpim",
+      "value": "R37AA4_1454CFF7F_1A27CFE28B.1.00000000000000000000000000000000000000006B0ADF6A",
+      "domain": ".mxptint.net",
+      "path": "/",
+      "expires": 1830434666.305362,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "cb",
+      "value": "awrfal3vbQl8LVlyvUmJ-MMq",
+      "domain": ".clickagy.com",
+      "path": "/",
+      "expires": 1830434666.310443,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "chs",
+      "value": "[{\"ch\":\"4\",\"t\":\"2026-11-28 14:04:26\"}]",
+      "domain": "aorta.clickagy.com",
+      "path": "/",
+      "expires": 1830434666.310481,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "_rxuuid",
+      "value": "%7B%22rx_uuid%22%3A%22RX-58653516-9456-4952-bcf7-d3fe892cda0c-005%22%7D",
+      "domain": ".1rx.io",
+      "path": "/",
+      "expires": 1827410666.379941,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "uid",
+      "value": "7214341a-b915-4f08-b230-2dfdb4c895bc",
+      "domain": ".criteo.com",
+      "path": "/",
+      "expires": 1829570667.51444,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "st_cs",
+      "value": "y1mBguO1wS8G+mDHWs06RHmH2YoPllGC3PXFFzn3WnBgRRxzKrc1jG36FYLw19ju1LTwrUTzpU2ZEkuunnt8WfEfSpxeyTqSHbU3xCgisFHYnr6OTyMrZmhVH2p+3qXF1tjEC1+TdR8JEC+sBYCMc+DI4/u7eA7luZqv6kSdKUcB5/+nUtO2Hm5qJ/qAwMSO2l+iHP6xW65PmEBPW9UjKQh16Gna8lyl4QNyMmIp5ZOW4hlJP0axdXt1OTf8ttgGwnJEqhQXr+sdn7g7yltN4QMXBawp0jPVMHQLgGkaP34miUTak62CW7viuFfX7zFH2WM7Hc4h9Q2xlpVqZ/XZgpZEYmduBGnZMmRD1krmfoBCaXxGUmGLjwmG062vt7zPm7GHbDC4EoHX+q8DHIe0D8kZORSmeYS1HN7SrwXxWSCcOSQUT0lmqVwiwmrC2Rfpi/Uh1vzRiQbCSivA7qlNy4JB4T81j1SprbtO0YWcFTIE+fSscApOEfx0j+yg3dXTpzxopWYbws74XdeBDNwDWjk/Hl8YsMk8eLJ8a4ymPEGy9jSyG42pRQ8fNnDH2aVQpSm0SXzjCpee2t8UeKWubyKFl5QbOhoYFHAdYgarbnIil0fJGW5yZu1IOntBW+eMiykMrJVDa3KD/K3ZBz8QZZTUQzrHydlxR4rY+qmaNVHAEvSu/Q2F04xcPDNbPxxDanNpLjY4OgMB5Y9JLMDEf1vxw6kFaCubYpJ1ttl9PV4Wsn24vpzDV35DbZqsNrXDj+ZSpNUbOXxTJCo1BPldhFtP8fXYeLl1XR7aVJaf2oqJeY0dD8V2owkqynRsXToHaCeIVLOzHBHKlTdvIPGIsY8yBNUJqiVyCVNMOTwLAHWBcBsXn9SEbtDKiliF8AcGGxiMmOIU5jAFAvgu3Pcx78YOTD4WTwuvJEibQB4gTuwowWNbxM2B77z+Rty7WNV+c2mhEESiWWeKaIuXIeYXMOYXTYypgKziEhRytHLn+6Y5w26x1X9Wo9yeEDal54/N35HF3inCnlTI0GxN2VbXU3/Xk8pTNYj2TWRs9rEQmVmvQF3TORg0fej/0xGMSWFucUnBbhHUTsVn0f8ocXIPwI2XuKgRiFMJ524ttB6G5b4knyainZAjzsWkUdpw8IPGrzkwqrfPqHAhqVJF/ehYD2knU+eb4t7UXQxZ8hb3PXvPJZsFaXXsZY8TOCigHA7ukWJoTS+3vI1mqkx6WFfDYB5ueN8Euvmdobfmn/2eGyPiGeVc8cNYOsUtXL8aTv0LM+R+VMI6DtJDb+jansuIvqCH3bsKLweMQ6ObjJpirQYBbbUR92tUFxCFRXTmGSUy4+zpmQA2l7mY2zcMWhm6Hav6d5EvA5cOybi+uV3zu73tOEAv54cb/LfkR5zjBbnXHtB9gSGGk4yiPLgRiP3WUaiXEWS86IXqxzGKLrNhdpga8LcowqBHMnyqyBjFCR3hmTLHC6KYVVQ0PEMlVxgY4Xoknvh/VafIFUEbu6j230DU+2gkv94tvXLNXFWvqhqncOvZQUUdmDW1nXEDUHPKkjkklOFv1ult5AeJktD+QJTAwK5jzKn//4f1jJbMJb+y+WSqEmx3LMVKj1ZAyr9khgJ6eG5XMeHAMOMVwr3sFVQ=",
+      "domain": ".seedtag.com",
+      "path": "/",
+      "expires": 1826978666.705536,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "st_csd",
+      "value": "1795874666698:1795874666698",
+      "domain": ".seedtag.com",
+      "path": "/",
+      "expires": 1826978666.706141,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "KRTBCOOKIE_148",
+      "value": "0-uid:9BCA537E12814DB4A368CAD26F2805E0",
+      "domain": ".pubmatic.com",
+      "path": "/",
+      "expires": 1798466666.722708,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "PugT",
+      "value": "1795874666",
+      "domain": ".pubmatic.com",
+      "path": "/",
+      "expires": 1798466666.787962,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "ab",
+      "value": "0001%3AAlaLlDHu%2F%2FeAtH83hsQ1YXzrPay3xfT%2F",
+      "domain": ".agkn.com",
+      "path": "/",
+      "expires": 1827410666.879952,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "rlas3",
+      "value": "HmV5fhqBRwvLgukPtr7KZWZdvflnISNPfwme++FM/3I=",
+      "domain": ".rlcdn.com",
+      "path": "/",
+      "expires": 1827410666.82536,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "pxrc",
+      "value": "COq+q9gGEgUI6AcQABIFCOhHEAA=",
+      "domain": ".rlcdn.com",
+      "path": "/",
+      "expires": 1801058666.825427,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "TapAd_3WAY_SYNCS",
+      "value": "1!7982-2!7982",
+      "domain": ".tapad.com",
+      "path": "/",
+      "expires": 1801058666.836605,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "did",
+      "value": "sCcIuJW-HjXRR2qY",
+      "domain": ".pippio.com",
+      "path": "/",
+      "expires": 1827410666.914155,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "didts",
+      "value": "1795874666",
+      "domain": ".pippio.com",
+      "path": "/",
+      "expires": 1827410666.914232,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "nnls",
+      "value": "",
+      "domain": ".pippio.com",
+      "path": "/",
+      "expires": 1801058666.914257,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "pxrc",
+      "value": "COq+q9gGEgYIgr0rEAA=",
+      "domain": ".pippio.com",
+      "path": "/",
+      "expires": 1801058666.914276,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "li_sugr",
+      "value": "5066e23c-e2c1-45ef-964c-e817c83ecf33",
+      "domain": ".linkedin.com",
+      "path": "/",
+      "expires": 1803650666.977719,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "bcookie",
+      "value": "\"v=2&6ea3e972-1379-4794-82fa-726d11c195d1\"",
+      "domain": ".linkedin.com",
+      "path": "/",
+      "expires": 1827410666.977787,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "lidc",
+      "value": "\"b=VGST06:s=V:r=V:a=V:p=V:g=3616:u=1:x=1:i=1795874666:t=1795961066:v=2:sig=AQEXhEbmkQSRLtJAJhhLANqGO3YK0AkW\"",
+      "domain": ".linkedin.com",
+      "path": "/",
+      "expires": 1795961066.977818,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "__cf_bm",
+      "value": "A7ZSFg6gdIs4sG6eyf2AsNAIiLO9S2112mnLKF2njpo-1795874666.9506383-1.0.1.1-8t.VcoxHkTeS3r75VF_NpPT0kEkH6DcvfzED63Eqowz2E02ijmEykg9w.RSKbRTMjky7oTo6RiJ3mcSsuWinDP68WQ330Cz..fGilHGhKu7IjlUvtdoSCA2vSXSglaOL",
+      "domain": ".linkedin.com",
+      "path": "/",
+      "expires": 1795876466.977843,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None",
+      "partitionKey": "https://batter-up.app",
+      "_crHasCrossSiteAncestor": true
+    },
+    {
+      "name": "3pi",
+      "value": "@AAIBH4sIAAAAAAAA_2PgZ2Bgcc_mup8usuxMJiMDA-MmEOfk7BUyIA4HkJPBLaVYxMygYm5unmiZamqpa5ZoYqFrkmJmoZtklmKom5xoaJJmYmhkYGpkzMDAkAPSkmXLzwXUz24H4iTurZwK4tSDOJmVJixADgMTkJM5-3HdBRBnFYjjlBclCLKzEMTpPX3zLYizE8RZqvCekZ1BrTTeMsnQLNXCJEnX0BRImCRZGOkmGiam6aYaG1ukAXlplhbJDAysIUBNWYFv5RcDTWA2BXE6yxJ1QBwZEMe9at13kK2ngZxsswsNoSDPGRmaGJsYJuomWRqa6pqkGQA9Z2RsoGuUkpaSZJJsYWmaBDSZYTZIi6GmxktmBjFHZ8-iElfzcLckC0dHR_eMAr-ieFdHAPB0sTZRAQAA",
+      "domain": ".id5-sync.com",
+      "path": "/",
+      "expires": 1803650667.192711,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "idsp_c",
+      "value": "c4e0fb50-ddf7-43ca-928c-8c1b618f35e0",
+      "domain": ".inmobi.com",
+      "path": "/",
+      "expires": 1803650667.263999,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
     }
   ],
   "origins": [
     {
-      "origin": "https://marveldle.com",
+      "origin": "https://www.batter-up.app",
       "localStorage": [
         {
-          "name": "authenticated",
-          "value": "false"
+          "name": "_iiq_fdata",
+          "value": "{\"pcid\":\"fb3c01f8-cf3b-1999-c1c7-2e689ae03f9e\",\"pcidDate\":1795885200559,\"gdprString\":\"undefined\",\"gppString\":\"DBABLA~BVQqAAAAAABY.VA\",\"uspString\":\"\",\"sCal\":1795885200672,\"isOptedOut\":false,\"dbsaved\":\"false\"}"
         },
         {
-          "name": "sessionId",
-          "value": "f6b65503-e6ff-41a8-46ff-08df4b83cb41"
+          "name": "theme",
+          "value": "light"
+        },
+        {
+          "name": "panoramaId_expiry",
+          "value": "1795961058749"
+        },
+        {
+          "name": "_GESPSK-crwdcntrl.net",
+          "value": "[\"crwdcntrl.net\",null,1795885202756,null,null,null,null,null,null,[100]]"
+        },
+        {
+          "name": "au/sid",
+          "value": "{\"v\":\"AU1S-0100-001795885203-YVXMLRER-I6I1\",\"e\":1795887002851}"
+        },
+        {
+          "name": "id5id_exp",
+          "value": "Wed, 27 Jan 2027 17:00:02 GMT"
+        },
+        {
+          "name": "au/last_seen_pixels",
+          "value": "{\"v\":{\"apn\":1795885203,\"openx\":1795885203,\"pub\":1795885203,\"rub\":1795885203,\"ttd\":1795885203,\"tapad\":1795885203,\"adx\":1795885203,\"amo\":1795885203,\"son\":1795885203,\"impr\":1795885203},\"e\":0}"
+        },
+        {
+          "name": "_GESPSK-esp.criteo.com",
+          "value": "[\"esp.criteo.com\",null,1795885202859,null,null,null,null,null,null,[109]]"
+        },
+        {
+          "name": "_iiq_ch",
+          "value": "{\"0\":\"\\\"HeadlessChrome\\\";v=\\\"159\\\", \\\"Not/A)Brand\\\";v=\\\"8\\\", \\\"Chromium\\\";v=\\\"159\\\"\",\"1\":\"?0\",\"2\":\"\\\"Windows\\\"\",\"3\":\"\\\"x86\\\"\",\"4\":\"\\\"64\\\"\",\"6\":\"\\\"10.0\\\"\",\"7\":\"?0\",\"8\":\"\\\"HeadlessChrome\\\";v=\\\"159.0.8154.6\\\", \\\"Not/A)Brand\\\";v=\\\"8.0.0.0\\\", \\\"Chromium\\\";v=\\\"159.0.8154.6\\\"\"}"
+        },
+        {
+          "name": "au/tid",
+          "value": "{\"v\":\"1d4fa41d4f774c6a17b86ceed04beba1\",\"e\":1795888802890}"
+        },
+        {
+          "name": "au/seg",
+          "value": "{\"v\":{\"segments\":[]},\"e\":1795906803147}"
+        },
+        {
+          "name": "id5id",
+          "value": "%7B%22signature%22%3A%22ID5_AvhtI9solCbmMMlGfqCUSCIzXDrg-o85tZsyPeaROjlD_-fSYK2tObmGUXy1VsICgqOMr3KnyKtcuCVRqkyh8p-QJ8L5on5J0bOT6Qw_LpBux4RN-IbzWPPzSBco0sej8kD2QN7B2SqL1fVWGmCO87iUSNGwlm2uSkusAaDiRyLTLBHDnWM%22%2C%22created_at%22%3A%222026-11-28T14%3A04%3A18.965Z%22%2C%22id5_consent%22%3Atrue%2C%22original_uid%22%3A%22ID5*mm2Nq8jA3sTKqwBNyFvCFX0QUNARZ4_hGjyGADdzSXT__2sK32ZaAAEBCmsK32IAAPLlwkDAdGLVYKC35OB_2A%22%2C%22universal_uid%22%3A%22ID5*byMQD4P-_Yiy7MdJKBwBRfHMrV1ysSYwNs5FYUe8m5f__2sK32ZaAAEBCmsK32IAAPLN3zHDykiTCMilTnGYiQ%22%2C%22link_type%22%3A2%2C%22cascade_needed%22%3Atrue%2C%22privacy%22%3A%7B%22jurisdiction%22%3A%22other%22%2C%22id5_consent%22%3Atrue%7D%2C%22ext%22%3A%7B%22linkType%22%3A2%2C%22pba%22%3A%222ItbJ0rDGZFBNKW31Em%2BWbbcsjEQVKk7FUwtyZAd4DZuKTjvw7JyGOXTIqSpiIBuC9tvnFiIeVdHA6OL90dKag%3D%3D%22%7D%2C%22cache_control%22%3A%7B%22max_age_sec%22%3A7200%7D%2C%22ids%22%3A%7B%22id5id%22%3A%7B%22eid%22%3A%7B%22source%22%3A%22id5-sync.com%22%2C%22uids%22%3A%5B%7B%22id%22%3A%22ID5*byMQD4P-_Yiy7MdJKBwBRfHMrV1ysSYwNs5FYUe8m5f__2sK32ZaAAEBCmsK32IAAPLN3zHDykiTCMilTnGYiQ%22%2C%22atype%22%3A1%2C%22ext%22%3A%7B%22linkType%22%3A2%2C%22pba%22%3A%222ItbJ0rDGZFBNKW31Em%2BWbbcsjEQVKk7FUwtyZAd4DZuKTjvw7JyGOXTIqSpiIBuC9tvnFiIeVdHA6OL90dKag%3D%3D%22%7D%7D%5D%7D%7D%7D%2C%22tags%22%3A%7B%22id%22%3A%22y%22%7D%2C%22pbjs%22%3A%7B%22212%22%3A%7B%22signature%22%3A%22ID5_AvhtI9solCbmMMlGfqCUSCIzXDrg-o85tZsyPeaROjlD_-fSYK2tObmGUXy1VsICgqOMr3KnyKtcuCVRqkyh8p-QJ8L5on5J0bOT6Qw_LpBux4RN-IbzWPPzSBco0sej8kD2QN7B2SqL1fVWGmCO87iUSNGwlm2uSkusAaDiRyLTLBHDnWM%22%2C%22created_at%22%3A%222026-11-28T14%3A04%3A18.965Z%22%2C%22id5_consent%22%3Atrue%2C%22original_uid%22%3A%22ID5*mm2Nq8jA3sTKqwBNyFvCFX0QUNARZ4_hGjyGADdzSXT__2sK32ZaAAEBCmsK32IAAPLlwkDAdGLVYKC35OB_2A%22%2C%22universal_uid%22%3A%22ID5*byMQD4P-_Yiy7MdJKBwBRfHMrV1ysSYwNs5FYUe8m5f__2sK32ZaAAEBCmsK32IAAPLN3zHDykiTCMilTnGYiQ%22%2C%22link_type%22%3A2%2C%22cascade_needed%22%3Atrue%2C%22privacy%22%3A%7B%22jurisdiction%22%3A%22other%22%2C%22id5_consent%22%3Atrue%7D%2C%22ext%22%3A%7B%22linkType%22%3A2%2C%22pba%22%3A%222ItbJ0rDGZFBNKW31Em%2BWbbcsjEQVKk7FUwtyZAd4DZuKTjvw7JyGOXTIqSpiIBuC9tvnFiIeVdHA6OL90dKag%3D%3D%22%7D%2C%22cache_control%22%3A%7B%22max_age_sec%22%3A7200%7D%2C%22ids%22%3A%7B%22id5id%22%3A%7B%22eid%22%3A%7B%22source%22%3A%22id5-sync.com%22%2C%22uids%22%3A%5B%7B%22id%22%3A%22ID5*byMQD4P-_Yiy7MdJKBwBRfHMrV1ysSYwNs5FYUe8m5f__2sK32ZaAAEBCmsK32IAAPLN3zHDykiTCMilTnGYiQ%22%2C%22atype%22%3A1%2C%22ext%22%3A%7B%22linkType%22%3A2%2C%22pba%22%3A%222ItbJ0rDGZFBNKW31Em%2BWbbcsjEQVKk7FUwtyZAd4DZuKTjvw7JyGOXTIqSpiIBuC9tvnFiIeVdHA6OL90dKag%3D%3D%22%7D%7D%5D%7D%7D%7D%2C%22tags%22%3A%7B%22id%22%3A%22y%22%7D%7D%7D%7D"
+        },
+        {
+          "name": "id5id_cst",
+          "value": "znv0HA=="
+        },
+        {
+          "name": "_cc_id",
+          "value": "d336a24e427ecde46762c79fa2141a05"
+        },
+        {
+          "name": "id5id_last",
+          "value": "Sat, 28 Nov 2026 17:00:02 GMT"
+        },
+        {
+          "name": "connectId",
+          "value": "{\"ttl\":86400000,\"lastUsed\":1795885203135,\"lastSynced\":1795885203135}"
+        },
+        {
+          "name": "auEids",
+          "value": "{\"eids\":[{\"source\":\"audigent.com\",\"inserter\":\"audigent.com\",\"matcher\":\"audigent.com\",\"mm\":4,\"uids\":[{\"id\":\"060ixszo2j2g5999a989b9b969a9c9e6666uoes6swtqy666e646h6g616e6i6m00\",\"atype\":1}]}]}"
+        },
+        {
+          "name": "_iiq_fdata_319708947",
+          "value": "{\"data\":\"81.8.79.67.78.89.8.16.113.119.87\",\"callCount\":0,\"failCount\":0,\"noData\":2,\"clientType\":2,\"adserverDeviceType\":1,\"terminationCause\":35,\"profile\":\"\",\"pidDeterministic\":false,\"siteId\":1673684161,\"date\":1795885200672,\"p\":{\"ct\":0,\"d\":[]},\"w\":{\"ct\":0,\"ed\":[],\"fd\":[],\"ld\":[]},\"b\":{\"ct\":0,\"d\":[]},\"dm\":[],\"ae\":\"\",\"art\":0,\"ad\":{\"ct\":0,\"d\":[]},\"abTestUuid\":\"g_72690881-c382-4171-a893-994307a6fced\",\"spd\":\"eJyrVqrITFGy0jXUUaoog7EyQAwlP/8QN/9QPxcDAyUdpaz8RCWrtMSc4lQdpfSS8qCU5BI4vyi10LMAqMHIQM/QwEzPyNhQz9DSDKipuBioyEBHqSRZycrQyMDI0hLILgayzS1NLcxNzEwtagEUgiKR\",\"cttl\":600000}"
+        },
+        {
+          "name": "auHadronId",
+          "value": "060ixszo2j2g5999a989b9b969a9c9e6666uoes6swtqy666e646h6g616e6i6m00"
+        },
+        {
+          "name": "_GESPSK-yahoo.com",
+          "value": "[\"yahoo.com\",null,1795885202920,null,null,null,null,null,null,[111]]"
+        },
+        {
+          "name": "_GESPSK-openx",
+          "value": "[\"openx\",\"eyJpIjoiQ0wwcXQwblFScGlqK2xJWUpaNEZzZz09In0=\",1795885203128,null,null,null,null,null,0]"
+        },
+        {
+          "name": "auHaloId",
+          "value": "060ixszo2j2g5999a989b9b969a9c9e6666uoes6swtqy666e646h6g616e6i6m00"
+        },
+        {
+          "name": "_iiq_sync_319708947",
+          "value": "1795885200569"
+        },
+        {
+          "name": "au/1d",
+          "value": "{\"v\":\"AU1D-0100-001795885203-M9KLQIXT-XAZG\",\"e\":0}"
+        },
+        {
+          "name": "_GESPSK-rtbhouse",
+          "value": "[\"rtbhouse\",\"h9BRLpdLwazDdkpJjiGJlW/2hqQ0rnmNfo0ICtn8L9/n214IWF7Z8i9gXp9T44gXfKERbvc2k3xhy5ejWEmZAxvoT0H+4VA+kLmVsigGOglxekPhPgwtfKpiqo1VO0U7JodTlUQwKkuB4gsIu3llGPa/c2ybXY5iWThO0PDdmQQ=\",1795885203535,null,null,null,null,null,0]"
+        },
+        {
+          "name": "rtbhouse-esp",
+          "value": "062da074-94e2-4125-a464-b3dba269a188"
+        },
+        {
+          "name": "au/consent_gpp",
+          "value": "{\"v\":\"DBABLA~BVQqAAAAAABY.VA\",\"e\":1795971602858}"
+        }
+      ]
+    },
+    {
+      "origin": "https://sync.a-mo.net",
+      "localStorage": [
+        {
+          "name": "__amuidpb",
+          "value": "f3643475-817d-4ed7-9a6a-76e9c6ef3174"
+        }
+      ]
+    },
+    {
+      "origin": "https://www.google.com",
+      "localStorage": [
+        {
+          "name": "rc::h",
+          "value": "1795874662823"
         }
       ]
     }
